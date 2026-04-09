@@ -1,0 +1,16 @@
+[tool]
+name = "gg_calendar"
+display_name = "Google Calendar"
+default_model_group = "low"
+
+[tool.required_config]
+GOOGLE_CLIENT_ID = { description = "Google OAuth Client ID", type = "string" }
+GOOGLE_CLIENT_SECRET = { description = "Google OAuth Client Secret", type = "string", secret = true }
+
+[tool.oauth]
+authorization_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
+token_endpoint = "https://oauth2.googleapis.com/token"
+scopes = ["https://www.googleapis.com/auth/calendar.events"]
+
+[tool.oauth.extra_authorize_params]
+access_type = "offline"

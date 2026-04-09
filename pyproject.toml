@@ -1,0 +1,52 @@
+[project]
+name = "openpa"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13.9"
+dependencies = [
+    "a2a-sdk[http-server,sql]>=0.3.10",
+    "dynaconf>=3.2.0",
+    "toml>=0.10.2",
+    "groq>=0.33.0",
+    "jsonschema>=4.23.0",
+    "grpcio>=1.78.0",
+    "jinja2>=3.1.6",
+    "loguru>=0.7.3",
+    "openai>=2.6.0",
+    "pandas>=3.0.1",
+    "pydantic>=2.12.3",
+    "python-dotenv>=1.1.1",
+    "starlette>=0.52.1",
+    "tiktoken>=0.12.0",
+    "uvicorn>=0.41.0",
+    "fastmcp>=2.12.5",
+    "google-api-python-client>=2.0.0",
+    "google-auth>=2.0.0",
+    "PyJWT>=2.8.0",
+    "aiosqlite>=0.21.0",
+    "markitdown[all]>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "autopep8>=2.0.0",
+    "pre-commit>=3.6.0",
+]
+
+[project.scripts]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.autopep8]
+max_line_length = 120
+aggressive = 4
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

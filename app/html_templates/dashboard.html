@@ -1,0 +1,1315 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>OPENPA Agent - Remote Agents Dashboard</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+
+        .add-agent-section {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .add-agent-section h2 {
+            margin-top: 0;
+            color: #333;
+            font-size: 18px;
+        }
+
+        .add-agent-form {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .add-agent-form input[type="text"] {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .add-agent-form input[type="text"]:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .notification {
+            padding: 12px 20px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+
+        .notification.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .notification.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+        }
+
+        th,
+        td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .badge-success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .badge-danger {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .badge-warning {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+
+        .badge-secondary {
+            background-color: #e2e3e5;
+            color: #383d41;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 6px 16px;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: background-color 0.3s;
+            margin-right: 8px;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background-color: #4CAF50;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background-color: #45a049;
+        }
+
+        .btn-danger {
+            background-color: #dc3545;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background-color: #c82333;
+        }
+
+        .info-text {
+            color: #666;
+            font-style: italic;
+        }
+
+        .exp-info {
+            display: block;
+            font-size: 11px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .status-column {
+            min-width: 280px;
+        }
+
+        .action-column {
+            min-width: 240px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .url-column {
+            max-width: 250px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .args-row {
+            display: none;
+        }
+
+        .args-row.expanded {
+            display: table-row;
+        }
+
+        .args-section {
+            padding: 20px;
+            background-color: #f9f9f9;
+            border-left: 3px solid #4CAF50;
+        }
+
+        .args-section h4 {
+            margin-top: 0;
+            color: #333;
+            font-size: 16px;
+        }
+
+        .args-table {
+            width: 100%;
+            margin-bottom: 15px;
+            border-collapse: collapse;
+            background-color: white;
+            box-shadow: none;
+        }
+
+        .args-table th,
+        .args-table td {
+            padding: 8px 12px;
+            font-size: 13px;
+        }
+
+        .args-table th {
+            background-color: #e8f5e9;
+            color: #333;
+        }
+
+        .args-form {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .args-form input[type="text"],
+        .args-form input[type="number"] {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .args-form input[type="text"].arg-key {
+            width: 180px;
+        }
+
+        .args-form input[type="text"].arg-value-string,
+        .args-form input[type="number"].arg-value-number {
+            width: 180px;
+        }
+
+        .args-form textarea.arg-value-object {
+            width: 280px;
+            min-height: 60px;
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+            resize: vertical;
+        }
+
+        .args-form select {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+            background-color: white;
+        }
+
+        .args-form input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .badge-type {
+            font-size: 11px;
+            padding: 3px 8px;
+        }
+
+        .badge-type-string {
+            background-color: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .badge-type-number {
+            background-color: #fff3e0;
+            color: #f57c00;
+        }
+
+        .badge-type-boolean {
+            background-color: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        .badge-type-object {
+            background-color: #e8f5e9;
+            color: #388e3c;
+        }
+
+        .btn-small {
+            padding: 4px 12px;
+            font-size: 12px;
+        }
+
+        .args-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 15px;
+        }
+
+        .no-args-message {
+            color: #999;
+            font-style: italic;
+            font-size: 13px;
+            padding: 10px;
+        }
+
+        .btn-configure {
+            background-color: #2196F3;
+        }
+
+        .btn-configure:hover:not(:disabled) {
+            background-color: #1976D2;
+        }
+
+        .btn-warning {
+            background-color: #f0a500;
+        }
+
+        .btn-warning:hover:not(:disabled) {
+            background-color: #d4920a;
+        }
+
+        /* MCP Config Fields */
+        .mcp-config-fields {
+            display: none;
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }
+
+        .mcp-config-fields.visible {
+            display: block;
+        }
+
+        .mcp-config-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        .mcp-config-row label {
+            min-width: 100px;
+            font-weight: 600;
+            font-size: 13px;
+            color: #555;
+        }
+
+        .mcp-config-row select,
+        .mcp-config-row input[type="text"] {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .mcp-config-row textarea {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        .mcp-config-row select:focus,
+        .mcp-config-row input:focus,
+        .mcp-config-row textarea:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .config-hint {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        /* Config Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            width: 600px;
+            max-width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        .modal-content h3 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+
+        .btn-secondary {
+            background-color: #6c757d;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background-color: #5a6268;
+        }
+
+        .badge-provider {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 8px;
+            background-color: #e8eaf6;
+            color: #3949ab;
+            margin-left: 4px;
+        }
+
+        .enable-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .enable-toggle input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: #4CAF50;
+        }
+
+        .enable-toggle label {
+            font-size: 13px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .badge-default {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 8px;
+            background-color: #e0f2f1;
+            color: #00695c;
+            margin-left: 4px;
+        }
+
+        tr.agent-disabled {
+            opacity: 0.5;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Remote Agents Dashboard</h1>
+
+    <div id="notification" class="notification"></div>
+
+    <!-- Profile Management Section -->
+    <div class="add-agent-section" style="margin-bottom: 20px;">
+        <h2>Profile Management</h2>
+        <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center;">
+            <label for="profileSelect" style="font-weight: 600;">Current Profile:</label>
+            <select id="profileSelect" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" onchange="switchProfile()">
+                {% for profile in all_profiles %}
+                <option value="{{ profile }}" {% if profile == current_profile %}selected{% endif %}>{{ profile }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <input type="text" id="newProfileName" placeholder="New profile name" style="flex: 1; padding: 10px 15px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" />
+            <button class="btn btn-primary" onclick="addProfile()">Add Profile</button>
+            <button class="btn btn-danger" id="deleteProfileBtn" onclick="deleteProfile()">Delete Current Profile</button>
+        </div>
+    </div>
+
+    <!-- Token Management Section -->
+    {% if jwt_enabled %}
+    <div class="add-agent-section" style="margin-bottom: 20px;">
+        <h2>Token Management</h2>
+        <p style="color: #666; margin-bottom: 15px; font-size: 14px;">Generate JWT tokens for client agents to authenticate with this server. The token includes the profile so the client is automatically associated with it.</p>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px; flex-wrap: wrap;">
+            <label for="tokenProfile" style="font-weight: 600; min-width: 60px;">Profile:</label>
+            <select id="tokenProfile" style="flex: 1; min-width: 150px; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                {% for profile in all_profiles %}
+                <option value="{{ profile }}" {% if profile == current_profile %}selected{% endif %}>{{ profile }}</option>
+                {% endfor %}
+            </select>
+            <label for="tokenSubject" style="font-weight: 600; min-width: 60px;">Subject:</label>
+            <input type="text" id="tokenSubject" placeholder="a2a-client" value="a2a-client" style="flex: 1; min-width: 120px; padding: 10px 15px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" />
+            <label for="tokenExpHours" style="font-weight: 600; min-width: 110px;">Expires (hours):</label>
+            <input type="number" id="tokenExpHours" placeholder="720" value="720" min="1" style="width: 100px; padding: 10px 15px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" />
+            <button class="btn btn-primary" onclick="generateToken()">Generate Token</button>
+        </div>
+        <div id="tokenResult" style="display: none; margin-top: 10px;">
+            <label style="font-weight: 600; display: block; margin-bottom: 5px;">Generated Token:</label>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="text" id="generatedToken" readonly style="flex: 1; padding: 10px 15px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; font-family: monospace; background: #f9f9f9;" />
+                <button class="btn btn-secondary" onclick="copyToken()">Copy</button>
+            </div>
+            <p id="tokenExpiry" style="color: #666; font-size: 13px; margin-top: 5px;"></p>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="add-agent-section">
+        <h2>Add New Agent</h2>
+        <form class="add-agent-form" onsubmit="addAgent(event)">
+            <select id="agentType" style="padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 130px;">
+                <option value="a2a">A2A Agent</option>
+                <option value="mcp">MCP Server</option>
+            </select>
+            <input type="text" id="agentUrl" placeholder="Enter agent URL (e.g., http://localhost:10010)" required>
+            <button type="submit" class="btn btn-primary" id="addButton">Add Agent</button>
+        </form>
+        <div id="mcpConfigFields" class="mcp-config-fields">
+            <p class="config-hint">Optional: Configure LLM and prompt for this MCP agent. Leave blank to use defaults.</p>
+            <div class="mcp-config-row">
+                <label for="mcpLlmProvider">LLM Provider</label>
+                <select id="mcpLlmProvider">
+                    <option value="">Default (Groq)</option>
+                    <option value="groq">Groq</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="ollama">Ollama</option>
+                    <option value="vertexai">VertexAI</option>
+                    <option value="vllm">vLLM</option>
+                </select>
+            </div>
+            <div class="mcp-config-row">
+                <label for="mcpLlmModel">Model</label>
+                <input type="text" id="mcpLlmModel" placeholder="Model name (e.g., openai/gpt-oss-20b)">
+            </div>
+            <div class="mcp-config-row">
+                <label for="mcpDescription">Description</label>
+                <input type="text" id="mcpDescription" placeholder="Agent description (optional)">
+            </div>
+            <div class="mcp-config-row">
+                <label for="mcpSystemPrompt">System Prompt</label>
+                <textarea id="mcpSystemPrompt" placeholder="Custom system prompt (optional)" rows="3" maxlength="4000"></textarea>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <div>Loading agents...</div>
+    </div>
+
+    <table id="agentsTable">
+        <thead>
+            <tr>
+                <th>Enabled</th>
+                <th>Agent Name</th>
+                <th>URL</th>
+                <th>Description</th>
+                <th class="status-column">Authentication Status</th>
+                <th>Arguments</th>
+                <th class="action-column">Action</th>
+            </tr>
+        </thead>
+        <tbody id="agentsTableBody">
+            {% if not agents %}
+            <tr>
+                <td colspan="7" class="info-text">No remote agents configured. Add an agent using the form above.</td>
+            </tr>
+            {% else %}
+            {% for agent in agents %}
+            <tr data-agent-name="{{ agent.name }}" {% if not agent.enabled %}class="agent-disabled"{% endif %}>
+                <td>
+                    <div class="enable-toggle">
+                        <input type="checkbox" id="enable-{{ agent.name }}" {% if agent.enabled %}checked{% endif %}
+                            onchange="toggleAgentEnabled('{{ agent.name }}', this.checked)">
+                    </div>
+                </td>
+                <td><strong>{{ agent.name }}</strong>{% if agent.is_default %}<span class="badge badge-default">default</span>{% endif %}</td>
+                <td class="url-column" title="{{ agent.url }}">{{ agent.url }}</td>
+                <td>{{ agent.description }}</td>
+                <td class="status-column">
+                    <span class="badge {{ agent.badge_class }}">{{ agent.status_text }}</span>
+                    {% if agent.expiration_info %}
+                    <span class="exp-info">{{ agent.expiration_info.relative }}</span>
+                    <span class="exp-info">{{ agent.expiration_info.formatted }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if agent.arguments_schema %}
+                    <button class="btn btn-configure btn-small" onclick="toggleArguments('{{ agent.name }}')">
+                        Schema ({{ agent.arguments_schema.properties|length }})
+                    </button>
+                    {% else %}
+                    <span class="badge badge-secondary">No schema</span>
+                    {% endif %}
+                </td>
+                <td class="action-column">
+                    {% if agent.agent_type == 'mcp' %}
+                    <button class="btn btn-configure btn-small" onclick="openConfigModal('{{ agent.name }}')">Configure</button>
+                    {% endif %}
+                    {% if agent.show_authenticate %}
+                    <a href="/dashboard/{{ agent.encoded_name }}/authenticate?profile={{ current_profile }}" class="btn btn-primary">Authenticate</a>
+                    {% endif %}
+                    {% if agent.show_unlink %}
+                    <form method="POST" action="/dashboard/{{ agent.encoded_name }}/unlink?profile={{ current_profile }}" style="display: inline;">
+                        <button type="submit" class="btn btn-danger"
+                            onclick="return confirm('Are you sure you want to unlink authentication for {{ agent.name }}?');">Unlink</button>
+                    </form>
+                    {% endif %}
+                    {% if not agent.is_default %}
+                    <button class="btn btn-danger"
+                        onclick="removeAgent('{{ agent.name }}', '{{ agent.url }}')">Remove</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% if agent.arguments_schema %}
+            <tr class="args-row" id="args-{{ agent.name }}">
+                <td colspan="7">
+                    <div class="args-section">
+                        <h4>Arguments Schema for {{ agent.name }}</h4>
+                        <p style="font-size: 13px; color: #6c757d; margin-bottom: 8px;">
+                            These arguments are defined in the agent's card. Configure values in the client UI Settings.
+                        </p>
+                        <table class="args-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Required</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for prop_name, prop_def in agent.arguments_schema.properties.items() %}
+                                <tr>
+                                    <td><strong>{{ prop_name }}</strong></td>
+                                    <td><span class="badge badge-type badge-type-{{ prop_def.type }}">{{ prop_def.type }}</span></td>
+                                    <td>{% if prop_name in agent.arguments_schema.get('required', []) %}Yes{% else %}No{% endif %}</td>
+                                    <td>{{ prop_def.get('description', '-') }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+            {% endif %}
+        </tbody>
+    </table>
+
+    <!-- MCP Config Edit Modal -->
+    <div id="configModal" class="modal-overlay" onclick="if(event.target===this)closeConfigModal()">
+        <div class="modal-content">
+            <h3 id="configModalTitle">Configure MCP Server</h3>
+            <input type="hidden" id="modalAgentName" value="">
+            <input type="hidden" id="modalAgentUrl" value="">
+            <div class="mcp-config-row">
+                <label for="modalLlmProvider">LLM Provider</label>
+                <select id="modalLlmProvider">
+                    <option value="">Default (Groq)</option>
+                    <option value="groq">Groq</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="ollama">Ollama</option>
+                    <option value="vertexai">VertexAI</option>
+                    <option value="vllm">vLLM</option>
+                </select>
+            </div>
+            <div class="mcp-config-row">
+                <label for="modalLlmModel">Model</label>
+                <input type="text" id="modalLlmModel" placeholder="Model name (e.g., openai/gpt-oss-20b)">
+            </div>
+            <div class="mcp-config-row">
+                <label for="modalDescription">Description</label>
+                <input type="text" id="modalDescription" placeholder="Agent description (optional)">
+            </div>
+            <div class="mcp-config-row">
+                <label for="modalSystemPrompt">System Prompt</label>
+                <textarea id="modalSystemPrompt" placeholder="Custom system prompt (optional)" rows="4" maxlength="4000"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeConfigModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveAgentConfig()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize agent data for config modal (server-rendered)
+        window._agentsData = {};
+        {% if agents %}
+        {% for agent in agents %}
+        window._agentsData['{{ agent.name }}'] = {
+            name: '{{ agent.name }}',
+            url: '{{ agent.url }}',
+            agent_type: '{{ agent.agent_type }}',
+            mcp_config: {{ agent.mcp_config | tojson if agent.mcp_config else '{}' }},
+            is_default: {{ 'true' if agent.is_default else 'false' }},
+            enabled: {{ 'true' if agent.enabled else 'false' }}
+        };
+        {% endfor %}
+        {% endif %}
+
+        // Profile Management Functions (v1.1)
+        // Get current profile from localStorage or use default from server
+        function getCurrentProfile() {
+            const stored = localStorage.getItem('currentProfile');
+            return stored || '{{ current_profile }}';
+        }
+
+        // Set current profile in localStorage
+        function setCurrentProfile(profile) {
+            localStorage.setItem('currentProfile', profile);
+        }
+
+        // Initialize profile on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedProfile = localStorage.getItem('currentProfile');
+            const selectElement = document.getElementById('profileSelect');
+            if (savedProfile && selectElement) {
+                // Check if saved profile exists in options
+                const option = Array.from(selectElement.options).find(opt => opt.value === savedProfile);
+                if (option) {
+                    selectElement.value = savedProfile;
+                }
+            }
+            // Update delete button state
+            updateDeleteProfileButton();
+        });
+
+        function updateDeleteProfileButton() {
+            // No-op: all profiles can be deleted
+        }
+
+        function switchProfile() {
+            const select = document.getElementById('profileSelect');
+            const newProfile = select.value;
+            setCurrentProfile(newProfile);
+            updateDeleteProfileButton();
+            // Reload the page with the new profile
+            window.location.href = `/dashboard?profile=${encodeURIComponent(newProfile)}`;
+        }
+
+        async function addProfile() {
+            const input = document.getElementById('newProfileName');
+            const name = input.value.trim();
+
+            if (!name) {
+                showNotification('Please enter a profile name', true);
+                return;
+            }
+
+            showLoading(true);
+
+            try {
+                const response = await fetch('/api/profiles', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(`Profile "${name}" created successfully!`);
+                    input.value = '';
+                    // Switch to the new profile
+                    setCurrentProfile(name);
+                    window.location.href = `/dashboard?profile=${encodeURIComponent(name)}`;
+                } else {
+                    showNotification(data.error || 'Failed to create profile', true);
+                }
+            } catch (error) {
+                showNotification('Error creating profile: ' + error.message, true);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function deleteProfile() {
+            const currentProfile = getCurrentProfile();
+
+            if (!currentProfile) {
+                showNotification('No profile selected', true);
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to delete profile "${currentProfile}"? This will delete all associated authentication tokens.`)) {
+                return;
+            }
+
+            showLoading(true);
+
+            try {
+                const encodedProfile = encodeURIComponent(currentProfile);
+                const response = await fetch(`/api/profiles/${encodedProfile}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(`Profile "${currentProfile}" deleted successfully!`);
+                    localStorage.removeItem('currentProfile');
+                    // Reload to pick up remaining profiles
+                    window.location.href = `/dashboard`;
+                } else {
+                    showNotification(data.error || 'Failed to delete profile', true);
+                }
+            } catch (error) {
+                showNotification('Error deleting profile: ' + error.message, true);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function showNotification(message, isError = false) {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.className = 'notification ' + (isError ? 'error' : 'success');
+            notification.style.display = 'block';
+
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 5000);
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        // Update placeholder and toggle MCP config fields when agent type changes
+        document.getElementById('agentType').addEventListener('change', function() {
+            const urlInput = document.getElementById('agentUrl');
+            const configFields = document.getElementById('mcpConfigFields');
+            if (this.value === 'mcp') {
+                urlInput.placeholder = 'Enter MCP server URL (e.g., http://localhost:9000/mcp)';
+                configFields.classList.add('visible');
+            } else {
+                urlInput.placeholder = 'Enter agent URL (e.g., http://localhost:10010)';
+                configFields.classList.remove('visible');
+            }
+        });
+
+        async function addAgent(event) {
+            event.preventDefault();
+
+            const urlInput = document.getElementById('agentUrl');
+            const url = urlInput.value.trim();
+            const agentType = document.getElementById('agentType').value;
+            const addButton = document.getElementById('addButton');
+
+            if (!url) {
+                showNotification('Please enter a valid URL', true);
+                return;
+            }
+
+            // Build request body with current profile
+            const body = { url, type: agentType, profile: getCurrentProfile() };
+
+            // Include MCP config fields if MCP type
+            if (agentType === 'mcp') {
+                const llmProvider = document.getElementById('mcpLlmProvider').value;
+                const llmModel = document.getElementById('mcpLlmModel').value.trim();
+                const description = document.getElementById('mcpDescription').value.trim();
+                const systemPrompt = document.getElementById('mcpSystemPrompt').value.trim();
+
+                if (llmProvider) body.llm_provider = llmProvider;
+                if (llmModel) body.llm_model = llmModel;
+                if (description) body.description = description;
+                if (systemPrompt) body.system_prompt = systemPrompt;
+            }
+
+            addButton.disabled = true;
+            showLoading(true);
+
+            try {
+                const response = await fetch('/api/agents', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const label = agentType === 'mcp' ? 'MCP server' : 'Agent';
+                    showNotification(`${label} "${data.agent.name}" added successfully!`);
+                    urlInput.value = '';
+                    // Reset MCP config fields
+                    document.getElementById('mcpLlmProvider').value = '';
+                    document.getElementById('mcpLlmModel').value = '';
+                    document.getElementById('mcpDescription').value = '';
+                    document.getElementById('mcpSystemPrompt').value = '';
+                    await refreshAgents();
+                } else {
+                    showNotification(data.error || 'Failed to add agent', true);
+                }
+            } catch (error) {
+                showNotification('Error adding agent: ' + error.message, true);
+            } finally {
+                addButton.disabled = false;
+                showLoading(false);
+            }
+        }
+
+        async function removeAgent(agentName, agentUrl) {
+            if (!confirm(`Are you sure you want to remove agent "${agentName}"?`)) {
+                return;
+            }
+
+            showLoading(true);
+
+            try {
+                const encodedName = encodeURIComponent(agentName);
+                const currentProfile = getCurrentProfile();
+                const response = await fetch(`/api/agents/${encodedName}?profile=${encodeURIComponent(currentProfile)}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(`Agent "${agentName}" removed successfully!`);
+                    await refreshAgents();
+                } else {
+                    showNotification(data.error || 'Failed to remove agent', true);
+                }
+            } catch (error) {
+                showNotification('Error removing agent: ' + error.message, true);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function refreshAgents() {
+            try {
+                const currentProfile = getCurrentProfile();
+                const response = await fetch(`/api/agents?profile=${encodeURIComponent(currentProfile)}`);
+                const data = await response.json();
+
+                if (response.ok) {
+                    updateAgentsTable(data.agents);
+                } else {
+                    console.error('Failed to refresh agents:', data.error);
+                }
+            } catch (error) {
+                console.error('Error refreshing agents:', error);
+            }
+        }
+
+        function updateAgentsTable(agents) {
+            const tbody = document.getElementById('agentsTableBody');
+            const currentProfile = getCurrentProfile();
+
+            if (agents.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="info-text">No remote agents configured. Add an agent using the form above.</td>
+                    </tr>
+                `;
+                return;
+            }
+
+            // Store agent data for modal access
+            window._agentsData = {};
+            agents.forEach(a => { window._agentsData[a.name] = a; });
+
+            tbody.innerHTML = agents.map(agent => {
+                const expirationHtml = agent.expiration_info ? `
+                    <span class="exp-info">${agent.expiration_info.relative}</span>
+                    <span class="exp-info">${agent.expiration_info.formatted}</span>
+                ` : '';
+
+                const authenticateBtn = agent.show_authenticate ?
+                    `<a href="/dashboard/${agent.encoded_name}/authenticate?profile=${encodeURIComponent(currentProfile)}" class="btn btn-primary">Authenticate</a>` : '';
+
+                const unlinkBtn = agent.show_unlink ? `
+                    <form method="POST" action="/dashboard/${agent.encoded_name}/unlink?profile=${encodeURIComponent(currentProfile)}" style="display: inline;">
+                        <button type="submit" class="btn btn-danger"
+                            onclick="return confirm('Are you sure you want to unlink authentication for ${agent.name}?');">Unlink</button>
+                    </form>
+                ` : '';
+
+                // Configure button for MCP agents
+                const configureBtn = agent.agent_type === 'mcp' ?
+                    `<button class="btn btn-configure btn-small" onclick="openConfigModal('${agent.name.replace(/'/g, "\\'")}')">Configure</button>` : '';
+
+                // Provider/model badge for MCP agents with custom config
+                const mcpConfig = agent.mcp_config;
+                let providerBadge = '';
+                if (mcpConfig && (mcpConfig.llm_provider || mcpConfig.llm_model)) {
+                    const providerLabel = mcpConfig.llm_provider || 'groq';
+                    const modelLabel = mcpConfig.llm_model ? ` / ${mcpConfig.llm_model}` : '';
+                    providerBadge = `<span class="badge badge-provider">${providerLabel}${modelLabel}</span>`;
+                }
+
+                const schema = agent.arguments_schema;
+                const schemaBtn = schema ?
+                    `<button class="btn btn-configure btn-small" onclick="toggleArguments('${agent.name}')">Schema (${Object.keys(schema.properties || {}).length})</button>` :
+                    '<span class="badge badge-secondary">No schema</span>';
+
+                const schemaRows = schema ? Object.entries(schema.properties || {}).map(([propName, propDef]) => {
+                    const isRequired = (schema.required || []).includes(propName);
+                    return `
+                        <tr>
+                            <td><strong>${propName}</strong></td>
+                            <td><span class="badge badge-type badge-type-${propDef.type}">${propDef.type}</span></td>
+                            <td>${isRequired ? 'Yes' : 'No'}</td>
+                            <td>${propDef.description || '-'}</td>
+                        </tr>
+                    `;
+                }).join('') : '';
+
+                const schemaSection = schema ? `
+                    <tr class="args-row" id="args-${agent.name}">
+                        <td colspan="6">
+                            <div class="args-section">
+                                <h4>Arguments Schema for ${agent.name}</h4>
+                                <p style="font-size: 13px; color: #6c757d; margin-bottom: 8px;">
+                                    These arguments are defined in the agent's card. Configure values in the client UI Settings.
+                                </p>
+                                <table class="args-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Type</th>
+                                            <th>Required</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>${schemaRows}</tbody>
+                                </table>
+                            </div>
+                        </td>
+                    </tr>
+                ` : '';
+
+                const isDefault = agent.is_default || false;
+                const isEnabled = agent.enabled !== false;
+                const defaultBadge = isDefault ? '<span class="badge badge-default">default</span>' : '';
+                const enabledChecked = isEnabled ? 'checked' : '';
+                const disabledClass = isEnabled ? '' : 'agent-disabled';
+                const removeBtn = isDefault ? '' :
+                    `<button class="btn btn-danger" onclick="removeAgent('${agent.name}', '${agent.url}')">Remove</button>`;
+
+                return `
+                    <tr data-agent-name="${agent.name}" class="${disabledClass}">
+                        <td>
+                            <div class="enable-toggle">
+                                <input type="checkbox" id="enable-${agent.name}" ${enabledChecked}
+                                    onchange="toggleAgentEnabled('${agent.name.replace(/'/g, "\\'")}', this.checked)">
+                            </div>
+                        </td>
+                        <td><strong>${agent.name}</strong>${defaultBadge}${providerBadge}</td>
+                        <td class="url-column" title="${agent.url}">${agent.url}</td>
+                        <td>${agent.description}</td>
+                        <td class="status-column">
+                            <span class="badge ${agent.badge_class}">${agent.status_text}</span>
+                            ${expirationHtml}
+                        </td>
+                        <td>${schemaBtn}</td>
+                        <td class="action-column">
+                            ${configureBtn}
+                            ${authenticateBtn}
+                            ${unlinkBtn}
+                            ${removeBtn}
+                        </td>
+                    </tr>
+                    ${schemaSection}
+                `;
+            }).join('');
+        }
+
+        function toggleArguments(agentName) {
+            const argsRow = document.getElementById(`args-${agentName}`);
+            if (argsRow) {
+                argsRow.classList.toggle('expanded');
+            }
+        }
+
+        // MCP Config Modal Functions
+        function openConfigModal(agentName) {
+            const agent = window._agentsData && window._agentsData[agentName];
+            if (!agent) {
+                showNotification('Agent data not found', true);
+                return;
+            }
+
+            const config = agent.mcp_config || {};
+
+            document.getElementById('modalAgentName').value = agentName;
+            document.getElementById('modalAgentUrl').value = agent.url;
+            document.getElementById('configModalTitle').textContent = `Configure: ${agentName}`;
+            document.getElementById('modalLlmProvider').value = config.llm_provider || '';
+            document.getElementById('modalLlmModel').value = config.llm_model || '';
+            document.getElementById('modalDescription').value = config.description || '';
+            document.getElementById('modalSystemPrompt').value = config.system_prompt || '';
+
+            document.getElementById('configModal').classList.add('active');
+        }
+
+        function closeConfigModal() {
+            document.getElementById('configModal').classList.remove('active');
+        }
+
+        async function saveAgentConfig() {
+            const agentName = document.getElementById('modalAgentName').value;
+            const llmProvider = document.getElementById('modalLlmProvider').value;
+            const llmModel = document.getElementById('modalLlmModel').value.trim();
+            const description = document.getElementById('modalDescription').value.trim();
+            const systemPrompt = document.getElementById('modalSystemPrompt').value.trim();
+
+            const body = { profile: getCurrentProfile() };
+            // Always send the field so empty string clears it
+            body.llm_provider = llmProvider || '';
+            body.llm_model = llmModel || '';
+            body.description = description || '';
+            body.system_prompt = systemPrompt || '';
+
+            showLoading(true);
+
+            try {
+                const encodedName = encodeURIComponent(agentName);
+                const response = await fetch(`/api/agents/${encodedName}/config`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(`Configuration updated for "${agentName}"`);
+                    closeConfigModal();
+                    await refreshAgents();
+                } else {
+                    showNotification(data.error || 'Failed to update configuration', true);
+                }
+            } catch (error) {
+                showNotification('Error updating configuration: ' + error.message, true);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // Enable/Disable Agent
+        async function toggleAgentEnabled(agentName, enabled) {
+            try {
+                const encodedName = encodeURIComponent(agentName);
+                const response = await fetch(`/api/agents/${encodedName}/enabled`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, profile: getCurrentProfile() })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const label = enabled ? 'enabled' : 'disabled';
+                    showNotification(`Agent "${agentName}" ${label}`);
+                    // Update row styling
+                    const row = document.querySelector(`tr[data-agent-name="${agentName}"]`);
+                    if (row) {
+                        if (enabled) {
+                            row.classList.remove('agent-disabled');
+                        } else {
+                            row.classList.add('agent-disabled');
+                        }
+                    }
+                } else {
+                    showNotification(data.error || 'Failed to toggle agent', true);
+                    // Revert checkbox
+                    const checkbox = document.getElementById(`enable-${agentName}`);
+                    if (checkbox) checkbox.checked = !enabled;
+                }
+            } catch (error) {
+                showNotification('Error toggling agent: ' + error.message, true);
+                const checkbox = document.getElementById(`enable-${agentName}`);
+                if (checkbox) checkbox.checked = !enabled;
+            }
+        }
+
+        // Token Management
+        async function generateToken() {
+            const profile = document.getElementById('tokenProfile')?.value;
+            const subject = document.getElementById('tokenSubject')?.value || 'a2a-client';
+            const hours = parseInt(document.getElementById('tokenExpHours')?.value) || 720;
+
+            if (!profile) {
+                showNotification('Please select a profile', true);
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/tokens', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sub: subject, profile: profile, expiration_hours: hours })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    document.getElementById('generatedToken').value = data.token;
+                    document.getElementById('tokenExpiry').textContent = `Expires at: ${data.expires_at}`;
+                    document.getElementById('tokenResult').style.display = 'block';
+                    showNotification('Token generated successfully');
+                } else {
+                    showNotification(data.error || 'Failed to generate token', true);
+                }
+            } catch (error) {
+                showNotification('Error generating token: ' + error.message, true);
+            }
+        }
+
+        function copyToken() {
+            const tokenInput = document.getElementById('generatedToken');
+            tokenInput.select();
+            navigator.clipboard.writeText(tokenInput.value).then(() => {
+                showNotification('Token copied to clipboard');
+            }).catch(() => {
+                // Fallback for older browsers
+                document.execCommand('copy');
+                showNotification('Token copied to clipboard');
+            });
+        }
+
+    </script>
+</body>
+
+</html>

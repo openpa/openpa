@@ -1,0 +1,18 @@
+[general]
+service_name = "olli-agent"
+agent_id = "olli_agent"
+agent_name = "OPENPA Agent"
+jwt_expiration_hours = 720
+session_token_default_ttl = 3600
+mcp_tool_call_timeout = 300
+working_dir = "~/.openpa"
+sqlite_db_path = ".storage/openpa.db"
+profile = ""
+
+[embedding]
+me5_host = "localhost"
+me5_port = 50051
+
+[llm]
+# Provider and model groups are configured via the setup wizard (stored in SQLite).
+# No defaults — setup must be completed first.

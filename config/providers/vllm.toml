@@ -1,0 +1,18 @@
+[provider]
+name = "vllm"
+display_name = "vLLM (Self-hosted)"
+requires_api_key = false
+
+[[models]]
+id = "meta-llama/Llama-3.3-70B-Instruct"
+display_name = "Llama 3.3 70B Instruct"
+group_hint = "high"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00
+
+[[models]]
+id = "meta-llama/Llama-3.1-8B-Instruct"
+display_name = "Llama 3.1 8B Instruct"
+group_hint = "low"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00

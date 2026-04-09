@@ -1,0 +1,7 @@
+[tool]
+name = "weather"
+display_name = "Weather"
+default_model_group = "low"
+
+[tool.required_config]
+ACCUWEATHER_API_KEY = { description = "AccuWeather API Key", type = "string", secret = true }

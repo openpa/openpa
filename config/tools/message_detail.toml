@@ -1,0 +1,4 @@
+[tool]
+name = "message_detail"
+display_name = "Message Detail"
+default_model_group = "low"

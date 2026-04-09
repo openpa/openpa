@@ -1,0 +1,32 @@
+[provider]
+name = "ollama"
+display_name = "Ollama (Local)"
+requires_api_key = false
+
+[[models]]
+id = "llama3.3:70b"
+display_name = "Llama 3.3 70B"
+group_hint = "high"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00
+
+[[models]]
+id = "llama3.1:8b"
+display_name = "Llama 3.1 8B"
+group_hint = "low"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00
+
+[[models]]
+id = "qwen2.5:7b"
+display_name = "Qwen 2.5 7B"
+group_hint = "low"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00
+
+[[models]]
+id = "gpt-oss:20b"
+display_name = "GPT-OSS 20B"
+group_hint = "low"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00
