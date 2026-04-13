@@ -66,7 +66,7 @@ Current Working Directory: `{current_working_directory}`
 
 Tools:
 {tools}
-
+{loaded_skills}
 Use the following format:
 
 Input: the input you must answer
@@ -162,6 +162,12 @@ class ReasoningAgent:
         self._agent_call_history: List[Tuple[str, str]] = []
         self._total_input_tokens = 0
         self._total_output_tokens = 0
+        # Skills whose SKILL.md content has been folded into self.instruction.
+        # Such skills are removed from the rendered Tools block and from the
+        # Action enum so the LLM cannot re-invoke them. Cleared when the loop
+        # ends via Casual Chat (CLARIFY) or Final Answer (TERMINATE).
+        self._loaded_skill_ids: set[str] = set()
+        self._loaded_skill_sections: Dict[str, str] = {}
 
         self.reasoning_tool: ChatCompletionToolParam = {
             "type": "function",
@@ -191,11 +197,26 @@ class ReasoningAgent:
     def _build_tools_block(self) -> str:
         sections = []
         for tool in self._tools:
+            if tool.tool_id in self._loaded_skill_ids:
+                continue
             args = self._load_arguments(tool.tool_id) if tool.tool_type in (
                 ToolType.A2A, ToolType.MCP, ToolType.BUILTIN,
             ) else {}
             sections.append(_format_tool_for_prompt(tool, args))
         return "".join(sections)
+
+    def _build_loaded_skills_block(self) -> str:
+        if not self._loaded_skill_sections:
+            return ""
+        parts = ["\nLoaded Skills (follow these instructions when relevant):\n"]
+        for tool_id, content in self._loaded_skill_sections.items():
+            tool = self._tools_by_id.get(tool_id)
+            display_name = tool.name if tool else tool_id
+            parts.append(f"\n----- Skill: {display_name} -----\n{content}\n-------------------------\n")
+        return "".join(parts)
+
+    def _active_action_names(self) -> List[str]:
+        return [name for name in self._action_names if name not in self._loaded_skill_ids]
 
     def _build_instruction(self) -> str:
         persona = read_persona_file(self.profile)
@@ -204,7 +225,8 @@ class ReasoningAgent:
             current_time=f"{datetime.now().isoformat()}",
             current_working_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile),
             tools=self._build_tools_block(),
-            tool_names=", ".join(self._action_names),
+            loaded_skills=self._build_loaded_skills_block(),
+            tool_names=", ".join(self._active_action_names()),
             OBSERVATION_START_MARKER=OBSERVATION_START_MARKER,
             OBSERVATION_END_MARKER=OBSERVATION_END_MARKER,
         )
@@ -297,11 +319,18 @@ class ReasoningAgent:
 
         self.current_step_count += 1
         input_section = template_input.format(steps="\n".join(self.steps))
-        # logger.info(f"=== Reasoning Step ===\n{input_section}")
 
-        # Action enum is the set of tool_ids
+        # Rebuild the system prompt every iteration so newly loaded skills are
+        # appended (and re-invoked skills are filtered out of the Tools block).
+        self.instruction = self._build_instruction()
+
+        logger.info(f"=== Instruction ===\n{self.instruction}")
+        logger.info(f"=== Reasoning Step ===\n{input_section}")
+
+        # Action enum is the set of tool_ids, minus skills already folded into
+        # the system prompt — this prevents the LLM from re-loading them.
         func_def = cast(dict, self.reasoning_tool["function"])
-        func_def["parameters"]["properties"]["Action"]["enum"] = [""] + self._action_names
+        func_def["parameters"]["properties"]["Action"]["enum"] = [""] + self._active_action_names()
 
         truncated = truncate_messages(self.history_messages, max_tokens_per_message=MAX_TOKENS_PER_MESSAGE)
         limited = limit_messages(truncated, max_length=MAX_TOKENS_FOR_HISTORY)
@@ -478,8 +507,15 @@ class ReasoningAgent:
             ToolType.MCP, ToolType.BUILTIN,
         ) else {}
 
-        # Yield a thinking artifact so the UI shows the tool invocation
-        action_input = step.action_input or step.thought or ""
+        # Yield a thinking artifact so the UI shows the tool invocation.
+        # For skills, override the model-generated Action_Input with a concise
+        # "Load skill <display name>" label so the Thinking Process clearly
+        # reflects what is actually happening (the SKILL.md is being folded
+        # into the system prompt, not passed any user-supplied input).
+        if tool.tool_type is ToolType.SKILL:
+            action_input = f"Load skill `{tool.name}`"
+        else:
+            action_input = step.action_input or step.thought or ""
         thinking_payload = {
             "Thought": step.thought,
             "Action": tool.tool_id,
@@ -564,6 +600,10 @@ class ReasoningAgent:
         if behavior is ToolBehavior.TERMINATE:
             logger.info(f"=== {tool.tool_id} (TERMINATE) ===")
             self._record_action_step(step, observation_text)
+            # Final Answer ends the run — drop any skills folded into the
+            # system prompt so the next run starts with a fresh instruction.
+            self._loaded_skill_ids.clear()
+            self._loaded_skill_sections.clear()
             if self.context_id:
                 self._clear_context(self.context_id)
             yield {
@@ -578,6 +618,10 @@ class ReasoningAgent:
             logger.info(f"=== {tool.tool_id} (CLARIFY) ===")
             self._record_action_step(step, observation_text)
             self.current_step_count = 0
+            # Casual Chat ends the run — drop any skills folded into the
+            # system prompt so the next run starts with a fresh instruction.
+            self._loaded_skill_ids.clear()
+            self._loaded_skill_sections.clear()
             if self.context_id:
                 self._save_context(self.context_id)
             yield {
@@ -604,14 +648,36 @@ class ReasoningAgent:
         # OBSERVE (default for a2a/mcp/builtin/skill)
         logger.info(f"=== {tool.tool_id} (OBSERVE) ===")
         if tool.tool_type is ToolType.SKILL:
+            # Skill content is treated as instruction: append SKILL.md to the
+            # system prompt (rebuilt at the top of the next _loop iteration)
+            # and remove the skill from the Tools block / Action enum so it
+            # cannot be re-invoked and appended again.
+            skill_text = getattr(tool.info, "full_content", "") or observation_text or ""  # type: ignore[attr-defined]
+            self._loaded_skill_sections[tool.tool_id] = skill_text
+            self._loaded_skill_ids.add(tool.tool_id)
+            # The full SKILL.md content is shown to the user in the frontend's
+            # Thinking Process via RESULT_ARTIFACT, but the recorded step in
+            # self.steps only carries a short pointer — the actual content
+            # already lives in self.instruction, so the step history doesn't
+            # need to duplicate it.
             skill_md_path = tool.info.dir_path / "SKILL.md"  # type: ignore[attr-defined]
-            step.action_input = (
-                f"load file {skill_md_path} to read its content and follow the instructions"
-            )
-            step.thought_in_next = (
-                "After observing the skill content, I will follow the instructions to use "
-                "the skill and then continue reasoning towards the user's goal."
-            )
+            short_obs_text = f"[Skill loaded from {skill_md_path}]"
+            short_obs_parts = [Part(root=TextPart(text=short_obs_text))]
+            # Keep the recorded Action_Input in sync with the THINKING_ARTIFACT
+            # ("Load skill `<name>`") rather than the raw model-generated input.
+            step.action_input = action_input
+            step.observation = short_obs_parts
+            step.observation_text = short_obs_text
+            yield {
+                "type": ChatCompletionTypeEnum.RESULT_ARTIFACT,
+                "data": {"Observation": observation_parts},
+            }
+            self._record_step_full(step, short_obs_text)
+            if self.context_id:
+                self._save_context(self.context_id)
+            async for r in self._loop(step):
+                yield r
+            return
         step.observation = observation_parts
         step.observation_text = observation_text
         yield {

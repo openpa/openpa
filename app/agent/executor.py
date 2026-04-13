@@ -142,7 +142,7 @@ class OpenPAAgentExecutor(AgentExecutor):
                             )
                             has_sent_first_chunk = True
                             # Add delay to simulate token latency
-                            await asyncio.sleep(0.01)  # 10ms delay per token
+                            await asyncio.sleep(0.001)  # 1ms delay per token
                 elif chunk["type"] == ChatCompletionTypeEnum.THINKING_ARTIFACT:
                     # Emit thinking artifact as a separate DataPart
                     thinking_data = chunk.get("data", {})
@@ -217,7 +217,7 @@ class OpenPAAgentExecutor(AgentExecutor):
                             )
                             has_sent_first_chunk = True
                             # Add delay to simulate token latency
-                            await asyncio.sleep(0.01)  # 10ms delay per token
+                            await asyncio.sleep(0.001)  # 1ms delay per token
                     # Capture token usage from the final chunk
                     total_input_tokens = chunk.get("input_tokens") or 0
                     total_output_tokens = chunk.get("output_tokens") or 0
