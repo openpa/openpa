@@ -60,7 +60,7 @@ class BuiltInToolAdapter:
     def __init__(
         self,
         tools: List[BuiltInTool],
-        llm: LLMProvider,
+        llm: Optional[LLMProvider] = None,
         mcp_auth: Optional[MCPOAuthClient] = None,
         description: Optional[str] = None,
         name: Optional[str] = None,

@@ -145,9 +145,10 @@ async def register_builtin_tools(
             llm = llm_factory(module_name, setup_profile)
         except Exception as e:  # noqa: BLE001
             logger.warning(
-                f"No LLM available for built-in tool '{server_name}': {e}. Skipping."
+                f"No LLM available for built-in tool '{server_name}': {e}. "
+                "Registering as unbound -- will be rebound after setup completes."
             )
-            continue
+            llm = None
 
         group = BuiltInToolGroup(
             config_name=module_name,

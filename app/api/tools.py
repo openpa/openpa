@@ -57,6 +57,8 @@ def get_tool_routes(registry: ToolRegistry) -> list[Route]:
                 row["is_stub"] = True
             else:
                 row["is_stub"] = bool(getattr(tool, "is_stub", False))
+            if hasattr(tool, "is_llm_bound"):
+                row["llm_bound"] = bool(tool.is_llm_bound)
             if hasattr(tool, "url"):
                 row["url"] = tool.url
             if hasattr(tool, "owner_profile"):

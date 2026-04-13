@@ -62,7 +62,7 @@ class BuiltInToolGroup(Tool):
         display_name: str,          # SERVER_NAME
         description: str,
         functions: List[BuiltInFunction],
-        llm: LLMProvider,
+        llm: Optional[LLMProvider] = None,
         arguments_schema: Optional[dict] = None,
         oauth_provider: Optional[Callable[[str], Any]] = None,
         prepare_tools: Optional[Callable[[str, list], list]] = None,
@@ -114,6 +114,17 @@ class BuiltInToolGroup(Tool):
     @property
     def adapter(self) -> BuiltInToolAdapter:
         return self._adapter
+
+    @property
+    def is_llm_bound(self) -> bool:
+        """True once a child LLM has been attached to the adapter.
+
+        Built-in tools register at startup even before the setup wizard runs;
+        in that pre-setup window the adapter has no LLM, so ``execute()`` will
+        return a "no LLM configured" error event. The frontend uses this flag
+        to render a "Setup required" badge.
+        """
+        return self._adapter._llm is not None
 
     @property
     def skills(self) -> List[ToolSkill]:

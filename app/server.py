@@ -63,7 +63,11 @@ from app.tools import (
     set_tool_registry,
 )
 from app.tools.a2a import build_a2a_stub, build_a2a_tool
-from app.tools.builtin import register_builtin_tools
+from app.tools.builtin import (
+    BuiltInToolGroup,
+    refresh_builtin_tool_oauth,
+    register_builtin_tools,
+)
 from app.tools.intrinsic import register_intrinsic_tools
 from app.tools.mcp import (
     build_http_mcp_tool,
@@ -232,18 +236,19 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     def _builtin_llm_factory(_module_name: str, profile: str):
         return model_group_mgr.create_llm_for_group("low", profile=profile)
 
-    if config_storage.is_setup_complete():
-        try:
-            await register_builtin_tools(
-                registry=registry,
-                config_manager=config_manager,
-                llm_factory=_builtin_llm_factory,
-                setup_profile="admin",
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Built-in tool registration failed: {e}")
-    else:
-        logger.info("Setup not complete; built-in tools deferred until first setup")
+    # Built-in tools are always registered at startup so the setup wizard and
+    # the Tools & Skills settings page can list and configure them. When no
+    # LLM is available yet (pre-setup), tools register with ``llm=None`` and
+    # are rebound by ``on_first_setup`` once the user picks providers/models.
+    try:
+        await register_builtin_tools(
+            registry=registry,
+            config_manager=config_manager,
+            llm_factory=_builtin_llm_factory,
+            setup_profile="admin",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Built-in tool registration failed: {e}")
 
     # 5. Hydrate persisted A2A / MCP tools
     await _hydrate_persisted_tools(registry=registry, model_group_mgr=model_group_mgr)
@@ -344,15 +349,30 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     routes.append(Route(path="/test", methods=["GET"], endpoint=test_endpoint))
 
     async def on_first_setup(profile: str):
-        try:
-            await register_builtin_tools(
-                registry=registry,
-                config_manager=config_manager,
-                llm_factory=_builtin_llm_factory,
-                setup_profile=profile,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Post-setup built-in tool registration failed")
+        # Built-in tools were already registered at startup (some possibly with
+        # llm=None because no LLM was configured yet). Walk the registry, bind
+        # an LLM to each, and refresh OAuth clients with the freshly-saved
+        # profile credentials.
+        for tool in registry.all_tools():
+            if not isinstance(tool, BuiltInToolGroup):
+                continue
+            try:
+                llm = _builtin_llm_factory(tool.config_name, profile)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"Could not bind LLM to built-in tool '{tool.name}' "
+                    f"after setup: {e}"
+                )
+                continue
+            tool.update_runtime_config(llm=llm)
+            try:
+                refresh_builtin_tool_oauth(
+                    registry, config_manager, tool.tool_id, profile=profile,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    f"OAuth refresh failed for built-in tool '{tool.name}'"
+                )
         if skills_dir.is_dir():
             skills = scan_skills(skills_dir)
             if skills:
@@ -360,7 +380,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                     skills, skill_factory=lambda info: SkillTool(info),
                 )
         openpa_agent.update_embeddings()
-        logger.info("Post-setup: built-in tools and skills registered")
+        logger.info("Post-setup: built-in tools rebound and skills synced")
 
     def _mcp_llm_factory():
         try:

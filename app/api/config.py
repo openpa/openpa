@@ -1,5 +1,6 @@
 """Server configuration and setup API endpoints."""
 
+import json
 import os
 import re
 import secrets
@@ -158,15 +159,47 @@ def get_config_routes(
             is_secret = "api_key" in key or "service_account" in key
             config_storage.set("llm_config", key, str(value), is_secret=is_secret, profile=profile_name)
 
-        # Tool variables (env-style secrets) -- written via the registry's
-        # ToolConfigManager so they land in the new scoped tool_configs table.
+        # Tool config payload from the wizard. The frontend bundles four
+        # different settings into a single ``tool_configs[tool_id]`` dict using
+        # reserved key prefixes:
+        #   - ``_enabled``         -> per-profile enabled state (profile_tools)
+        #   - ``_full_reasoning``  -> LLM scope override
+        #   - ``_arg.<name>``      -> tool argument
+        #   - everything else      -> tool variable (env-style secret/value)
+        # Route each to the right storage; otherwise these settings would be
+        # silently dropped into the variables table and never honored.
         tool_configs = body.get("tool_configs", {})
         if registry is not None:
             from app.tools.ids import slugify
             for tool_key, configs in tool_configs.items():
                 # Tool keys may arrive as either tool_id (slug) or display name
                 tool_id = tool_key if registry.get(tool_key) else slugify(tool_key)
+                arg_values: dict[str, object] = {}
                 for key, value in configs.items():
+                    if key == "_enabled":
+                        try:
+                            registry.set_profile_tool_enabled(
+                                profile_name, tool_id,
+                                str(value).lower() == "true",
+                            )
+                        except (KeyError, ValueError) as e:
+                            logger.warning(
+                                f"Skipping _enabled for '{tool_id}': {e}"
+                            )
+                        continue
+                    if key == "_full_reasoning":
+                        registry.config.set_llm_param(
+                            tool_id, profile_name, "full_reasoning",
+                            str(value).lower() == "true",
+                        )
+                        continue
+                    if key.startswith("_arg."):
+                        arg_name = key[len("_arg."):]
+                        try:
+                            arg_values[arg_name] = json.loads(value)
+                        except (TypeError, ValueError):
+                            arg_values[arg_name] = value
+                        continue
                     is_secret = (
                         "secret" in key.lower()
                         or "key" in key.lower()
@@ -175,6 +208,8 @@ def get_config_routes(
                     registry.config.set_variable(
                         tool_id, profile_name, key, str(value), is_secret=is_secret,
                     )
+                if arg_values:
+                    registry.config.set_arguments(tool_id, profile_name, arg_values)
 
         # Per-built-in-tool LLM overrides land in the llm scope of the new tool_configs table.
         agent_configs = body.get("agent_configs", {})
