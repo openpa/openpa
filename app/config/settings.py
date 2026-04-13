@@ -77,22 +77,26 @@ class BaseConfig:
     DISABLE_LOG = _bool(os.environ.get("DISABLE_LOG", "false"))
 
     # ── Application-level (TOML defaults, overridable via SQLite) ──
-    SERVICE_NAME = _dynaconf_get("general.service_name", "olli-agent")
-    AGENT_ID = _dynaconf_get("general.agent_id", "olli_agent")
+    SERVICE_NAME = _dynaconf_get("general.service_name", "openpa-agent")
+    AGENT_ID = _dynaconf_get("general.agent_id", "openpa_agent")
     AGENT_NAME = _dynaconf_get("general.agent_name", "OPENPA Agent")
     JWT_EXPIRATION_HOURS = int(_dynaconf_get("general.jwt_expiration_hours", 720))
     SESSION_TOKEN_DEFAULT_TTL = int(_dynaconf_get("general.session_token_default_ttl", 3600))
     MCP_TOOL_CALL_TIMEOUT = int(_dynaconf_get("general.mcp_tool_call_timeout", 300))
-    SQLITE_DB_PATH = _dynaconf_get("general.sqlite_db_path", ".storage/openpa.db")
-
     OPENPA_WORKING_DIR = _dynaconf_get("general.working_dir", os.path.join(os.path.expanduser("~"), ".openpa"))
-    # Expand ~ in working_dir
+    # Expand ~ and normalize path separators (avoids mixed \ and / on Windows)
     if OPENPA_WORKING_DIR.startswith("~"):
         OPENPA_WORKING_DIR = os.path.expanduser(OPENPA_WORKING_DIR)
+    OPENPA_WORKING_DIR = os.path.normpath(OPENPA_WORKING_DIR)
+
+    SQLITE_DB_PATH = os.path.join(
+        OPENPA_WORKING_DIR, "storage",
+        _dynaconf_get("general.sqlite_db_path", "openpa.db"),
+    )
 
     # ── Embedding ──
-    ME5_EMBEDDING_HOST = _dynaconf_get("embedding.me5_host", "localhost")
-    ME5_EMBEDDING_PORT = int(_dynaconf_get("embedding.me5_port", 50051))
+    EMBEDDING_GRPC_HOST = _dynaconf_get("embedding.grpc_host", "localhost")
+    EMBEDDING_GRPC_PORT = int(_dynaconf_get("embedding.grpc_port", 50051))
 
     # ── LLM (configured via setup wizard, stored in SQLite) ──
     DEFAULT_MODEL_NAME = _dynaconf_get("llm.model_groups.high", "")

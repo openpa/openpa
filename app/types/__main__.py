@@ -8,7 +8,7 @@ from a2a.types import (
 )
 
 if TYPE_CHECKING:
-    from app.remote_agents import RemoteAgentConnections
+    from app.tools.a2a import RemoteAgentConnections
 
 from app.constants import ChatCompletionTypeEnum
 
@@ -73,6 +73,10 @@ class AgentInfo(TypedDict):
     is_default: NotRequired[bool]  # True for stdio MCP servers defined in source code
     enabled: NotRequired[bool]  # False to exclude from system prompt tools (default: True)
     profile: NotRequired[str]  # Owning profile name, "__shared__" for stdio MCP servers
+    connection_error: NotRequired[Optional[str]]  # Error message when connection failed at startup
+    is_stub: NotRequired[bool]  # True when registered via register_stub (not connected)
+    config_name: NotRequired[Optional[str]]  # Links to tool config (e.g., tool_name for built-in, skill name for skills)
+    skill_info: NotRequired[Any]  # SkillInfo instance (only for agent_type='skill')
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +149,7 @@ class FunctionCallingResponseType(TypedDict):
 
 class VectorEmbeddingType(Enum):
     OPENAI = "OPENAI"
-    ME5_SMALL = "ME5_SMALL"
-    ME5_LARGE = "ME5_LARGE"
+    GRPC = "GRPC"
 
 
 class ReasoningStreamResponseType(TypedDict):

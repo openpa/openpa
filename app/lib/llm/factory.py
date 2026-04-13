@@ -45,25 +45,31 @@ def create_llm_provider(
         ValueError: If provider_name is unknown or required credentials are missing.
     """
     model = model_name or BaseConfig.REASONING_MODEL_NAME
+    # Strip provider prefix if model string starts with "provider_name/"
+    # (UI sends "provider/model_id" format, e.g. "groq/openai/gpt-oss-120b")
+    if model and provider_name and model.startswith(f"{provider_name}/"):
+        model = model[len(provider_name) + 1:]
     _kw = {"profile": profile} if profile is not None else {}
+
+    provider: LLMProvider
 
     if provider_name == "groq":
         api_key = _get_api_key("groq", config_storage, profile=profile)
         if not api_key:
             raise ValueError("Groq API key is not configured")
         from .groq import GroqLLMProvider
-        return GroqLLMProvider(api_key=api_key, model_name=model, default_reasoning_effort=default_reasoning_effort)
+        provider = GroqLLMProvider(api_key=api_key, model_name=model, default_reasoning_effort=default_reasoning_effort)
 
     elif provider_name == "openai":
         api_key = _get_api_key("openai", config_storage, profile=profile)
         if not api_key:
             raise ValueError("OpenAI API key is not configured")
         from .openai import OpenAILLMProvider
-        return OpenAILLMProvider(api_key=api_key, model_name=model, default_reasoning_effort=default_reasoning_effort)
+        provider = OpenAILLMProvider(api_key=api_key, model_name=model, default_reasoning_effort=default_reasoning_effort)
 
     elif provider_name == "ollama":
         from .ollama import OllamaLLMProvider
-        return OllamaLLMProvider(api_key="ollama", model_name=model, default_reasoning_effort=default_reasoning_effort)
+        provider = OllamaLLMProvider(api_key="ollama", model_name=model, default_reasoning_effort=default_reasoning_effort)
 
     elif provider_name == "vertexai":
         service_account = None
@@ -85,7 +91,7 @@ def create_llm_provider(
             location = "global"
 
         from .vertexai import VertexAILLMProvider
-        return VertexAILLMProvider(
+        provider = VertexAILLMProvider(
             credentials=credentials,
             project_id=project_id,
             location=location,
@@ -95,10 +101,13 @@ def create_llm_provider(
 
     elif provider_name == "vllm":
         from .vllm import VllmLLMProvider
-        return VllmLLMProvider(api_key="vllm", model_name=model, default_reasoning_effort=default_reasoning_effort)
+        provider = VllmLLMProvider(api_key="vllm", model_name=model, default_reasoning_effort=default_reasoning_effort)
 
     else:
         raise ValueError(
             f"Unknown LLM provider '{provider_name}'. "
             f"Supported: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
         )
+
+    provider.provider_name = provider_name
+    return provider

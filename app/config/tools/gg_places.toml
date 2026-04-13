@@ -1,0 +1,19 @@
+[tool]
+name = "gg_places"
+display_name = "Google Places"
+default_model_group = "low"
+
+[tool.required_config]
+GOOGLE_MAPS_API_KEY = { description = "Google Maps API Key", type = "string", secret = true }
+
+[tool.arguments]
+type = "object"
+required = ["latitude", "longitude"]
+
+[tool.arguments.properties.latitude]
+type = "number"
+description = "User's current latitude coordinate"
+
+[tool.arguments.properties.longitude]
+type = "number"
+description = "User's current longitude coordinate"

@@ -40,7 +40,7 @@ class MCPOAuthClient:
         self.token = None
         self.state = None
         self._auth_metadata: Optional[Dict[str, Any]] = None
-        self._client_id = client_id or "olli-agent-client"
+        self._client_id = client_id or "openpa-agent-client"
         self._client_secret = client_secret
         self._extra_authorize_params = extra_authorize_params or {}
         self._pkce_verifiers: Dict[str, str] = {}  # state -> code_verifier

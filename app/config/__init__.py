@@ -9,9 +9,8 @@ from pathlib import Path
 import toml
 from dynaconf import Dynaconf
 
-# Project root is two levels up from this file (app/config/__init__.py -> openpa/)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_CONFIG_DIR = _PROJECT_ROOT / "config"
+# Config directory is the same directory as this file (app/config/)
+_CONFIG_DIR = Path(__file__).resolve().parent
 
 # Initialize Dynaconf for TOML-based configuration
 settings = Dynaconf(
@@ -35,7 +34,7 @@ def load_provider_catalog(provider_name: str) -> dict:
 
 
 def load_all_provider_catalogs() -> dict[str, dict]:
-    """Load all provider catalogs from config/providers/*.toml.
+    """Load all provider catalogs from app/config/providers/*.toml.
 
     Returns dict keyed by provider name.
     """
@@ -64,7 +63,7 @@ def load_tool_schema(tool_name: str) -> dict:
 
 
 def load_all_tool_schemas() -> dict[str, dict]:
-    """Load all tool schemas from config/tools/*.toml.
+    """Load all tool schemas from app/config/tools/*.toml.
 
     Returns dict keyed by tool name.
     """

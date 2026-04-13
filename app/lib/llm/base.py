@@ -7,6 +7,16 @@ from app.types import ChatCompletionStreamResponseType
 
 
 class LLMProvider(ABC):
+    provider_name: str = ""
+
+    @property
+    def model_label(self) -> str:
+        """Human-readable label combining provider and model, e.g. 'Groq GPT-OSS-120B'."""
+        name = getattr(self, "model_name", "")
+        if self.provider_name and name:
+            return f"{self.provider_name.capitalize()} {name}"
+        return name or "unknown"
+
     @abstractmethod
     def chat_completion_stream(
         self,

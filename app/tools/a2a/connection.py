@@ -16,7 +16,7 @@ from a2a.types import (
 from dotenv import load_dotenv
 
 from app.config.settings import BaseConfig
-from app.remote_agents.auth import OAuthClient
+from app.tools.a2a.auth import OAuthClient
 from app.utils.logger import logger
 
 load_dotenv()

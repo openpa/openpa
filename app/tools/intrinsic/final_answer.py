@@ -1,15 +1,11 @@
-from typing import Any, Dict
+"""Final-answer intrinsic tool (TERMINATE behavior)."""
 
-from app.tools.intrinsic.base import IntrinsicTool, IntrinsicToolBehavior, ToolResult
+from app.tools.base import ToolBehavior
+from app.tools.intrinsic.base import IntrinsicTool
 
 
 class FinalAnswerTool(IntrinsicTool):
-    """A tool for providing the final answer once all information is collected.
-
-    When invoked, the context is cleared and the conversation ends.
-    The reasoning agent treats this as the signal that the LLM has
-    gathered enough information and reached a final conclusion.
-    """
+    """Conclude the conversation; clears context and ends the turn."""
 
     @property
     def name(self) -> str:
@@ -29,9 +25,5 @@ class FinalAnswerTool(IntrinsicTool):
         )
 
     @property
-    def behavior(self) -> IntrinsicToolBehavior:
-        return IntrinsicToolBehavior.TERMINATE
-
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
-        action_input = arguments.get("action_input", "")
-        return ToolResult(content=action_input)
+    def behavior(self) -> ToolBehavior:
+        return ToolBehavior.TERMINATE

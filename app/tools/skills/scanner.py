@@ -1,0 +1,122 @@
+"""Agent skills scanner.
+
+Scans ``{OPENPA_WORKING_DIR}/skills/`` for skill directories containing a
+``SKILL.md`` file. Each valid skill is parsed into a :class:`SkillInfo`.
+
+Skills are pure context injection: their ``SKILL.md`` content is loaded
+verbatim as a reasoning-agent observation. The frontmatter only needs
+``name`` and ``description``; ``metadata`` is preserved for future use.
+Any other frontmatter fields (``variables``, ``arguments``, ...) are ignored.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from app.utils.logger import logger
+
+
+@dataclass
+class SkillInfo:
+    """In-memory representation of a parsed agent skill."""
+    name: str
+    description: str
+    dir_path: Path
+    metadata: dict[str, Any] = field(default_factory=dict)
+    full_content: str = ""
+
+
+def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Extract YAML frontmatter from a ``SKILL.md`` file."""
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return {}, text
+
+    end_idx = stripped.find("---", 3)
+    if end_idx == -1:
+        return {}, text
+
+    yaml_block = stripped[3:end_idx]
+    try:
+        data = yaml.safe_load(yaml_block)
+    except yaml.YAMLError as exc:
+        logger.warning(f"Failed to parse YAML frontmatter: {exc}")
+        return {}, text
+
+    if not isinstance(data, dict):
+        return {}, text
+
+    return data, text
+
+
+def scan_skills(skills_dir: Path) -> dict[str, SkillInfo]:
+    """Scan a directory for valid agent skill subdirectories.
+
+    Each subdirectory must contain a ``SKILL.md`` whose YAML frontmatter
+    provides at least ``name`` and ``description``.
+
+    Returns a dict keyed by skill name (first-write-wins on duplicates).
+    """
+    if not skills_dir.is_dir():
+        return {}
+
+    skills: dict[str, SkillInfo] = {}
+
+    for entry in sorted(skills_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+
+        skill_md = entry / "SKILL.md"
+        if not skill_md.exists():
+            candidates = [f for f in entry.iterdir() if f.name.lower() == "skill.md"]
+            if candidates:
+                skill_md = candidates[0]
+            else:
+                continue
+
+        try:
+            content = skill_md.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(f"Could not read {skill_md}: {exc}")
+            continue
+
+        fm, full_text = _parse_frontmatter(content)
+
+        name = fm.get("name")
+        description = fm.get("description")
+
+        if not name or not isinstance(name, str):
+            logger.warning(
+                f"Skipping skill dir '{entry.name}': missing or invalid 'name' in SKILL.md"
+            )
+            continue
+        if not description or not isinstance(description, str):
+            logger.warning(
+                f"Skipping skill dir '{entry.name}': missing or invalid 'description' in SKILL.md"
+            )
+            continue
+
+        metadata = fm.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        if name in skills:
+            logger.warning(
+                f"Duplicate skill name '{name}' (dir '{entry.name}'); keeping first occurrence"
+            )
+            continue
+
+        skills[name] = SkillInfo(
+            name=name,
+            description=description,
+            dir_path=entry,
+            metadata=metadata,
+            full_content=full_text,
+        )
+        logger.info(f"Discovered agent skill: '{name}' ({entry.name}/)")
+
+    return skills

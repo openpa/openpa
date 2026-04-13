@@ -1,45 +1,33 @@
-"""System File MCP server using stdio transport.
+"""System File built-in tool.
 
-A standalone FastMCP server that provides file browsing, reading, and writing
-capabilities within the OPENPA_WORKING_DIR directory. Supports text and binary
-files with intelligent content handling via markitdown conversion and
-token-based limits. Write operations are restricted to human-readable text files.
-
-Usage:
-    python app/tools/mcp/built-in/system_file.py
-
-Environment:
-    OPENPA_WORKING_DIR - Base directory for file operations (default: ~/.openpa)
+Provides file browsing, reading, and writing capabilities within the
+OPENPA_WORKING_DIR directory. Supports text and binary files with intelligent
+content handling via markitdown conversion and token-based limits. Write
+operations are restricted to human-readable text files.
 """
 
 import fnmatch
 import mimetypes
 import os
 import platform
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool, ToolResult
 from tiktoken import encoding_for_model
 
+from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolResultFile, ToolResultWithFiles
 from app.utils.logger import logger
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration defaults
 # ---------------------------------------------------------------------------
-
-DATA_DIR = os.environ.get(
-    "OPENPA_WORKING_DIR",
-    os.path.join(os.path.expanduser("~"), ".openpa"),
-)
 
 MAX_READABLE_TOKENS = 1000
 MAX_MARKITDOWN_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_LIST_ENTRIES = 100
+MAX_SEARCH_RESULTS = 100
 
 # Lazy-loaded encoder (created once on first use)
 _encoder = None
@@ -76,17 +64,16 @@ def _get_markitdown():
 # Security helpers
 # ---------------------------------------------------------------------------
 
-def _safe_resolve(relative_path: str) -> str:
-    """Resolve *relative_path* inside DATA_DIR.  Raises ValueError on traversal."""
-    base = os.path.realpath(DATA_DIR)
+def _safe_resolve(data_dir: str, relative_path: str) -> str:
+    """Resolve *relative_path* inside data_dir.  Raises ValueError on traversal."""
+    base = os.path.realpath(data_dir)
     os.makedirs(base, exist_ok=True)
-    # Strip leading slashes so "/" or "/foo" are treated as relative to DATA_DIR
+    # Strip leading slashes so "/" or "/foo" are treated as relative to data_dir
     relative_path = relative_path.lstrip("/\\")
     target = os.path.realpath(os.path.join(base, relative_path))
     if target != base and not target.startswith(base + os.sep):
         raise ValueError(f"Path traversal detected: {relative_path}")
     return target
-
 
 
 # ---------------------------------------------------------------------------
@@ -171,36 +158,17 @@ def _is_text_mime(mime: str) -> bool:
 
 
 def _file_description(name: str, mime: str, uri: str) -> str:
-    """Return a Markdown description of a file for the LLM observation.
-
-    Uses real Markdown links/images with the file URI so the LLM can
-    produce a natural response that references the actual file.
-    """
+    """Return a Markdown description of a file for the LLM observation."""
     if mime.startswith("image/"):
         return f'![{name}]({uri} "{name}")'
     return f'[{name}]({uri} "{name}")'
 
 
 # ---------------------------------------------------------------------------
-# FastMCP server
+# Tools
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(
-    name="System File",
-    instructions=(
-        "A file management assistant. "
-        "Currently operating within the directory: " + DATA_DIR + ". "
-    ),
-)
-
-# ---------------------------------------------------------------------------
-# search_files
-# ---------------------------------------------------------------------------
-
-MAX_SEARCH_RESULTS = 100
-
-
-class SearchFilesTool(Tool):
+class SearchFilesTool(BuiltInTool):
     name: str = "search_files"
     description: str = (
         "Recursively search for files or directories by name within the user's "
@@ -253,7 +221,11 @@ class SearchFilesTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, data_dir: str):
+        self._data_dir = data_dir
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        data_dir = arguments.pop("_working_directory", None) or self._data_dir
         query = arguments.get("query", "").strip()
         rel_path = arguments.get("path", ".")
         pattern = arguments.get("pattern")
@@ -261,27 +233,27 @@ class SearchFilesTool(Tool):
         max_results = min(arguments.get("max_results", 20), MAX_SEARCH_RESULTS)
 
         if not query:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Missing parameter",
                 "message": "query is required.",
             })
 
         try:
-            search_root = _safe_resolve(rel_path)
+            search_root = _safe_resolve(data_dir, rel_path)
         except ValueError as e:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Access denied",
                 "message": str(e),
             })
 
         if not os.path.isdir(search_root):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Not a directory",
                 "message": f"'{rel_path}' is not a directory.",
             })
 
         keywords = query.lower().split()
-        base = os.path.realpath(DATA_DIR)
+        base = os.path.realpath(data_dir)
         results = []
 
         for dirpath, dirnames, filenames in os.walk(search_root):
@@ -294,16 +266,13 @@ class SearchFilesTool(Tool):
             for name, is_dir in entries:
                 name_lower = name.lower()
 
-                # All keywords must appear in the name
                 if not all(kw in name_lower for kw in keywords):
                     continue
 
-                # Optional glob pattern filter
                 if pattern and not fnmatch.fnmatch(name, pattern):
                     continue
 
                 full_path = os.path.join(dirpath, name)
-                # Compute path relative to DATA_DIR
                 entry_rel = os.path.relpath(full_path, base)
 
                 entry: Dict[str, Any] = {
@@ -335,7 +304,7 @@ class SearchFilesTool(Tool):
             if len(results) >= max_results:
                 break
 
-        return ToolResult(structured_content={
+        return BuiltInToolResult(structured_content={
             "query": query,
             "search_root": rel_path,
             "total_matches": len(results),
@@ -343,11 +312,8 @@ class SearchFilesTool(Tool):
             "results": results,
         })
 
-# ---------------------------------------------------------------------------
-# list_files
-# ---------------------------------------------------------------------------
 
-class ListFilesTool(Tool):
+class ListFilesTool(BuiltInTool):
     name: str = "list_files"
     description: str = (
         "List files and directories inside the user's data directory. "
@@ -372,17 +338,21 @@ class ListFilesTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, data_dir: str):
+        self._data_dir = data_dir
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        data_dir = arguments.pop("_working_directory", None) or self._data_dir
         rel_path = arguments.get("path", ".")
         pattern = arguments.get("pattern")
 
         try:
-            target = _safe_resolve(rel_path)
+            target = _safe_resolve(data_dir, rel_path)
         except ValueError as e:
-            return ToolResult(structured_content={"error": "Access denied", "message": str(e)})
+            return BuiltInToolResult(structured_content={"error": "Access denied", "message": str(e)})
 
         if not os.path.isdir(target):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Not a directory",
                 "message": f"'{rel_path}' is not a directory.",
             })
@@ -408,12 +378,12 @@ class ListFilesTool(Tool):
                     if len(entries) >= MAX_LIST_ENTRIES:
                         break
         except PermissionError:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Permission denied",
                 "message": f"Cannot read directory '{rel_path}'.",
             })
 
-        return ToolResult(structured_content={
+        return BuiltInToolResult(structured_content={
             "path": rel_path,
             "os": platform.system(),
             "total_entries": len(entries),
@@ -421,11 +391,7 @@ class ListFilesTool(Tool):
         })
 
 
-# ---------------------------------------------------------------------------
-# get_file_info
-# ---------------------------------------------------------------------------
-
-class GetFileInfoTool(Tool):
+class GetFileInfoTool(BuiltInTool):
     name: str = "get_file_info"
     description: str = (
         "Get detailed metadata about a single file: name, size, MIME type, "
@@ -444,29 +410,33 @@ class GetFileInfoTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, data_dir: str):
+        self._data_dir = data_dir
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        data_dir = arguments.pop("_working_directory", None) or self._data_dir
         rel_path = arguments.get("path", "")
         if not rel_path:
-            return ToolResult(structured_content={"error": "Missing parameter", "message": "path is required."})
+            return BuiltInToolResult(structured_content={"error": "Missing parameter", "message": "path is required."})
 
         try:
-            target = _safe_resolve(rel_path)
+            target = _safe_resolve(data_dir, rel_path)
         except ValueError as e:
-            return ToolResult(structured_content={"error": "Access denied", "message": str(e)})
+            return BuiltInToolResult(structured_content={"error": "Access denied", "message": str(e)})
 
         if not os.path.exists(target):
-            return ToolResult(structured_content={"error": "Not found", "message": f"'{rel_path}' does not exist."})
+            return BuiltInToolResult(structured_content={"error": "Not found", "message": f"'{rel_path}' does not exist."})
 
         try:
             stat = os.stat(target)
         except OSError as e:
-            return ToolResult(structured_content={"error": "OS error", "message": str(e)})
+            return BuiltInToolResult(structured_content={"error": "OS error", "message": str(e)})
 
         mime = _guess_mime(target)
         binary = _is_binary(target) if os.path.isfile(target) else False
         ext = os.path.splitext(target)[1]
 
-        return ToolResult(structured_content={
+        return BuiltInToolResult(structured_content={
             "name": os.path.basename(target),
             "path": rel_path,
             "size": stat.st_size,
@@ -480,11 +450,7 @@ class GetFileInfoTool(Tool):
         })
 
 
-# ---------------------------------------------------------------------------
-# read_file
-# ---------------------------------------------------------------------------
-
-class ReadFileTool(Tool):
+class ReadFileTool(BuiltInTool):
     name: str = "read_file"
     description: str = (
         "Read the contents of a file. For small text/document files the "
@@ -511,20 +477,24 @@ class ReadFileTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, data_dir: str):
+        self._data_dir = data_dir
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        data_dir = arguments.pop("_working_directory", None) or self._data_dir
         rel_path = arguments.get("path", "")
         readable = arguments.get("readable", True)
 
         if not rel_path:
-            return ToolResult(structured_content={"error": "Missing parameter", "message": "path is required."})
+            return BuiltInToolResult(structured_content={"error": "Missing parameter", "message": "path is required."})
 
         try:
-            target = _safe_resolve(rel_path)
+            target = _safe_resolve(data_dir, rel_path)
         except ValueError as e:
-            return ToolResult(structured_content={"error": "Access denied", "message": str(e)})
+            return BuiltInToolResult(structured_content={"error": "Access denied", "message": str(e)})
 
         if not os.path.isfile(target):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Not found",
                 "message": f"'{rel_path}' is not a file or does not exist.",
             })
@@ -539,10 +509,10 @@ class ReadFileTool(Tool):
             "mime_type": mime,
         }
 
-        def _result(text: str) -> ToolResult:
+        def _result(text: str) -> BuiltInToolResult:
             """Build a ToolResultWithFiles response."""
             payload: ToolResultWithFiles = {"text": text, "_files": [file_entry]}
-            return ToolResult(structured_content=payload)
+            return BuiltInToolResult(structured_content=payload)
 
         # Non-readable fast path
         if not readable:
@@ -550,7 +520,7 @@ class ReadFileTool(Tool):
 
         binary = _is_binary(target)
 
-        # Binary file that markitdown cannot handle → non-readable
+        # Binary file that markitdown cannot handle -> non-readable
         if binary and not _is_markitdown_supported(mime):
             return _result(_file_description(file_name, mime, file_uri))
 
@@ -568,7 +538,8 @@ class ReadFileTool(Tool):
             except Exception as e:
                 logger.warning(f"[ReadFileTool] markitdown conversion failed for {file_name}: {e}")
 
-        logger.debug(f"[ReadFileTool] file={file_name}, mime={mime}, binary={binary}, "f"size={file_size}, md_content_length={len(md_content) if md_content else 0}")
+        logger.debug(f"[ReadFileTool] file={file_name}, mime={mime}, binary={binary}, "
+                     f"size={file_size}, md_content_length={len(md_content) if md_content else 0}")
         # Fallback: read raw text for plain text files
         if md_content is None and not binary:
             try:
@@ -591,15 +562,11 @@ class ReadFileTool(Tool):
         if token_count > MAX_READABLE_TOKENS:
             return _result(_file_description(file_name, mime, file_uri))
 
-        # Readable content — include text for the LLM and file meta for the frontend
+        # Readable content -- include text for the LLM and file meta for the frontend
         return _result(md_content)
 
 
-# ---------------------------------------------------------------------------
-# write_file
-# ---------------------------------------------------------------------------
-
-class WriteFileTool(Tool):
+class WriteFileTool(BuiltInTool):
     name: str = "write_file"
     description: str = (
         "Write plain text content to a human-readable text file inside the "
@@ -626,27 +593,31 @@ class WriteFileTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, data_dir: str):
+        self._data_dir = data_dir
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        data_dir = arguments.pop("_working_directory", None) or self._data_dir
         rel_path = arguments.get("path", "")
         content = arguments.get("content", "")
 
         if not rel_path:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Missing parameter",
                 "message": "path is required.",
             })
 
         try:
-            target = _safe_resolve(rel_path)
+            target = _safe_resolve(data_dir, rel_path)
         except ValueError as e:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Access denied",
                 "message": str(e),
             })
 
         mime = _guess_mime(target)
         if not _is_text_mime(mime):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Unsupported file type",
                 "message": (
                     f"'{os.path.basename(target)}' has MIME type '{mime}' which is "
@@ -657,7 +628,7 @@ class WriteFileTool(Tool):
         encoder = _get_encoder()
         token_count = len(encoder.encode(content))
         if token_count > MAX_READABLE_TOKENS:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Content too large",
                 "message": (
                     f"Content has {token_count} tokens, which exceeds the "
@@ -672,14 +643,14 @@ class WriteFileTool(Tool):
                 f.write(content)
         except OSError as e:
             logger.error(f"[WriteFileTool] write failed: {e}")
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Write error",
                 "message": f"Failed to write file: {e}",
             })
 
         file_name = os.path.basename(target)
         file_uri = target.replace(os.sep, "/")
-        base = os.path.realpath(DATA_DIR)
+        base = os.path.realpath(data_dir)
         rel_output = os.path.relpath(target, base).replace(os.sep, "/")
 
         file_entry: ToolResultFile = {
@@ -700,14 +671,10 @@ class WriteFileTool(Tool):
             f"[WriteFileTool] wrote {rel_output} ({len(content)} chars)"
         )
 
-        return ToolResult(structured_content=payload)
+        return BuiltInToolResult(structured_content=payload)
 
 
-# ---------------------------------------------------------------------------
-# write_file_from_reference
-# ---------------------------------------------------------------------------
-
-class WriteFileFromReferenceTool(Tool):
+class WriteFileFromReferenceTool(BuiltInTool):
     name: str = "write_file_from_reference"
     description: str = (
         "Extract a region from an existing human-readable text file and write "
@@ -757,7 +724,11 @@ class WriteFileFromReferenceTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, data_dir: str):
+        self._data_dir = data_dir
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        data_dir = arguments.pop("_working_directory", None) or self._data_dir
         ref_path = arguments.get("reference_path", "")
         start_line = arguments.get("start_line", 0)
         start_col = arguments.get("start_column", 0)
@@ -767,43 +738,43 @@ class WriteFileFromReferenceTool(Tool):
 
         # --- Validate required params ---
         if not ref_path or not out_path:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Missing parameter",
                 "message": "reference_path and path are both required.",
             })
 
         if start_line < 1 or start_col < 1 or end_line < 1 or end_col < 1:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Invalid coordinates",
                 "message": "All line/column values must be >= 1 (1-based).",
             })
 
         if (end_line, end_col) < (start_line, start_col):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Invalid range",
                 "message": "End position must be at or after start position.",
             })
 
         # --- Resolve paths ---
         try:
-            ref_target = _safe_resolve(ref_path)
-            out_target = _safe_resolve(out_path)
+            ref_target = _safe_resolve(data_dir, ref_path)
+            out_target = _safe_resolve(data_dir, out_path)
         except ValueError as e:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Access denied",
                 "message": str(e),
             })
 
         # --- Validate reference file ---
         if not os.path.isfile(ref_target):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Not found",
                 "message": f"Reference file '{ref_path}' does not exist or is not a file.",
             })
 
         ref_mime = _guess_mime(ref_target)
         if not _is_text_mime(ref_mime) or _is_binary(ref_target):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Unsupported file type",
                 "message": (
                     f"Reference file '{os.path.basename(ref_target)}' is not a "
@@ -814,7 +785,7 @@ class WriteFileFromReferenceTool(Tool):
         # --- Validate output MIME ---
         out_mime = _guess_mime(out_target)
         if not _is_text_mime(out_mime):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Unsupported file type",
                 "message": (
                     f"Output file '{os.path.basename(out_target)}' has MIME type "
@@ -827,13 +798,13 @@ class WriteFileFromReferenceTool(Tool):
             with open(ref_target, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError as e:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Read error",
                 "message": f"Failed to read reference file: {e}",
             })
 
         if start_line > len(lines):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Out of range",
                 "message": (
                     f"start_line ({start_line}) exceeds file length "
@@ -850,12 +821,9 @@ class WriteFileFromReferenceTool(Tool):
         if not selected:
             extracted = ""
         elif len(selected) == 1:
-            # Single line: slice columns
             extracted = selected[0][start_col - 1 : end_col - 1]
         else:
-            # First line: from start_column onward
             selected[0] = selected[0][start_col - 1 :]
-            # Last line: up to end_column (exclusive)
             selected[-1] = selected[-1][: end_col - 1]
             extracted = "".join(selected)
 
@@ -867,14 +835,14 @@ class WriteFileFromReferenceTool(Tool):
                 f.write(extracted)
         except OSError as e:
             logger.error(f"[WriteFileFromReferenceTool] write failed: {e}")
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Write error",
                 "message": f"Failed to write output file: {e}",
             })
 
         out_name = os.path.basename(out_target)
         file_uri = out_target.replace(os.sep, "/")
-        base = os.path.realpath(DATA_DIR)
+        base = os.path.realpath(data_dir)
         rel_output = os.path.relpath(out_target, base).replace(os.sep, "/")
 
         file_entry: ToolResultFile = {
@@ -898,22 +866,27 @@ class WriteFileFromReferenceTool(Tool):
             f"{ref_path} -> {rel_output} ({len(extracted)} chars)"
         )
 
-        return ToolResult(structured_content=payload)
+        return BuiltInToolResult(structured_content=payload)
 
 
-# ---------------------------------------------------------------------------
-# Register tools & run
-# ---------------------------------------------------------------------------
+def get_tools(config: dict) -> list[BuiltInTool]:
+    """Return tool instances for this server."""
+    data_dir = config.get("OPENPA_WORKING_DIR", os.path.join(os.path.expanduser("~"), ".openpa"))
+    return [
+        SearchFilesTool(data_dir=data_dir),
+        ListFilesTool(data_dir=data_dir),
+        GetFileInfoTool(data_dir=data_dir),
+        ReadFileTool(data_dir=data_dir),
+        WriteFileTool(data_dir=data_dir),
+        WriteFileFromReferenceTool(data_dir=data_dir),
+    ]
 
-mcp.add_tool(SearchFilesTool())
-mcp.add_tool(ListFilesTool())
-mcp.add_tool(GetFileInfoTool())
-mcp.add_tool(ReadFileTool())
-mcp.add_tool(WriteFileTool())
-mcp.add_tool(WriteFileFromReferenceTool())
 
-if __name__ == "__main__":
-    sys.stderr.write(
-        f"Starting System File MCP Server (data_dir={DATA_DIR}, os={platform.system()})\n"
+SERVER_NAME = "System File"
+
+
+def _make_server_instructions(_data_dir: str) -> str:
+    return (
+        "A file management assistant. "
+        "Operates within the user's profile-specific working directory."
     )
-    mcp.run(transport="stdio")

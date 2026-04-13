@@ -1,88 +1,204 @@
-"""Tool configuration API endpoints."""
+"""Tool management API.
+
+Replaces the old per-type ``/api/tools`` + ``/api/agents`` + ``/api/mcp-servers``
+endpoints with a unified surface keyed by ``tool_id``. Built-in and skill
+configuration is also exposed here.
+"""
+
+from __future__ import annotations
+
+import json
+import urllib.parse
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app.tools.tool_config_manager import ToolConfigManager
+from app.config import load_tool_schema
+from app.tools import ToolRegistry, ToolType
+from app.tools.builtin import BuiltInToolGroup, refresh_builtin_tool_oauth
 from app.utils.logger import logger
 
 
-def get_tool_routes(tool_config_manager: ToolConfigManager) -> list[Route]:
+def _profile_from_request(request: Request) -> str:
+    return getattr(request.user, "username", "admin")
+
+
+def get_tool_routes(registry: ToolRegistry) -> list[Route]:
+
+    config_manager = registry.config
 
     async def handle_list_tools(request: Request) -> JSONResponse:
-        """List all tools with their config status and enabled state."""
-        profile = getattr(request.user, "username", "admin")
-        tools = tool_config_manager.get_all_tools_status(profile=profile)
-        return JSONResponse({"tools": tools})
+        """List all tools visible to the profile (excluding hidden intrinsic tools).
 
-    async def handle_get_tool_config(request: Request) -> JSONResponse:
-        """Get config schema and current values for a specific tool."""
-        profile = getattr(request.user, "username", "admin")
-        tool_name = request.path_params["name"]
-        status = tool_config_manager.get_tool_status(tool_name, profile=profile)
-        schema = tool_config_manager.get_tool_config_schema(tool_name)
+        Each row carries enough metadata for the dashboard to render the
+        configuration form without an extra round-trip:
+        - ``required_fields`` -- built-in TOML required_config schema
+        - ``config`` -- current per-profile values (variables/arguments/llm/meta)
+        - ``full_reasoning`` -- mirrored from ``config.llm.full_reasoning`` so
+          the frontend doesn't have to know about the scoping
+        """
+        profile = request.query_params.get("profile") or _profile_from_request(request)
+        rows = registry.visible_for_profile(profile)
+        enriched: list[dict] = []
+        for row in rows:
+            tool = registry.get(row["tool_id"])
+            schema = _schema_for_tool(tool)
+            required_fields = schema.get("tool", {}).get("required_config", {})
+            snapshot = config_manager.snapshot(row["tool_id"], profile)
+            row.update({
+                "configured": _is_tool_configured(tool, snapshot),
+                "config": snapshot,
+                "required_fields": required_fields,
+                "full_reasoning": bool(snapshot.get("llm", {}).get("full_reasoning", False)),
+            })
+            if hasattr(tool, "connection_error") and getattr(tool, "connection_error"):
+                row["connection_error"] = tool.connection_error
+                row["is_stub"] = True
+            else:
+                row["is_stub"] = bool(getattr(tool, "is_stub", False))
+            if hasattr(tool, "url"):
+                row["url"] = tool.url
+            if hasattr(tool, "owner_profile"):
+                row["owner_profile"] = tool.owner_profile
+            enriched.append(row)
+        return JSONResponse({"tools": enriched})
 
-        if not schema:
-            return JSONResponse(
-                {"error": f"Tool '{tool_name}' not found"},
-                status_code=404,
-            )
-
+    async def handle_get_tool(request: Request) -> JSONResponse:
+        profile = request.query_params.get("profile") or _profile_from_request(request)
+        tool_id = request.path_params["tool_id"]
+        tool = registry.get(tool_id)
+        if tool is None:
+            return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
+        schema = _schema_for_tool(tool)
+        snapshot = config_manager.snapshot(tool_id, profile)
         return JSONResponse({
-            "status": status,
+            "tool_id": tool_id,
+            "name": tool.name,
+            "tool_type": tool.tool_type.value,
+            "description": tool.description,
+            "arguments_schema": tool.arguments_schema,
             "schema": schema,
+            "config": snapshot,
+            "configured": _is_tool_configured(tool, snapshot),
         })
 
-    async def handle_update_tool_config(request: Request) -> JSONResponse:
-        """Update configuration for a specific tool."""
-        profile = getattr(request.user, "username", "admin")
-        tool_name = request.path_params["name"]
-
+    async def handle_set_variables(request: Request) -> JSONResponse:
+        """Update Tool Variables (env-style secrets) for a tool."""
+        profile = _profile_from_request(request)
+        tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        variables = body.get("variables", {})
+        if not isinstance(variables, dict):
+            return JSONResponse({"error": "'variables' must be an object"}, status_code=400)
 
-        config = body.get("config", {})
-        schema = tool_config_manager.get_tool_config_schema(tool_name)
+        tool = registry.get(tool_id)
+        schema = _schema_for_tool(tool) if tool else {}
         required_config = schema.get("tool", {}).get("required_config", {})
 
-        for key, value in config.items():
-            # Determine if this is a secret field
+        for key, value in variables.items():
             field_spec = required_config.get(key, {})
-            is_secret = field_spec.get("secret", False) or "secret" in key.lower() or "key" in key.lower()
-            tool_config_manager.config_storage.set_tool_config(
-                tool_name, key, str(value), is_secret=is_secret, profile=profile
+            is_secret = bool(
+                field_spec.get("secret")
+                or "secret" in key.lower()
+                or "key" in key.lower()
+                or "password" in key.lower()
             )
+            config_manager.set_variable(
+                tool_id, profile, key, str(value), is_secret=is_secret,
+            )
+
+        # Refresh OAuth client for built-in tools that just got their credentials
+        if tool and tool.tool_type is ToolType.BUILTIN and isinstance(tool, BuiltInToolGroup):
+            refresh_builtin_tool_oauth(registry, config_manager, tool_id, profile=profile)
 
         return JSONResponse({"success": True})
 
-    async def handle_set_tool_enabled(request: Request) -> JSONResponse:
-        """Enable or disable a tool."""
-        profile = getattr(request.user, "username", "admin")
-        tool_name = request.path_params["name"]
-
+    async def handle_set_arguments(request: Request) -> JSONResponse:
+        """Update Tool Arguments (JSON-Schema parameter values)."""
+        profile = _profile_from_request(request)
+        tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        arguments = body.get("arguments", {})
+        if not isinstance(arguments, dict):
+            return JSONResponse({"error": "'arguments' must be an object"}, status_code=400)
+        config_manager.set_arguments(tool_id, profile, arguments)
+        return JSONResponse({"success": True})
 
+    async def handle_set_llm_params(request: Request) -> JSONResponse:
+        """Update LLM Parameters (provider, model, full_reasoning, reasoning_effort)."""
+        profile = _profile_from_request(request)
+        tool_id = request.path_params["tool_id"]
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        llm_params = body.get("llm", {})
+        if not isinstance(llm_params, dict):
+            return JSONResponse({"error": "'llm' must be an object"}, status_code=400)
+
+        for key, value in llm_params.items():
+            config_manager.set_llm_param(tool_id, profile, key, value)
+
+        # If full_reasoning changed, propagate to the running adapter
+        tool = registry.get(tool_id)
+        if tool and "full_reasoning" in llm_params and hasattr(tool, "update_runtime_config"):
+            tool.update_runtime_config(full_reasoning=bool(llm_params["full_reasoning"]))
+
+        return JSONResponse({"success": True})
+
+    async def handle_set_enabled(request: Request) -> JSONResponse:
+        """Enable / disable an A2A or MCP tool for the current profile."""
+        profile = _profile_from_request(request)
+        tool_id = request.path_params["tool_id"]
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         enabled = body.get("enabled")
         if enabled is None:
             return JSONResponse({"error": "'enabled' field is required"}, status_code=400)
-
-        tool_config_manager.set_tool_enabled(tool_name, bool(enabled), profile=profile)
-
-        return JSONResponse({
-            "success": True,
-            "tool": tool_name,
-            "enabled": bool(enabled),
-        })
+        try:
+            registry.set_profile_tool_enabled(profile, tool_id, bool(enabled))
+        except KeyError:
+            return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"success": True, "enabled": bool(enabled)})
 
     return [
         Route("/api/tools", handle_list_tools, methods=["GET"]),
-        Route("/api/tools/{name}/config", handle_get_tool_config, methods=["GET"]),
-        Route("/api/tools/{name}/config", handle_update_tool_config, methods=["PUT"]),
-        Route("/api/tools/{name}/enabled", handle_set_tool_enabled, methods=["PUT"]),
+        Route("/api/tools/{tool_id}", handle_get_tool, methods=["GET"]),
+        Route("/api/tools/{tool_id}/variables", handle_set_variables, methods=["PUT"]),
+        Route("/api/tools/{tool_id}/arguments", handle_set_arguments, methods=["PUT"]),
+        Route("/api/tools/{tool_id}/llm", handle_set_llm_params, methods=["PUT"]),
+        Route("/api/tools/{tool_id}/enabled", handle_set_enabled, methods=["PUT"]),
     ]
+
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+
+def _schema_for_tool(tool) -> dict:
+    """Return the TOML schema for a built-in tool, or {} for others."""
+    if tool is None:
+        return {}
+    if tool.tool_type is ToolType.BUILTIN and isinstance(tool, BuiltInToolGroup):
+        return load_tool_schema(tool.config_name)
+    return {}
+
+
+def _is_tool_configured(tool, snapshot: dict) -> bool:
+    """Return True if all required variables are populated for this tool."""
+    schema = _schema_for_tool(tool)
+    required = schema.get("tool", {}).get("required_config", {})
+    if not required:
+        return True
+    have = snapshot.get("variables", {})
+    return all(have.get(k) for k in required)

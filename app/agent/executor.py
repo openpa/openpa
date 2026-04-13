@@ -23,7 +23,6 @@ from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 
 from app.agent.agent import OpenPAAgent
-from app.remote_agents import RoutingAgent
 from app.config.settings import BaseConfig
 from app.constants import ChatCompletionTypeEnum
 from app.lib.llm import (LLMProvider, GroqLLMProvider)
@@ -37,10 +36,10 @@ from app.utils.context_storage import get_context
 class OpenPAAgentExecutor(AgentExecutor):
     """An AgentExecutor that runs the OpenPAAgent."""
 
-    def __init__(self, olli_agent: OpenPAAgent, conversation_storage: ConversationStorage | None = None):
+    def __init__(self, openpa_agent: OpenPAAgent, conversation_storage: ConversationStorage | None = None):
         logger.debug("Initializing OpenPAAgentExecutor...")
         self._active_sessions: set[str] = set()
-        self.olli_agent: OpenPAAgent | None = olli_agent
+        self.openpa_agent: OpenPAAgent | None = openpa_agent
         self.conversation_storage = conversation_storage
 
     async def execute(
@@ -49,31 +48,19 @@ class OpenPAAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
     ):
         logger.info("Starting execution")
-        # dump context for debugging
-        params = getattr(context, "_params", None)
-        metadata = getattr(params, "metadata", None)
-        
-        # Extract profile from JWT token (via call_context.state) or fallback to metadata
+
+        # Extract profile from JWT token (via call_context.state)
         profile = None
         call_context = context._call_context
         if call_context and hasattr(call_context, 'state') and call_context.state:
             profile = call_context.state.get("profile")
 
-        # Fallback: extract from metadata (for clients not using JWT auth)
-        if not profile and metadata and isinstance(metadata, dict):
-            profile_data = metadata.get("profile")
-            if isinstance(profile_data, dict):
-                profile = profile_data.get("id")
-            elif isinstance(profile_data, str):
-                profile = profile_data
-
         if not profile:
             raise ServerError(error=UnsupportedOperationError(
-                message="Profile is required. Please authenticate with a valid token or provide a profile."
+                message="Profile is required. Please authenticate with a valid token."
             ))
-        
+
         logger.debug(f"Profile: {profile}")
-        logger.debug(f"Metadata: {metadata}")
         logger.debug(context.context_id)
         logger.debug(context.task_id)
 
@@ -100,7 +87,7 @@ class OpenPAAgentExecutor(AgentExecutor):
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
 
-        if not self.olli_agent:
+        if not self.openpa_agent:
             # Should not happen if initialized correctly
             logger.error("OpenPAAgent not initialized")
             raise ServerError(error=UnsupportedOperationError())
@@ -135,7 +122,7 @@ class OpenPAAgentExecutor(AgentExecutor):
             history_messages = convert_task_history_to_messages(task.history or [])
 
         try:
-            async for chunk in self.olli_agent.run(query, history_messages, context_id, profile=profile, metadata=metadata):
+            async for chunk in self.openpa_agent.run(query, history_messages, context_id, profile=profile):
                 # logger.debug(f"Received chunk from OpenPAAgent: {chunk}")
                 if chunk["type"] == ChatCompletionTypeEnum.CONTENT:
                     content = chunk.get("data")
@@ -170,6 +157,8 @@ class OpenPAAgentExecutor(AgentExecutor):
                         "thought": thinking_data.get("Thought", ""),
                         "action": thinking_data.get("Action", ""),
                         "action_input": thinking_data.get("Action_Input", ""),
+                        "model_label": thinking_data.get("Model_Label"),
+                        "reasoning_model_label": thinking_data.get("Reasoning_Model_Label"),
                     })
                 elif chunk["type"] == ChatCompletionTypeEnum.RESULT_ARTIFACT:
                     # Observation is now list[Part] from the reasoning agent

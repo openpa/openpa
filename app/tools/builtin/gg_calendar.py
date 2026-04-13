@@ -1,34 +1,20 @@
-"""Google Calendar MCP server using stdio transport.
+"""Google Calendar built-in tool.
 
-A standalone FastMCP server that provides Google Calendar tools.
-Authentication is handled at the olli-agent level via MCPOAuthClient,
+Provides Google Calendar tools (list events, create events).
+Authentication is handled at the adapter level via MCPOAuthClient,
 which manages OAuth tokens with Google and injects the access token
 into tool call arguments as '_access_token'.
-
-Based on: mcp-auth-gg-calendar/server.py
-
-Usage:
-    python app/mcp/stdio/gg_calendar.py
-
-The access token is injected per-request by MCPAgentAdapter via the
-'_access_token' argument.
 """
 
-import os
-import sys
 from datetime import datetime, timezone
 from typing import Any, Dict
+
+from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.utils.logger import logger
 
-from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool, ToolResult
 
-
-# Initialize FastMCP server
-mcp = FastMCP(
-    name="Google Calendar",
-    instructions="A Google Calendar assistant that can list upcoming events and create new events.",
-)
+SERVER_NAME = "Google Calendar"
+SERVER_INSTRUCTIONS = "A Google Calendar assistant that can list upcoming events and create new events."
 
 
 def _get_calendar_service(access_token: str):
@@ -51,10 +37,10 @@ def _get_calendar_service(access_token: str):
 
 
 def _extract_access_token(arguments: Dict[str, Any]) -> str:
-    """Extract access token from arguments or environment.
+    """Extract access token from arguments.
 
-    The MCPAgentAdapter injects '_access_token' into tool arguments
-    for stdio servers with authentication configured.
+    The BuiltInToolAdapter injects '_access_token' into tool arguments
+    for tools with authentication configured.
     """
     token = arguments.pop("_access_token", None)
     if token:
@@ -65,7 +51,7 @@ def _extract_access_token(arguments: Dict[str, Any]) -> str:
     )
 
 
-class ListUpcomingEvents(Tool):
+class ListUpcomingEvents(BuiltInTool):
     name: str = "list_upcoming_events"
     description: str = "List upcoming events from the user's primary Google Calendar."
     parameters: Dict[str, Any] = {
@@ -84,7 +70,7 @@ class ListUpcomingEvents(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         logger.debug(f"ListUpcomingEvents called with arguments: {arguments}")
         access_token = _extract_access_token(arguments)
         max_results = arguments.get("max_results", 10)
@@ -111,7 +97,7 @@ class ListUpcomingEvents(Tool):
             events = events_result.get("items", [])
 
             if not events:
-                return ToolResult(
+                return BuiltInToolResult(
                     content=[{"type": "text", "text": "No upcoming events found."}]
                 )
 
@@ -128,21 +114,21 @@ class ListUpcomingEvents(Tool):
                     line += f" [Link: {html_link}]"
                 result_lines.append(line)
 
-            return ToolResult(
+            return BuiltInToolResult(
                 content=[{"type": "text", "text": "\n".join(result_lines)}]
             )
 
         except RuntimeError as e:
-            return ToolResult(
+            return BuiltInToolResult(
                 content=[{"type": "text", "text": f"Authentication required: {str(e)}"}]
             )
         except Exception as e:
-            return ToolResult(
+            return BuiltInToolResult(
                 content=[{"type": "text", "text": f"Google Calendar API error: {str(e)}"}]
             )
 
 
-class CreateEvent(Tool):
+class CreateEvent(BuiltInTool):
     name: str = "create_event"
     description: str = "Create a new event in the user's primary Google Calendar."
     parameters: Dict[str, Any] = {
@@ -169,7 +155,7 @@ class CreateEvent(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         access_token = _extract_access_token(arguments)
         summary = arguments.get("summary")
         start_time = arguments.get("start_time")
@@ -192,24 +178,20 @@ class CreateEvent(Tool):
                 .execute()
             )
 
-            return ToolResult(
+            return BuiltInToolResult(
                 content=[{"type": "text", "text": f"Event '{summary}' created successfully. Link: {event.get('htmlLink', '')}"}]
             )
 
         except RuntimeError as e:
-            return ToolResult(
+            return BuiltInToolResult(
                 content=[{"type": "text", "text": f"Authentication required: {str(e)}"}]
             )
         except Exception as e:
-            return ToolResult(
+            return BuiltInToolResult(
                 content=[{"type": "text", "text": f"Failed to create event: {str(e)}"}]
             )
 
 
-mcp.add_tool(ListUpcomingEvents())
-mcp.add_tool(CreateEvent())
-
-
-if __name__ == "__main__":
-    sys.stderr.write("Starting Google Calendar MCP Server with stdio transport\n")
-    mcp.run(transport="stdio")
+def get_tools(config: dict) -> list[BuiltInTool]:
+    """Return tool instances for this server."""
+    return [ListUpcomingEvents(), CreateEvent()]

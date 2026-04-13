@@ -1,11 +1,11 @@
-from typing import Any, Dict
+"""User-notification intrinsic tool (CONTINUE behavior)."""
 
-from app.tools.intrinsic.base import IntrinsicTool, IntrinsicToolBehavior, ToolResult
+from app.tools.base import ToolBehavior
+from app.tools.intrinsic.base import IntrinsicTool
 
 
 class UserNotificationTool(IntrinsicTool):
-    """A tool for sending notifications to the user.
-    """
+    """Send a message to the user mid-flow; reasoning continues afterwards."""
 
     TOOL_NAME = "User Notification Tool"
 
@@ -23,9 +23,5 @@ class UserNotificationTool(IntrinsicTool):
         )
 
     @property
-    def behavior(self) -> IntrinsicToolBehavior:
-        return IntrinsicToolBehavior.CONTINUE
-
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
-        action_input = arguments.get("action_input", "")
-        return ToolResult(content=action_input)
+    def behavior(self) -> ToolBehavior:
+        return ToolBehavior.CONTINUE

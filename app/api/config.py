@@ -3,6 +3,7 @@
 import os
 import re
 import secrets
+from pathlib import Path
 
 import jwt
 from datetime import datetime, timezone, timedelta
@@ -15,6 +16,7 @@ from app.config.settings import BaseConfig
 from app.storage.dynamic_config_storage import DynamicConfigStorage
 from app.storage.conversation_storage import ConversationStorage
 from app.utils.logger import logger
+from app.utils.persona import ensure_persona_file
 
 # Profile name validation: lowercase, numbers, underscore, hyphen only
 PROFILE_NAME_PATTERN = re.compile(r'^[a-z0-9_-]+$')
@@ -51,7 +53,16 @@ def _generate_token(jwt_secret: str, profile: str, hours: int | None = None) -> 
 def get_config_routes(
     config_storage: DynamicConfigStorage,
     conversation_storage: ConversationStorage,
+    *,
+    on_first_setup=None,
+    registry=None,
 ) -> list[Route]:
+    """Setup-wizard / server-config endpoints.
+
+    ``registry`` (optional) is a :class:`ToolRegistry`; when provided, the
+    setup wizard will write per-tool initial values into the new scoped
+    ``tool_configs`` table via the registry's config manager.
+    """
 
     async def handle_setup_status(request: Request) -> JSONResponse:
         """Check if first-time setup has been completed. No auth required.
@@ -122,6 +133,9 @@ def get_config_routes(
         if not await conversation_storage.profile_exists(profile_name):
             await conversation_storage.create_profile(profile_name)
 
+        # Create profile directory and copy PERSONA.md template
+        ensure_persona_file(profile_name)
+
         # Save server config only on first setup
         if is_first_setup:
             server_config = body.get("server_config", {})
@@ -138,16 +152,49 @@ def get_config_routes(
             config_storage.mark_setup_complete()
 
         # Save LLM and tool configs for ALL profiles (including first setup)
+        # (must happen before on_first_setup so tool enabled states are persisted)
         llm_config = body.get("llm_config", {})
         for key, value in llm_config.items():
             is_secret = "api_key" in key or "service_account" in key
             config_storage.set("llm_config", key, str(value), is_secret=is_secret, profile=profile_name)
 
+        # Tool variables (env-style secrets) -- written via the registry's
+        # ToolConfigManager so they land in the new scoped tool_configs table.
         tool_configs = body.get("tool_configs", {})
-        for tool_name, configs in tool_configs.items():
-            for key, value in configs.items():
-                is_secret = "secret" in key.lower() or "key" in key.lower() or "password" in key.lower()
-                config_storage.set_tool_config(tool_name, key, str(value), is_secret=is_secret, profile=profile_name)
+        if registry is not None:
+            from app.tools.ids import slugify
+            for tool_key, configs in tool_configs.items():
+                # Tool keys may arrive as either tool_id (slug) or display name
+                tool_id = tool_key if registry.get(tool_key) else slugify(tool_key)
+                for key, value in configs.items():
+                    is_secret = (
+                        "secret" in key.lower()
+                        or "key" in key.lower()
+                        or "password" in key.lower()
+                    )
+                    registry.config.set_variable(
+                        tool_id, profile_name, key, str(value), is_secret=is_secret,
+                    )
+
+        # Per-built-in-tool LLM overrides land in the llm scope of the new tool_configs table.
+        agent_configs = body.get("agent_configs", {})
+        if registry is not None and agent_configs:
+            from app.tools.ids import slugify
+            for tool_key, config in agent_configs.items():
+                tool_id = tool_key if registry.get(tool_key) else slugify(tool_key)
+                for key in ("llm_provider", "llm_model", "reasoning_effort", "full_reasoning"):
+                    if key in config and config[key] is not None:
+                        registry.config.set_llm_param(
+                            tool_id, profile_name, key, config[key],
+                        )
+                if "system_prompt" in config and config["system_prompt"]:
+                    registry.config.set_meta(
+                        tool_id, profile_name, "system_prompt", config["system_prompt"],
+                    )
+                if "description" in config and config["description"]:
+                    registry.config.set_meta(
+                        tool_id, profile_name, "description", config["description"],
+                    )
 
         # Generate and save token
         jwt_secret = config_storage.get("server_config", "jwt_secret") or BaseConfig.get_jwt_secret()
@@ -156,6 +203,20 @@ def get_config_routes(
             config_storage.set("server_config", "jwt_secret", jwt_secret, is_secret=True)
 
         token, expires_at = _generate_token(jwt_secret, profile_name)
+
+        # Persist token to disk for recovery
+        tokens_dir = Path(BaseConfig.OPENPA_WORKING_DIR) / "tokens"
+        tokens_dir.mkdir(parents=True, exist_ok=True)
+        token_file = tokens_dir / f"{profile_name}.token"
+        token_file.write_text(token, encoding="utf-8")
+        logger.info(f"Token saved to {token_file}")
+
+        # Initialize built-in tools that were skipped at startup due to missing LLM
+        if is_first_setup and on_first_setup:
+            try:
+                await on_first_setup(profile_name)
+            except Exception as e:
+                logger.warning(f"Post-setup built-in tool initialization failed: {e}")
 
         return JSONResponse({
             "success": True,

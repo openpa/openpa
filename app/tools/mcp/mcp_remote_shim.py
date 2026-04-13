@@ -59,6 +59,19 @@ class MCPRemoteConnectionShim:
                 self._profile_oauth_clients[profile] = NoOpOAuthClient(self.server_name)
         return self._profile_oauth_clients[profile]
 
+    def reinitialize_oauth(self, mcp_auth: Optional["MCPOAuthClient"] = None):
+        """Replace the OAuth client after credentials have been updated.
+
+        Clears all cached per-profile clients so they are recreated
+        with the new auth configuration on next access.
+        """
+        self._mcp_auth = mcp_auth
+        self._profile_oauth_clients.clear()
+        if mcp_auth:
+            self.oauth_client = mcp_auth
+        else:
+            self.oauth_client = NoOpOAuthClient(self.server_name)
+
     def update_auth_header(self, profile: Optional[str] = None):
         """For MCP servers, auth reconnection happens lazily in MCPAgentAdapter._ensure_auth()."""
         logger.info(f"Auth header updated for MCP server '{self.server_name}' (profile: {profile})")

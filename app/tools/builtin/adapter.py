@@ -1,15 +1,20 @@
-"""MCP-to-Agent bridge adapter.
+"""Built-in tool adapter.
 
-Makes an MCP server behave like an A2A agent by:
-1. Converting MCP tools to AgentCard skills
-2. Using an LLM to process queries with MCP tools
+Makes built-in tools behave like an A2A agent by:
+1. Converting BuiltInTool definitions to AgentCard skills
+2. Using an LLM to process queries with built-in tools
 3. Producing synthetic A2A events for parse_agent_events()
+
+This is the in-process replacement for MCPAgentAdapter (which routes through
+MCP stdio transport). The event stream produced is identical.
 """
 
 import asyncio
+import copy
 import json
+import os
 import uuid
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from a2a.types import (
     AgentCapabilities,
@@ -33,71 +38,71 @@ from openai.types.chat import ChatCompletionMessageParam
 from app.config.settings import BaseConfig
 from app.constants import ChatCompletionTypeEnum
 from app.lib.llm.base import LLMProvider
+from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.tools.mcp.mcp_auth import MCPOAuthClient
-from app.tools.mcp.mcp_connection import MCPConnection
 from app.utils.logger import logger
 
-MCP_AGENT_SYSTEM_PROMPT = (
+BUILTIN_AGENT_SYSTEM_PROMPT = (
     "You are an AI Agent returning results from tool calls. "
     "Use the available tools to answer the user's query. "
     "Always call the appropriate tool(s) to get the data needed to answer."
 )
 
 
-class MCPAgentAdapter:
-    """Wraps an MCP server connection to behave like an A2A agent.
+class BuiltInToolAdapter:
+    """Wraps built-in tools to behave like an A2A agent.
 
     The Reasoning Agent interacts with this adapter the same way it would
-    with an A2A remote agent - through request() which yields A2A events.
+    with an MCPAgentAdapter or A2A remote agent -- through request() which
+    yields A2A events.
     """
 
     def __init__(
         self,
-        connection: MCPConnection,
+        tools: List[BuiltInTool],
         llm: LLMProvider,
         mcp_auth: Optional[MCPOAuthClient] = None,
         description: Optional[str] = None,
         name: Optional[str] = None,
-        on_first_connect=None,
         system_prompt: Optional[str] = None,
+        server_instructions: Optional[str] = None,
+        prepare_tools: Optional[Callable[[str, List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
         full_reasoning: bool = False,
     ):
-        self._connection = connection
+        self._tools = tools
+        self._tools_by_name: Dict[str, BuiltInTool] = {t.name: t for t in tools}
         self._llm = llm
         self._mcp_auth = mcp_auth
         self._description = description
-        self._name = name
+        self._name = name or ""
         self._context_storage: Dict[str, str] = {}
-        self._auth_lock = asyncio.Lock()
-        self._on_first_connect = on_first_connect
         self._system_prompt = system_prompt
+        self._server_instructions = server_instructions or ""
+        self._prepare_tools = prepare_tools
         self._full_reasoning = full_reasoning
 
     @property
     def name(self) -> str:
-        """The MCP server name (used as agent name)."""
-        return self._connection.server_name or self._name or ""
+        """The server name (used as agent name)."""
+        return self._name
 
     @property
     def description(self) -> str:
-        """Human-readable description of the MCP server.
+        """Human-readable description.
 
         Priority: explicit description > server instructions > fallback from tool names.
         """
         if self._description:
             return self._description
-        if self._connection.server_instructions:
-            return self._connection.server_instructions
-        tool_names = [t.name for t in self._connection.get_tools()]
-        return f"MCP Server providing tools: {', '.join(tool_names)}"
+        if self._server_instructions:
+            return self._server_instructions
+        tool_names = [t.name for t in self._tools]
+        return f"Built-in tools: {', '.join(tool_names)}"
 
     def get_skills(self) -> List[AgentSkill]:
-        """Convert MCP tools to A2A AgentSkill objects.
-
-        Each MCP tool becomes a skill with the tool's name and description.
-        """
+        """Convert built-in tools to A2A AgentSkill objects."""
         skills = []
-        for tool in self._connection.get_tools():
+        for tool in self._tools:
             skills.append(AgentSkill(
                 id=tool.name,
                 name=tool.name,
@@ -108,15 +113,15 @@ class MCPAgentAdapter:
         return skills
 
     def create_synthetic_card(self) -> AgentCard:
-        """Create a synthetic AgentCard for this MCP server.
+        """Create a synthetic AgentCard for this built-in tool server.
 
         This card is used by _format_agents_info() and the Dashboard/API
-        so that MCP servers appear exactly like A2A agents.
+        so that built-in tools appear exactly like A2A agents.
         """
         return AgentCard(
             name=self.name,
             description=self.description,
-            url=self._connection.url or f"stdio://{self.name}",
+            url=f"builtin://{self.name}",
             version="1.0.0",
             defaultInputModes=["text"],
             defaultOutputModes=["text"],
@@ -135,7 +140,7 @@ class MCPAgentAdapter:
         description: Optional[str] = None,
         full_reasoning: Optional[bool] = None,
     ) -> None:
-        """Update adapter configuration in-place without disrupting MCP connection.
+        """Update adapter configuration in-place.
 
         Only non-None values are applied. Pass empty string to clear a field.
         """
@@ -148,54 +153,6 @@ class MCPAgentAdapter:
         if full_reasoning is not None:
             self._full_reasoning = full_reasoning
 
-    async def _ensure_auth(self, profile: str):
-        """Ensure HTTP connection has current auth token.
-
-        For HTTP MCP servers: connects/reconnects with Bearer token if needed.
-        Handles two cases:
-        1. Initial connection after 401 at add time (session is None)
-        2. Token changed/refreshed (reconnect with new token)
-
-        No-op for stdio servers (they use _access_token injection in tool args).
-        """
-        if not self._mcp_auth:
-            return
-        if self._connection.transport_type not in ("http", ""):
-            return
-
-        token = self._mcp_auth.get_token(profile)
-        if not token:
-            return
-
-        # Case 1: Never connected (401 at add time)
-        if self._connection.session is None and self._connection.url:
-            async with self._auth_lock:
-                if self._connection.session is not None:
-                    return
-                logger.info(f"Connecting MCP server '{self.name}' with auth token (first connection)")
-                headers = {"Authorization": f"Bearer {token}"}
-                await self._connection.connect_http(self._connection.url, headers=headers)
-
-                # Clear placeholder description so real server info takes over
-                self._description = None
-
-                # Notify routing_agent to update agents_info with real server info
-                if self._on_first_connect:
-                    self._on_first_connect(self)
-                    self._on_first_connect = None
-            return
-
-        # Case 2: Already connected, check if token changed
-        if self._connection.current_auth_token == token:
-            return
-
-        async with self._auth_lock:
-            if self._connection.current_auth_token == token:
-                return
-            logger.info(f"Reconnecting MCP server '{self.name}' with updated auth token")
-            headers = {"Authorization": f"Bearer {token}"}
-            await self._connection.reconnect_http(headers=headers)
-
     async def request(
         self,
         query: str,
@@ -203,11 +160,11 @@ class MCPAgentAdapter:
         metadata: Optional[Dict] = None,
         profile: str = "default",
     ) -> AsyncGenerator[Any, None]:
-        """Process a query using LLM + MCP tools and yield synthetic A2A events.
+        """Process a query using LLM + built-in tools and yield synthetic A2A events.
 
         This is the core bridge: the Reasoning Agent calls this method the same
-        way it calls RoutingAgent.request() for A2A agents. The response events
-        are compatible with parse_agent_events().
+        way it calls MCPAgentAdapter.request(). The response events are
+        compatible with parse_agent_events().
         """
         task_id = str(uuid.uuid4())
         context_id = context_id or str(uuid.uuid4())
@@ -215,27 +172,39 @@ class MCPAgentAdapter:
         # Store context mapping
         self._context_storage[context_id] = task_id
 
-        # Ensure HTTP connection has auth token (reconnects if needed)
-        await self._ensure_auth(profile)
+        if not self._llm:
+            yield self._make_error_event(
+                context_id, task_id,
+                f"No LLM configured for built-in tool adapter '{self.name}'. "
+                "Check that setup is complete and model groups are configured.",
+            )
+            return
 
-        # Build OpenAI-format tools from MCP tools
+        # Build OpenAI-format tools from built-in tools
         available_tools = []
-        for tool in self._connection.get_tools():
+        for tool in self._tools:
             available_tools.append({
                 "type": "function",
                 "function": {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "parameters": tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}},
+                    "parameters": copy.deepcopy(tool.parameters) if tool.parameters else {"type": "object", "properties": {}},
                 },
             })
 
+        # Allow per-request tool customization (e.g., semantic type filtering)
+        if self._prepare_tools:
+            try:
+                available_tools = self._prepare_tools(query, available_tools)
+            except Exception as e:
+                logger.warning(f"prepare_tools callback failed for '{self.name}': {e}")
+
         messages: List[ChatCompletionMessageParam] = [
-            {"role": "system", "content": self._system_prompt or MCP_AGENT_SYSTEM_PROMPT},
+            {"role": "system", "content": self._system_prompt or BUILTIN_AGENT_SYSTEM_PROMPT},
             {"role": "user", "content": query},
         ]
 
-        logger.info(f"MCP adapter '{self.name}' processing query: {query[:100]}...")
+        logger.info(f"Built-in adapter '{self.name}' processing query: {query[:100]}...")
 
         # Yield working status
         yield TaskStatusUpdateEvent(
@@ -275,7 +244,7 @@ class MCPAgentAdapter:
                     break
 
         except Exception as e:
-            logger.error(f"LLM call failed in MCP adapter '{self.name}': {e}")
+            logger.error(f"LLM call failed in built-in adapter '{self.name}': {e}")
             yield self._make_error_event(context_id, task_id, str(e))
             return
 
@@ -291,8 +260,8 @@ class MCPAgentAdapter:
                     except json.JSONDecodeError:
                         tool_args = {}
 
-                # Inject access token for stdio servers with auth
-                if self._mcp_auth and self._connection.transport_type == "stdio":
+                # Inject access token for tools with auth
+                if self._mcp_auth:
                     token = self._mcp_auth.get_token(profile)
                     if token:
                         tool_args["_access_token"] = token
@@ -301,18 +270,41 @@ class MCPAgentAdapter:
                 if profile and "profile" in tool_args:
                     tool_args["profile"] = profile
 
-                logger.info(f"MCP adapter executing tool '{tool_name}' with args: {tool_args}")
+                # Inject profile-scoped working directory for all tools
+                tool_args["_working_directory"] = os.path.join(
+                    BaseConfig.OPENPA_WORKING_DIR, profile
+                )
+
+                # Inject arguments from metadata (e.g., latitude/longitude)
+                if metadata and "arguments" in metadata:
+                    meta_arguments = metadata["arguments"]
+                    if isinstance(meta_arguments, dict):
+                        for arg_key, arg_value in meta_arguments.items():
+                            if arg_key not in tool_args:
+                                tool_args[arg_key] = arg_value
+
+                logger.info(f"Built-in adapter executing tool '{tool_name}' with args: {tool_args}")
+
+                tool = self._tools_by_name.get(tool_name)
+                if not tool:
+                    logger.error(f"Built-in tool '{tool_name}' not found")
+                    tool_results[tool_name] = {"error": f"Tool '{tool_name}' not found"}
+                    continue
 
                 tool_timeout = BaseConfig.MCP_TOOL_CALL_TIMEOUT
                 try:
-                    result = await self._connection.call_tool(tool_name, tool_args, timeout=tool_timeout)
-                    # Extract result content
+                    if tool_timeout is not None:
+                        result = await asyncio.wait_for(
+                            tool.run(tool_args), timeout=tool_timeout
+                        )
+                    else:
+                        result = await tool.run(tool_args)
                     result_data = self._extract_tool_result(result)
                     tool_results[tool_name] = result_data
-                    logger.info(f"MCP tool '{tool_name}' result received")
+                    logger.info(f"Built-in tool '{tool_name}' result received")
                 except asyncio.TimeoutError:
                     logger.warning(
-                        f"MCP tool '{tool_name}' timed out after {tool_timeout}s"
+                        f"Built-in tool '{tool_name}' timed out after {tool_timeout}s"
                     )
                     tool_results[tool_name] = {
                         "error": "Timeout",
@@ -330,16 +322,19 @@ class MCPAgentAdapter:
                             if new_token:
                                 tool_args["_access_token"] = new_token
                             try:
-                                result = await self._connection.call_tool(
-                                    tool_name, tool_args, timeout=tool_timeout
-                                )
+                                if tool_timeout is not None:
+                                    result = await asyncio.wait_for(
+                                        tool.run(tool_args), timeout=tool_timeout
+                                    )
+                                else:
+                                    result = await tool.run(tool_args)
                                 result_data = self._extract_tool_result(result)
                                 tool_results[tool_name] = result_data
-                                logger.info(f"MCP tool '{tool_name}' succeeded after token refresh")
+                                logger.info(f"Built-in tool '{tool_name}' succeeded after token refresh")
                                 continue
                             except asyncio.TimeoutError:
                                 logger.warning(
-                                    f"MCP tool '{tool_name}' timed out after token refresh ({tool_timeout}s)"
+                                    f"Built-in tool '{tool_name}' timed out after token refresh ({tool_timeout}s)"
                                 )
                                 tool_results[tool_name] = {
                                     "error": "Timeout",
@@ -347,10 +342,10 @@ class MCPAgentAdapter:
                                 }
                                 continue
                             except Exception as retry_e:
-                                logger.error(f"MCP tool '{tool_name}' failed after refresh: {retry_e}")
+                                logger.error(f"Built-in tool '{tool_name}' failed after refresh: {retry_e}")
                                 tool_results[tool_name] = {"error": str(retry_e)}
                                 continue
-                    logger.error(f"MCP tool '{tool_name}' failed: {e}")
+                    logger.error(f"Built-in tool '{tool_name}' failed: {e}")
                     tool_results[tool_name] = {"error": str(e)}
 
             # --- Full reasoning: second LLM pass to process tool results ---
@@ -425,16 +420,10 @@ class MCPAgentAdapter:
                     # Fall through to normal artifact building
 
             # Build artifact parts from tool results.
-            # Tools that return files use the ToolResultWithFiles format
-            # (see app.types.ToolResultWithFiles): a dict with "text" and
-            # "_files" keys.  The adapter converts each entry in "_files"
-            # into an A2A FilePart(file=FileWithUri(…)).
             artifact_parts: list[Part] = []
             has_file_parts = False
 
             for _tool_name, result_data in tool_results.items():
-                # MCP tools return structured_content as a JSON string;
-                # parse it back into a dict so we can inspect the shape.
                 parsed = result_data
                 if isinstance(parsed, str):
                     try:
@@ -446,11 +435,9 @@ class MCPAgentAdapter:
                     files_list = parsed["_files"]
                     if isinstance(files_list, list) and files_list:
                         has_file_parts = True
-                        # Observation text for the LLM
                         text_content = parsed.get("text", "")
                         if text_content:
                             artifact_parts.append(Part(root=TextPart(text=text_content)))
-                        # Convert each ToolResultFile → FilePart
                         for file_entry in files_list:
                             if isinstance(file_entry, dict) and "uri" in file_entry:
                                 artifact_parts.append(Part(root=FilePart(
@@ -461,9 +448,6 @@ class MCPAgentAdapter:
                                     ),
                                 )))
 
-            # If no _files found, fall back to a single DataPart.
-            # Parse any JSON-string values into dicts so downstream
-            # formatting can produce readable text instead of raw JSON.
             if not has_file_parts and tool_results:
                 parsed_results = {}
                 for tn, rd in tool_results.items():
@@ -516,14 +500,12 @@ class MCPAgentAdapter:
         )
 
         # Yield completed status.
-        # Data is already in artifact events above, so only add a message
-        # when there are no artifacts at all.
         final_message = None
         if not tool_results and not content_parts:
             final_message = Message(
                 messageId=str(uuid.uuid4()),
                 role=Role.agent,
-                parts=[Part(root=TextPart(text="No results from MCP server."))],
+                parts=[Part(root=TextPart(text="No results from built-in tools."))],
             )
 
         yield TaskStatusUpdateEvent(
@@ -540,15 +522,33 @@ class MCPAgentAdapter:
         self._context_storage.pop(context_id, None)
 
     def _extract_tool_result(self, result: Any) -> Any:
-        """Extract usable data from an MCP tool result."""
+        """Extract usable data from a BuiltInToolResult.
+
+        Handles the same content shapes as MCPAgentAdapter._extract_tool_result():
+        - structured_content (dict)
+        - content (list of items with .text/.data attributes or dicts)
+        """
         if not result:
             return None
 
-        # MCP CallToolResult has .content which is a list of content items
+        # BuiltInToolResult.structured_content takes priority (most tools use this)
+        if hasattr(result, 'structured_content') and result.structured_content is not None:
+            return result.structured_content
+
+        # BuiltInToolResult.content (list of content items)
         if hasattr(result, 'content') and result.content:
             parts_data = []
             for item in result.content:
-                if hasattr(item, 'text'):
+                # Handle dict content items (e.g., {"type": "text", "text": "..."})
+                if isinstance(item, dict):
+                    if "text" in item:
+                        parts_data.append(item["text"])
+                    elif "data" in item:
+                        parts_data.append(item["data"])
+                    else:
+                        parts_data.append(item)
+                # Handle object content items (for compatibility)
+                elif hasattr(item, 'text'):
                     parts_data.append(item.text)
                 elif hasattr(item, 'data'):
                     parts_data.append(item.data)
@@ -557,10 +557,6 @@ class MCPAgentAdapter:
             if len(parts_data) == 1:
                 return parts_data[0]
             return parts_data
-
-        # Fallback: if result has structured_content
-        if hasattr(result, 'structured_content'):
-            return result.structured_content
 
         return str(result)
 

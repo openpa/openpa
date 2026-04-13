@@ -201,5 +201,5 @@ class MCPConnection:
         """Clean up all resources."""
         try:
             await self.exit_stack.aclose()
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
             logger.warning(f"Error during MCP connection cleanup: {e}")

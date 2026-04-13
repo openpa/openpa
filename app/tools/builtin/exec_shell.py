@@ -1,22 +1,16 @@
-"""Exec Shell MCP server using stdio transport.
+"""Exec Shell built-in tool.
 
-A standalone FastMCP server that executes shell commands on the terminal.
-Detects the operating system and uses the appropriate shell (PowerShell on Windows,
-/bin/bash on Linux/macOS).
-
-Usage:
-    python app/tools/mcp/built-in/exec_shell.py
+Executes shell commands on the terminal. Detects the operating system and
+uses the appropriate shell (PowerShell on Windows, /bin/bash on Linux/macOS).
 """
 
 import asyncio
 import os
 import platform
-import sys
 from typing import Any, Dict
 
-from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool, ToolResult
-
+from app.config.settings import BaseConfig
+from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.utils.logger import logger
 
 # Detect OS and shell once at startup
@@ -30,16 +24,16 @@ else:
     _SHELL = "/bin/bash"
     _SHELL_FLAG = "-c"
 
-# Initialize FastMCP server
-mcp = FastMCP(
-    name="Exec Shell",
-    instructions=f"Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS. "
+
+SERVER_NAME = "Exec Shell"
+SERVER_INSTRUCTIONS = (
+    f"Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS. "
     f"Current OS: {_SYSTEM}. "
     f"Current shell: {_SHELL}. "
 )
 
 
-class ExecShellTool(Tool):
+class ExecShellTool(BuiltInTool):
     name: str = "exec_shell"
     description: str = (
         "Executes a shell command on the terminal and returns its output. "
@@ -55,7 +49,7 @@ class ExecShellTool(Tool):
             },
             "working_directory": {
                 "type": "string",
-                "description": "The working directory to run the command in. Defaults to the current directory.",
+                "description": "The working directory to run the command in. Defaults to OPENPA_WORKING_DIR.",
             },
             "timeout": {
                 "type": "integer",
@@ -65,23 +59,28 @@ class ExecShellTool(Tool):
         "required": ["command"],
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         command = arguments.get("command", "").strip()
-        working_directory = arguments.get("working_directory", None)
+        working_directory = (
+            arguments.get("working_directory", None)
+            or arguments.get("_working_directory", None)
+            or BaseConfig.OPENPA_WORKING_DIR
+        )
         timeout = arguments.get("timeout", 120)
 
         if not command:
-            return ToolResult(
+            return BuiltInToolResult(
                 structured_content={
                     "error": "Missing parameter",
                     "message": "The 'command' parameter is required.",
                 }
             )
 
-        # Validate working directory if provided
+        # Ensure the profile directory exists, then validate
         if working_directory:
+            os.makedirs(working_directory, exist_ok=True)
             if not os.path.isdir(working_directory):
-                return ToolResult(
+                return BuiltInToolResult(
                     structured_content={
                         "error": "Invalid working directory",
                         "message": f"Directory does not exist: {working_directory}",
@@ -107,7 +106,7 @@ class ExecShellTool(Tool):
             except asyncio.TimeoutError:
                 process.kill()
                 await process.communicate()
-                return ToolResult(
+                return BuiltInToolResult(
                     structured_content={
                         "error": "Timeout",
                         "message": f"Command timed out after {timeout} seconds.",
@@ -120,7 +119,7 @@ class ExecShellTool(Tool):
             stdout = stdout_bytes.decode("utf-8", errors="replace")
             stderr = stderr_bytes.decode("utf-8", errors="replace")
 
-            return ToolResult(
+            return BuiltInToolResult(
                 structured_content={
                     "stdout": stdout,
                     "stderr": stderr,
@@ -132,7 +131,7 @@ class ExecShellTool(Tool):
             )
 
         except Exception as e:
-            return ToolResult(
+            return BuiltInToolResult(
                 structured_content={
                     "error": "Execution error",
                     "message": f"Failed to execute command: {str(e)}",
@@ -143,9 +142,6 @@ class ExecShellTool(Tool):
             )
 
 
-mcp.add_tool(ExecShellTool())
-
-
-if __name__ == "__main__":
-    sys.stderr.write("Starting Exec Shell MCP Server with stdio transport\n")
-    mcp.run(transport="stdio")
+def get_tools(config: dict) -> list[BuiltInTool]:
+    """Return tool instances for this server."""
+    return [ExecShellTool()]

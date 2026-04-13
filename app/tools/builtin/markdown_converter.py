@@ -1,36 +1,26 @@
-"""Markdown Converter MCP server using stdio transport.
+"""Markdown Converter built-in tool.
 
-A standalone FastMCP server that converts documents (PDF, DOCX, XLSX, PPTX,
-HTML, CSV, etc.) to Markdown using the markitdown library. Output files are
-written to OPENPA_WORKING_DIR/<profile>/markdown_files/ with timestamped names.
-
-Usage:
-    python app/tools/mcp/built-in/markdown_converter.py
-
-Environment:
-    OPENPA_WORKING_DIR - Base directory for file operations (default: ~/.openpa)
+Converts documents (PDF, DOCX, XLSX, PPTX, HTML, CSV, etc.) to Markdown
+using the markitdown library. Output files are written to
+OPENPA_WORKING_DIR/<profile>/markdown_files/ with timestamped names.
 """
 
 import os
 import platform
 import re
-import sys
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool, ToolResult
-
+from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolResultFile, ToolResultWithFiles
 from app.utils.logger import logger
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
-DATA_DIR = os.environ.get(
-    "OPENPA_WORKING_DIR",
-    os.path.join(os.path.expanduser("~"), ".openpa"),
+SERVER_NAME = "Markdown Converter"
+SERVER_INSTRUCTIONS = (
+    "Converts files (PDF, DOCX, XLSX, PPTX, HTML, CSV, etc.) to Markdown "
+    "format. Use this tool when the user wants to convert a document to "
+    "markdown for further processing, editing, or analysis."
 )
 
 MAX_MARKITDOWN_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -59,11 +49,10 @@ def _get_markitdown():
 # Security helpers
 # ---------------------------------------------------------------------------
 
-def _safe_resolve(relative_path: str) -> str:
-    """Resolve *relative_path* inside DATA_DIR.  Raises ValueError on traversal."""
-    base = os.path.realpath(DATA_DIR)
+def _safe_resolve(data_dir: str, relative_path: str) -> str:
+    """Resolve *relative_path* inside data_dir.  Raises ValueError on traversal."""
+    base = os.path.realpath(data_dir)
     os.makedirs(base, exist_ok=True)
-    # Strip leading slashes so "/" or "/foo" are treated as relative to DATA_DIR
     relative_path = relative_path.lstrip("/\\")
     target = os.path.realpath(os.path.join(base, relative_path))
     if target != base and not target.startswith(base + os.sep):
@@ -72,7 +61,7 @@ def _safe_resolve(relative_path: str) -> str:
 
 
 def _validate_profile(profile: str) -> None:
-    """Reject profile names that could escape DATA_DIR."""
+    """Reject profile names that could escape data_dir."""
     if not profile or not re.match(r'^[\w\-. ]+$', profile):
         raise ValueError(f"Invalid profile name: {profile!r}")
 
@@ -87,24 +76,10 @@ def _format_size(size: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# FastMCP server
+# Tool
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(
-    name="Markdown Converter",
-    instructions=(
-        "Converts files (PDF, DOCX, XLSX, PPTX, HTML, CSV, etc.) to Markdown "
-        "format. Use this tool when the user wants to convert a document to "
-        "markdown for further processing, editing, or analysis."
-    ),
-)
-
-
-# ---------------------------------------------------------------------------
-# Tool: convert_to_markdown
-# ---------------------------------------------------------------------------
-
-class ConvertToMarkdownTool(Tool):
+class ConvertToMarkdownTool(BuiltInTool):
     name: str = "convert_to_markdown"
     description: str = (
         "Convert a file (PDF, DOCX, XLSX, PPTX, HTML, CSV, JSON, XML, etc.) "
@@ -145,19 +120,23 @@ class ConvertToMarkdownTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, data_dir: str):
+        self._data_dir = data_dir
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        data_dir = arguments.pop("_working_directory", None) or self._data_dir
         source_path = arguments.get("source_path", "").strip()
         profile = arguments.get("profile", "").strip()
         output_path = arguments.get("output_path", "").strip()
 
         # -- Validate required params --
         if not source_path:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Missing parameter",
                 "message": "source_path is required.",
             })
         if not profile:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Missing parameter",
                 "message": "profile is required.",
             })
@@ -166,29 +145,29 @@ class ConvertToMarkdownTool(Tool):
         try:
             _validate_profile(profile)
         except ValueError as e:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Access denied",
                 "message": str(e),
             })
 
         # -- Resolve and validate source --
         try:
-            source_abs = _safe_resolve(source_path)
+            source_abs = _safe_resolve(data_dir, source_path)
         except ValueError as e:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Access denied",
                 "message": str(e),
             })
 
         if not os.path.isfile(source_abs):
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Not found",
                 "message": f"'{source_path}' is not a file or does not exist.",
             })
 
         file_size = os.path.getsize(source_abs)
         if file_size > MAX_MARKITDOWN_FILE_SIZE:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "File too large",
                 "message": (
                     f"File exceeds {_format_size(MAX_MARKITDOWN_FILE_SIZE)} limit "
@@ -199,7 +178,7 @@ class ConvertToMarkdownTool(Tool):
         # -- Get converter --
         converter = _get_markitdown()
         if converter is None:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Dependency missing",
                 "message": "markitdown library is not available.",
             })
@@ -211,48 +190,38 @@ class ConvertToMarkdownTool(Tool):
             md_content = result.text_content if result and result.text_content else None
         except Exception as e:
             logger.error(f"[ConvertToMarkdownTool] conversion failed for {source_name}: {e}")
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Conversion failed",
                 "message": f"markitdown could not convert '{source_name}': {e}",
             })
 
         if not md_content:
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Conversion failed",
                 "message": f"Conversion produced no content for '{source_name}'.",
             })
 
         # -- Build output path --
-        base = os.path.realpath(DATA_DIR)
+        base = os.path.realpath(data_dir)
         source_stem = os.path.splitext(source_name)[0]
 
         if output_path:
-            # User specified an output path — resolve it within DATA_DIR
             try:
-                resolved_output = _safe_resolve(output_path)
+                resolved_output = _safe_resolve(data_dir, output_path)
             except ValueError as e:
-                return ToolResult(structured_content={
+                return BuiltInToolResult(structured_content={
                     "error": "Access denied",
                     "message": str(e),
                 })
 
             if output_path.endswith(".md"):
-                # Treat as a full file path
                 output_dir = os.path.dirname(resolved_output)
                 out_name = os.path.basename(resolved_output)
             else:
-                # Treat as a directory path — derive name from source
                 output_dir = resolved_output
                 out_name = f"{source_stem}.md"
         else:
-            # Default: <profile>/markdown_files/
-            output_dir = os.path.join(DATA_DIR, profile, "markdown_files")
-            # Verify output dir stays under DATA_DIR
-            if not os.path.realpath(output_dir).startswith(base + os.sep):
-                return ToolResult(structured_content={
-                    "error": "Access denied",
-                    "message": "Invalid profile name.",
-                })
+            output_dir = os.path.join(data_dir, "markdown_files")
             out_name = f"{source_stem}.md"
 
         os.makedirs(output_dir, exist_ok=True)
@@ -271,7 +240,7 @@ class ConvertToMarkdownTool(Tool):
                 f.write(md_content)
         except OSError as e:
             logger.error(f"[ConvertToMarkdownTool] write failed: {e}")
-            return ToolResult(structured_content={
+            return BuiltInToolResult(structured_content={
                 "error": "Write error",
                 "message": f"Failed to write output file: {e}",
             })
@@ -299,18 +268,10 @@ class ConvertToMarkdownTool(Tool):
             f"({len(md_content)} chars)"
         )
 
-        return ToolResult(structured_content=payload)
+        return BuiltInToolResult(structured_content=payload)
 
 
-# ---------------------------------------------------------------------------
-# Register tools & run
-# ---------------------------------------------------------------------------
-
-mcp.add_tool(ConvertToMarkdownTool())
-
-if __name__ == "__main__":
-    sys.stderr.write(
-        f"Starting Markdown Converter MCP Server "
-        f"(data_dir={DATA_DIR}, os={platform.system()})\n"
-    )
-    mcp.run(transport="stdio")
+def get_tools(config: dict) -> list[BuiltInTool]:
+    """Return tool instances for this server."""
+    data_dir = config.get("OPENPA_WORKING_DIR", os.path.join(os.path.expanduser("~"), ".openpa"))
+    return [ConvertToMarkdownTool(data_dir=data_dir)]

@@ -1,14 +1,11 @@
-from typing import Any, Dict
+"""Casual chat intrinsic tool (CLARIFY behavior)."""
 
-from app.tools.intrinsic.base import IntrinsicTool, IntrinsicToolBehavior, ToolResult
+from app.tools.base import ToolBehavior
+from app.tools.intrinsic.base import IntrinsicTool
 
 
 class CasualChatTool(IntrinsicTool):
-    """A casual chat tool that engages in general conversation.
-
-    When invoked, the conversation continues — context is preserved
-    and the step count is reset so reasoning can resume on subsequent turns.
-    """
+    """Engage in general conversation; conversation continues, step count resets."""
 
     @property
     def name(self) -> str:
@@ -23,9 +20,5 @@ class CasualChatTool(IntrinsicTool):
         )
 
     @property
-    def behavior(self) -> IntrinsicToolBehavior:
-        return IntrinsicToolBehavior.CLARIFY
-
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
-        action_input = arguments.get("action_input", "")
-        return ToolResult(content=action_input)
+    def behavior(self) -> ToolBehavior:
+        return ToolBehavior.CLARIFY

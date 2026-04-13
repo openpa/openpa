@@ -144,7 +144,7 @@ class OAuthClient:
         self.state = base64.urlsafe_b64encode(state_data.encode()).decode()
         
         params = {
-            "client_id": "olli-agent-client",
+            "client_id": "openpa-agent-client",
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "state": self.state
@@ -191,7 +191,7 @@ class OAuthClient:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(token_endpoint, data={
                     "code": code,
-                    "client_id": "olli-agent-client",
+                    "client_id": "openpa-agent-client",
                     "grant_type": "authorization_code",
                     "redirect_uri": redirect_uri
                 })
@@ -335,7 +335,7 @@ class OAuthClient:
         try:
             state = base64.urlsafe_b64encode(os.urandom(16)).decode()
             params = {
-                "client_id": "olli-agent-client",  # Changed client_id just in case, but usually depends on provider
+                "client_id": "openpa-agent-client",  # Changed client_id just in case, but usually depends on provider
                 "redirect_uri": callback_uri,
                 "response_type": "code",
                 "state": state
@@ -360,7 +360,7 @@ class OAuthClient:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(token_endpoint, data={
                     "code": code,
-                    "client_id": "olli-agent-client",  # Should match the one sent in auth url
+                    "client_id": "openpa-agent-client",  # Should match the one sent in auth url
                     "grant_type": "authorization_code",
                     "redirect_uri": callback_uri
                 })

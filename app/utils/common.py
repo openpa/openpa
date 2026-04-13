@@ -10,13 +10,13 @@ from a2a.types import (
     Message
 )
 
-from app.lib.me5 import Me5Embeddings
+from app.lib.embedding import GrpcEmbeddings
 from app.types import EmbeddingTable
 from app.utils import logger
 
 
-def generate_embeddings(embedding_vendor: Me5Embeddings, text):
-    """Generates embeddings for the given text using the Me5 embedding model.
+def generate_embeddings(embedding_vendor: GrpcEmbeddings, text):
+    """Generates embeddings for the given text using the gRPC embedding service.
 
     Args:
         text (str): The input text to generate embeddings for.
@@ -27,7 +27,7 @@ def generate_embeddings(embedding_vendor: Me5Embeddings, text):
     return embedding
 
 
-def build_table_embeddings(embedding_vendor: Me5Embeddings, data: dict[str, str]) -> EmbeddingTable:
+def build_table_embeddings(embedding_vendor: GrpcEmbeddings, data: dict[str, str]) -> EmbeddingTable:
     """Generates embeddings for the given data dictionary and returns an EmbeddingTable.
 
     Args:
@@ -60,7 +60,7 @@ def build_table_embeddings(embedding_vendor: Me5Embeddings, data: dict[str, str]
         return EmbeddingTable(empty_df)
 
 
-def find_similar_item(query: str, embedding_vendor: Me5Embeddings, embedding_table: EmbeddingTable) -> str:
+def find_similar_item(query: str, embedding_vendor: GrpcEmbeddings, embedding_table: EmbeddingTable) -> str:
     """Find the most similar item to the query in the embedding table.
 
     Args:
@@ -85,7 +85,7 @@ def find_similar_item(query: str, embedding_vendor: Me5Embeddings, embedding_tab
 
 def find_similar_items(
         query: str,
-        embedding_vendor: Me5Embeddings,
+        embedding_vendor: GrpcEmbeddings,
         embedding_table: EmbeddingTable,
         limit: int = 5) -> list[str]:
     """Find the top N most similar items to the query in the embedding table.

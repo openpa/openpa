@@ -1,34 +1,18 @@
-"""Message Detail MCP server using stdio transport.
+"""Message Detail built-in tool.
 
-A standalone FastMCP server that retrieves full details of conversation messages
-by their IDs. This allows the LLM to read complete message content (beyond the
-truncated 500-token preview in history), as well as internal structure such as
-message parts, reasoning/thinking steps, and metadata.
-
-Usage:
-    python app/tools/mcp/built-in/message_detail.py
-
-Environment:
-    SQLITE_DB_PATH - Path to the SQLite database (default: .storage/openpa.db)
+Retrieves full details of conversation messages by their IDs from SQLite.
 """
 
 import json
 import os
 import sqlite3
-import sys
 from typing import Any, Dict
 
-from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool, ToolResult
+from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 
-SQLITE_DB_PATH = os.environ.get("SQLITE_DB_PATH", ".storage/openpa.db")
 
-mcp = FastMCP(
-    name="Message Detail",
-    instructions=(
-        "Retrieve the full details of conversation messages by their IDs."
-    ),
-)
+SERVER_NAME = "Message Detail"
+SERVER_INSTRUCTIONS = "Retrieve the full details of conversation messages by their IDs."
 
 
 def _parse_json_column(value: Any) -> Any:
@@ -43,7 +27,7 @@ def _parse_json_column(value: Any) -> Any:
     return value
 
 
-class GetMessageDetailTool(Tool):
+class GetMessageDetailTool(BuiltInTool):
     name: str = "get_message_detail"
     description: str = (
         "This tool is used to extract the full details of a message, including message parts, thinking steps, and metadata. "
@@ -62,22 +46,25 @@ class GetMessageDetailTool(Tool):
         "additionalProperties": False,
     }
 
-    async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+    def __init__(self, db_path: str = ""):
+        self._db_path = db_path
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         message_ids = arguments.get("message_ids", [])
         if not message_ids:
-            return ToolResult(
+            return BuiltInToolResult(
                 structured_content={"error": "No message IDs provided."}
             )
 
-        if not os.path.isfile(SQLITE_DB_PATH):
-            return ToolResult(
+        if not os.path.isfile(self._db_path):
+            return BuiltInToolResult(
                 structured_content={
-                    "error": f"Database file not found: {SQLITE_DB_PATH}"
+                    "error": f"Database file not found: {self._db_path}"
                 }
             )
 
         try:
-            conn = sqlite3.connect(SQLITE_DB_PATH)
+            conn = sqlite3.connect(self._db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -118,17 +105,15 @@ class GetMessageDetailTool(Tool):
             if not_found:
                 result["not_found"] = not_found
 
-            return ToolResult(structured_content=result)
+            return BuiltInToolResult(structured_content=result)
 
         except Exception as e:
-            return ToolResult(
+            return BuiltInToolResult(
                 structured_content={"error": f"Database query failed: {str(e)}"}
             )
 
 
-mcp.add_tool(GetMessageDetailTool())
-
-
-if __name__ == "__main__":
-    sys.stderr.write("Starting Message Detail MCP Server with stdio transport\n")
-    mcp.run(transport="stdio")
+def get_tools(config: dict) -> list[BuiltInTool]:
+    """Return tool instances for this server."""
+    db_path = config.get("SQLITE_DB_PATH", "")
+    return [GetMessageDetailTool(db_path=db_path)]

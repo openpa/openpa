@@ -9,8 +9,9 @@ from sqlalchemy.orm import class_mapper
 from a2a.server.models import Base
 
 from app.storage.models import (
-    AuthTokenModel, ConversationModel, LLMConfigModel, MCPServerModel,
-    MessageModel, ProfileModel, RemoteAgentModel, ServerConfigModel, ToolConfigModel,
+    AuthTokenModel, ConversationModel, LLMConfigModel,
+    MessageModel, ProfileModel, ProfileToolModel, ServerConfigModel,
+    ToolConfigModel, ToolModel,
 )
 from app.utils.logger import logger
 
@@ -46,12 +47,17 @@ class ConversationStorage:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
-        # Create tables (order matters: profiles before conversations)
+        # Create tables. Order matters because of FK dependencies:
+        # profiles → tools → (profile_tools, tool_configs, auth_tokens)
         async with self.engine.begin() as conn:
             tables_to_create = []
-            for model_class in [ProfileModel, ConversationModel, MessageModel,
-                                    AuthTokenModel, RemoteAgentModel, MCPServerModel,
-                                    ServerConfigModel, LLMConfigModel, ToolConfigModel]:
+            for model_class in [
+                ProfileModel,
+                ConversationModel, MessageModel,
+                ServerConfigModel, LLMConfigModel,
+                ToolModel,
+                ProfileToolModel, ToolConfigModel, AuthTokenModel,
+            ]:
                 mapper = class_mapper(model_class)
                 for table in mapper.tables:
                     if isinstance(table, Table):
