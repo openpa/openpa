@@ -535,6 +535,9 @@ class ReasoningAgent:
         if tool.tool_type is not ToolType.INTRINSIC:
             yield {"type": ChatCompletionTypeEnum.THINKING_ARTIFACT, "data": thinking_payload}
 
+        if tool.tool_type is not ToolType.SKILL:
+            action_input = f"{step.thought} ({step.action_input})"
+            
         # Drive the tool's event stream
         result_event: Optional[ToolResultEvent] = None
         error_event: Optional[ToolErrorEvent] = None
