@@ -1,4 +1,0 @@
-[tool]
-name = "markdown_converter"
-display_name = "Markdown Converter"
-default_model_group = "low"

@@ -2,14 +2,18 @@
 
 Each tool group lives at ``app.tools.builtin.{module_name}`` and exports:
 
-- ``SERVER_NAME`` (str)              -- display name in the UI
-- ``SERVER_INSTRUCTIONS`` (str)      -- description shown to the reasoning agent
+- ``TOOL_CONFIG`` (dict)              -- static config (name, display_name,
+                                         default_model_group, required_config,
+                                         optional ``arguments`` / ``oauth``)
+- ``SERVER_NAME`` (str)               -- display name in the UI
+- ``SERVER_INSTRUCTIONS`` (str)       -- description shown to the reasoning agent
 - ``get_tools(config: dict) -> list[BuiltInTool]`` -- in-process functions
-- ``get_prepare_tools()`` (optional) -- per-request tool customization callback
+- ``get_prepare_tools()`` (optional)  -- per-request tool customization callback
 - ``_make_server_instructions(working_dir: str)`` (optional) -- dynamic description
 
-Discovery is driven by ``app/config/tools/*.toml`` -- adding a TOML file plus
-the matching module is all that's needed to register a new built-in tool.
+Registration is driven by the explicit ``_BUILTIN_MODULE_NAMES`` tuple below.
+Adding a new built-in tool means adding a module in this package, exporting
+``TOOL_CONFIG``, and appending the module name to the tuple.
 """
 
 from __future__ import annotations
@@ -17,7 +21,6 @@ from __future__ import annotations
 import importlib
 from typing import Optional
 
-from app.config import load_all_tool_schemas, load_tool_schema
 from app.config.settings import BaseConfig
 from app.lib.llm.base import LLMProvider
 from app.tools.builtin.adapter import BuiltInToolAdapter
@@ -35,7 +38,36 @@ __all__ = [
     "BuiltInToolGroup",
     "register_builtin_tools",
     "refresh_builtin_tool_oauth",
+    "get_builtin_tool_config",
 ]
+
+
+_BUILTIN_MODULE_NAMES: tuple[str, ...] = (
+    "exec_shell",
+    "markdown_converter",
+    "message_detail",
+    "system_file",
+    "weather",
+    "gg_calendar",
+    "gg_places",
+)
+
+
+def get_builtin_tool_config(config_name: str) -> dict:
+    """Return the schema dict for a built-in tool, matching the old TOML shape.
+
+    Returns ``{"tool": {...}}`` so callers previously reading the TOML can use
+    this function as a drop-in replacement. Returns ``{}`` if the module or
+    ``TOOL_CONFIG`` export is missing.
+    """
+    try:
+        module = importlib.import_module(f"app.tools.builtin.{config_name}")
+    except ImportError:
+        return {}
+    tool_config = getattr(module, "TOOL_CONFIG", None)
+    if not isinstance(tool_config, dict):
+        return {}
+    return {"tool": tool_config}
 
 
 def _build_oauth_provider(*, oauth_config: Optional[dict], server_name: str):
@@ -79,7 +111,7 @@ async def register_builtin_tools(
     llm_factory,
     setup_profile: str = "admin",
 ) -> None:
-    """Discover and register all built-in tool groups.
+    """Register all built-in tool groups from ``_BUILTIN_MODULE_NAMES``.
 
     Args
     ----
@@ -91,13 +123,19 @@ async def register_builtin_tools(
                       registration time. Per-profile overrides remain effective
                       at execution time (handled by the adapter).
     """
-    schemas = load_all_tool_schemas()
-    for module_name, schema in schemas.items():
-        tool_info = schema.get("tool", {})
+    for module_name in _BUILTIN_MODULE_NAMES:
         try:
             module = importlib.import_module(f"app.tools.builtin.{module_name}")
         except ImportError as e:
             logger.error(f"Built-in tool module '{module_name}' not importable: {e}")
+            continue
+
+        tool_info = getattr(module, "TOOL_CONFIG", None)
+        if not isinstance(tool_info, dict):
+            logger.error(
+                f"Built-in tool module '{module_name}' is missing a "
+                "TOOL_CONFIG dict; skipping."
+            )
             continue
 
         config: dict[str, str] = {}
@@ -176,7 +214,7 @@ def refresh_builtin_tool_oauth(
     if not isinstance(tool, BuiltInToolGroup):
         return False
 
-    schema = load_tool_schema(tool.config_name)
+    schema = get_builtin_tool_config(tool.config_name)
     oauth_config = schema.get("tool", {}).get("oauth")
     if not oauth_config:
         return False

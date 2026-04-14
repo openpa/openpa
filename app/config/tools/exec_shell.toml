@@ -1,4 +1,0 @@
-[tool]
-name = "exec_shell"
-display_name = "Shell Executor"
-default_model_group = "low"

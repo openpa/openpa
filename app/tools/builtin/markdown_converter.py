@@ -23,6 +23,12 @@ SERVER_INSTRUCTIONS = (
     "markdown for further processing, editing, or analysis."
 )
 
+TOOL_CONFIG: dict = {
+    "name": "markdown_converter",
+    "display_name": "Markdown Converter",
+    "default_model_group": "low",
+}
+
 MAX_MARKITDOWN_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 # ---------------------------------------------------------------------------

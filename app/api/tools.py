@@ -14,9 +14,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app.config import load_tool_schema
 from app.tools import ToolRegistry, ToolType
-from app.tools.builtin import BuiltInToolGroup, refresh_builtin_tool_oauth
+from app.tools.builtin import (
+    BuiltInToolGroup,
+    get_builtin_tool_config,
+    refresh_builtin_tool_oauth,
+)
 from app.utils.logger import logger
 
 
@@ -33,7 +36,7 @@ def get_tool_routes(registry: ToolRegistry) -> list[Route]:
 
         Each row carries enough metadata for the dashboard to render the
         configuration form without an extra round-trip:
-        - ``required_fields`` -- built-in TOML required_config schema
+        - ``required_fields`` -- built-in tool required_config schema
         - ``config`` -- current per-profile values (variables/arguments/llm/meta)
         - ``full_reasoning`` -- mirrored from ``config.llm.full_reasoning`` so
           the frontend doesn't have to know about the scoping
@@ -188,11 +191,11 @@ def get_tool_routes(registry: ToolRegistry) -> list[Route]:
 
 
 def _schema_for_tool(tool) -> dict:
-    """Return the TOML schema for a built-in tool, or {} for others."""
+    """Return the static config schema for a built-in tool, or {} for others."""
     if tool is None:
         return {}
     if tool.tool_type is ToolType.BUILTIN and isinstance(tool, BuiltInToolGroup):
-        return load_tool_schema(tool.config_name)
+        return get_builtin_tool_config(tool.config_name)
     return {}
 
 

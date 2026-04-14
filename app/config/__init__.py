@@ -50,30 +50,3 @@ def load_all_provider_catalogs() -> dict[str, dict]:
     return catalogs
 
 
-def load_tool_schema(tool_name: str) -> dict:
-    """Load a tool's config schema from its TOML config file.
-
-    Returns the parsed TOML dict, or empty dict if file not found.
-    """
-    toml_path = _CONFIG_DIR / "tools" / f"{tool_name}.toml"
-    if not toml_path.exists():
-        return {}
-    with open(toml_path, "r") as f:
-        return toml.load(f)
-
-
-def load_all_tool_schemas() -> dict[str, dict]:
-    """Load all tool schemas from app/config/tools/*.toml.
-
-    Returns dict keyed by tool name.
-    """
-    tools_dir = _CONFIG_DIR / "tools"
-    schemas = {}
-    if not tools_dir.exists():
-        return schemas
-    for toml_file in tools_dir.glob("*.toml"):
-        data = toml.load(toml_file)
-        tool_info = data.get("tool", {})
-        name = tool_info.get("name", toml_file.stem)
-        schemas[name] = data
-    return schemas

@@ -884,6 +884,12 @@ def get_tools(config: dict) -> list[BuiltInTool]:
 
 SERVER_NAME = "System File"
 
+TOOL_CONFIG: dict = {
+    "name": "system_file",
+    "display_name": "System File",
+    "default_model_group": "low",
+}
+
 
 def _make_server_instructions(_data_dir: str) -> str:
     return (

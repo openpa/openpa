@@ -1,7 +1,7 @@
 """Registry-facing wrapper for built-in tool groups.
 
 A "built-in tool" in the user-facing sense is a *group* of in-process Python
-functions sharing one TOML config and one child LLM (e.g., the
+functions sharing one ``TOOL_CONFIG`` and one child LLM (e.g., the
 ``Google Calendar`` tool exposes ``list_events`` + ``create_event``). The
 group is one row in the ``tools`` table; the individual functions are
 implementation details consumed by :class:`BuiltInToolAdapter`.
@@ -46,7 +46,7 @@ from app.utils.logger import logger
 
 
 class BuiltInToolGroup(Tool):
-    """One built-in tool group (== one TOML schema, one ``app.tools.builtin.*`` module).
+    """One built-in tool group (== one ``TOOL_CONFIG``, one ``app.tools.builtin.*`` module).
 
     Owns a child :class:`LLMProvider` and a list of inner :class:`BuiltInFunction`
     instances. ``execute()`` runs the LLM with the functions exposed as tools
@@ -58,7 +58,7 @@ class BuiltInToolGroup(Tool):
     def __init__(
         self,
         *,
-        config_name: str,           # TOML stem e.g. "weather", "gg_calendar"
+        config_name: str,           # module stem e.g. "weather", "gg_calendar"
         display_name: str,          # SERVER_NAME
         description: str,
         functions: List[BuiltInFunction],

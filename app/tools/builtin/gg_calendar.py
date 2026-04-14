@@ -16,6 +16,31 @@ from app.utils.logger import logger
 SERVER_NAME = "Google Calendar"
 SERVER_INSTRUCTIONS = "A Google Calendar assistant that can list upcoming events and create new events."
 
+TOOL_CONFIG: dict = {
+    "name": "gg_calendar",
+    "display_name": "Google Calendar",
+    "default_model_group": "low",
+    "required_config": {
+        "GOOGLE_CLIENT_ID": {
+            "description": "Google OAuth Client ID",
+            "type": "string",
+        },
+        "GOOGLE_CLIENT_SECRET": {
+            "description": "Google OAuth Client Secret",
+            "type": "string",
+            "secret": True,
+        },
+    },
+    "oauth": {
+        "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_endpoint": "https://oauth2.googleapis.com/token",
+        "scopes": ["https://www.googleapis.com/auth/calendar.events"],
+        "extra_authorize_params": {
+            "access_type": "offline",
+        },
+    },
+}
+
 
 def _get_calendar_service(access_token: str):
     """Build Google Calendar service using the provided access token."""

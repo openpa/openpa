@@ -19,6 +19,19 @@ ACCUWEATHER_BASE_URL = "http://dataservice.accuweather.com"
 SERVER_NAME = "Weather Agent"
 SERVER_INSTRUCTIONS = "A weather assistant that retrieves weather forecasts and current conditions."
 
+TOOL_CONFIG: dict = {
+    "name": "weather",
+    "display_name": "Weather",
+    "default_model_group": "low",
+    "required_config": {
+        "ACCUWEATHER_API_KEY": {
+            "description": "AccuWeather API Key",
+            "type": "string",
+            "secret": True,
+        },
+    },
+}
+
 
 async def _search_location(api_key: str, location: str) -> Dict[str, Any] | None:
     """Search AccuWeather for a location and return its key and metadata."""

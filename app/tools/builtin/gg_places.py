@@ -27,6 +27,33 @@ SERVER_INSTRUCTIONS = (
     "and map_direction_link to create navigation URLs."
 )
 
+TOOL_CONFIG: dict = {
+    "name": "gg_places",
+    "display_name": "Google Places",
+    "default_model_group": "low",
+    "required_config": {
+        "GOOGLE_MAPS_API_KEY": {
+            "description": "Google Maps API Key",
+            "type": "string",
+            "secret": True,
+        },
+    },
+    "arguments": {
+        "type": "object",
+        "required": ["latitude", "longitude"],
+        "properties": {
+            "latitude": {
+                "type": "number",
+                "description": "User's current latitude coordinate",
+            },
+            "longitude": {
+                "type": "number",
+                "description": "User's current longitude coordinate",
+            },
+        },
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Google Places included types (336 types across 20+ categories)
 # See: https://developers.google.com/maps/documentation/places/web-service/place-types

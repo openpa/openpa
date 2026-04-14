@@ -6,7 +6,8 @@ Supports per-tool model overrides and custom model selections.
 
 from typing import Optional
 
-from app.config import settings as dynaconf_settings, load_tool_schema
+from app.config import settings as dynaconf_settings
+from app.tools.builtin import get_builtin_tool_config
 from app.storage.dynamic_config_storage import DynamicConfigStorage
 from .base import LLMProvider
 from .factory import create_llm_provider
@@ -68,7 +69,7 @@ class ModelGroupManager:
 
         Priority:
         1. Tool-level model override in SQLite (tool_configs: tool_name, 'llm_model')
-        2. Tool's default_model_group from TOML schema
+        2. Tool's default_model_group from its built-in TOOL_CONFIG
         3. 'low' group as ultimate fallback
         """
         # Check for tool-level override
@@ -81,8 +82,8 @@ class ModelGroupManager:
                 config_storage=self.config_storage, profile=profile,
             )
 
-        # Check tool's default model group from TOML
-        tool_schema = load_tool_schema(tool_name)
+        # Check tool's default model group from its inline TOOL_CONFIG
+        tool_schema = get_builtin_tool_config(tool_name)
         tool_info = tool_schema.get("tool", {})
         default_group = tool_info.get("default_model_group", "low")
 

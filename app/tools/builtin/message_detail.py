@@ -14,6 +14,12 @@ from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 SERVER_NAME = "Message Detail"
 SERVER_INSTRUCTIONS = "Retrieve the full details of conversation messages by their IDs."
 
+TOOL_CONFIG: dict = {
+    "name": "message_detail",
+    "display_name": "Message Detail",
+    "default_model_group": "low",
+}
+
 
 def _parse_json_column(value: Any) -> Any:
     """Parse a JSON column value that may be a string or already decoded."""

@@ -32,6 +32,12 @@ SERVER_INSTRUCTIONS = (
     f"Current shell: {_SHELL}. "
 )
 
+TOOL_CONFIG: dict = {
+    "name": "exec_shell",
+    "display_name": "Shell Executor",
+    "default_model_group": "low",
+}
+
 
 class ExecShellTool(BuiltInTool):
     name: str = "exec_shell"

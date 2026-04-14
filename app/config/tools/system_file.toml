@@ -1,4 +1,0 @@
-[tool]
-name = "system_file"
-display_name = "System File"
-default_model_group = "low"
