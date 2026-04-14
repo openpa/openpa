@@ -69,12 +69,14 @@ class BuiltInToolGroup(Tool):
         full_reasoning: bool = False,
         system_prompt: Optional[str] = None,
         server_instructions: Optional[str] = None,
+        llm_factory: Optional[Callable[[str, str], LLMProvider]] = None,
     ):
         super().__init__()
         self._config_name = config_name
         self._display_name = display_name
         self._description = description
         self._arguments_schema = arguments_schema
+        self._llm_factory = llm_factory
         self._adapter = BuiltInToolAdapter(
             tools=functions,
             llm=llm,
@@ -168,6 +170,15 @@ class BuiltInToolGroup(Tool):
         variables: Dict[str, str],
         llm_params: Dict[str, Any],
     ) -> AsyncGenerator[ToolEvent, None]:
+        # Lazy LLM binding: if no LLM was available at registration time,
+        # try to resolve one now using the factory.
+        if not self._adapter._llm and self._llm_factory:
+            try:
+                llm = self._llm_factory(self._config_name, profile)
+                self._adapter.update_config(llm=llm)
+            except Exception:  # noqa: BLE001
+                pass  # fall through to the adapter's own "no LLM" error
+
         # Apply per-call llm_params (e.g., full_reasoning override)
         if "full_reasoning" in llm_params:
             self._adapter.update_config(full_reasoning=bool(llm_params["full_reasoning"]))

@@ -199,6 +199,7 @@ async def register_builtin_tools(
             prepare_tools=prepare_tools_fn,
             full_reasoning=False,
             server_instructions=instructions or None,
+            llm_factory=llm_factory,
         )
         registry.register_builtin(group, source=module_name)
 

@@ -250,6 +250,20 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Built-in tool registration failed: {e}")
 
+    # 4b. If setup is already complete, rebind any built-in tools that
+    #     registered with llm=None (e.g. transient LLM-factory failure).
+    if config_storage.is_setup_complete():
+        for tool in registry.all_tools():
+            if isinstance(tool, BuiltInToolGroup) and not tool.is_llm_bound:
+                try:
+                    llm = _builtin_llm_factory(tool.config_name, "admin")
+                    tool.update_runtime_config(llm=llm)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        f"Could not bind LLM to built-in tool '{tool.name}' "
+                        f"at startup: {e}"
+                    )
+
     # 5. Hydrate persisted A2A / MCP tools
     await _hydrate_persisted_tools(registry=registry, model_group_mgr=model_group_mgr)
 

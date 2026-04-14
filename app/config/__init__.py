@@ -3,7 +3,6 @@
 Priority chain: SQLite dynamic config > TOML file defaults > environment variable fallback.
 """
 
-import os
 from pathlib import Path
 
 import toml

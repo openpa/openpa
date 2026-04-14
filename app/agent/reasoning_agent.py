@@ -43,6 +43,7 @@ from app.tools import (
 )
 from app.tools.intrinsic import UserNotificationTool
 from app.tools.ids import slugify
+from app.tools.skills.scanner import generate_dir_tree
 from app.types import ReasoningStreamResponseType
 from app.utils.common import limit_messages, truncate_messages
 from app.utils.logger import logger
@@ -63,6 +64,8 @@ Reasoning steps should avoid repeating previous reasoning to prevent redundant i
 
 Current time: {current_time}
 Current Working Directory: `{current_working_directory}`
+Current User Working Directory: `{current_user_working_directory}`
+Current Skills Directory: `{current_skills_directory}`
 
 Tools:
 {tools}
@@ -141,7 +144,7 @@ class ReasoningAgent:
         registry: ToolRegistry,
         profile: str,
         context_id: Optional[str] = None,
-        max_steps: int = 5,
+        max_steps: int = 10,
         steps_length: int = 20,
     ):
         self.llm = llm
@@ -208,7 +211,11 @@ class ReasoningAgent:
     def _build_loaded_skills_block(self) -> str:
         if not self._loaded_skill_sections:
             return ""
-        parts = ["\nLoaded Skills (follow these instructions when relevant):\n"]
+        parts = [
+            "\nLoaded Skills (follow these instructions when relevant):\n"
+            "Note: Your current working directory is the \"Current User Working Directory\", "
+            "so to run any skill script, use the path from the \"Current Skills Directory\".\n"
+        ]
         for tool_id, content in self._loaded_skill_sections.items():
             tool = self._tools_by_id.get(tool_id)
             display_name = tool.name if tool else tool_id
@@ -223,7 +230,9 @@ class ReasoningAgent:
         return template_instruction.format(
             persona_description=persona,
             current_time=f"{datetime.now().isoformat()}",
-            current_working_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile),
+            current_working_directory=BaseConfig.OPENPA_WORKING_DIR,
+            current_skills_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills"),
+            current_user_working_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile),
             tools=self._build_tools_block(),
             loaded_skills=self._build_loaded_skills_block(),
             tool_names=", ".join(self._active_action_names()),
@@ -324,8 +333,8 @@ class ReasoningAgent:
         # appended (and re-invoked skills are filtered out of the Tools block).
         self.instruction = self._build_instruction()
 
-        # logger.info(f"=== Instruction ===\n{self.instruction}")
-        # logger.info(f"=== Reasoning Step ===\n{input_section}")
+        logger.info(f"=== Instruction ===\n{self.instruction}")
+        logger.info(f"=== Reasoning Step ===\n{input_section}")
 
         # Action enum is the set of tool_ids, minus skills already folded into
         # the system prompt — this prevents the LLM from re-loading them.
@@ -653,6 +662,10 @@ class ReasoningAgent:
             # and remove the skill from the Tools block / Action enum so it
             # cannot be re-invoked and appended again.
             skill_text = getattr(tool.info, "full_content", "") or observation_text or ""  # type: ignore[attr-defined]
+            dir_path = tool.info.dir_path  # type: ignore[attr-defined]
+            tree_text = generate_dir_tree(dir_path)
+            if tree_text:
+                skill_text = f"Skill Directory Structure:\n```\n{tree_text}\n```\n\n{skill_text}"
             self._loaded_skill_sections[tool.tool_id] = skill_text
             self._loaded_skill_ids.add(tool.tool_id)
             # The full SKILL.md content is shown to the user in the frontend's

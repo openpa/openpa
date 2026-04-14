@@ -11,6 +11,7 @@ Any other frontmatter fields (``variables``, ``arguments``, ...) are ignored.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -120,3 +121,44 @@ def scan_skills(skills_dir: Path) -> dict[str, SkillInfo]:
         logger.info(f"Discovered agent skill: '{name}' ({entry.name}/)")
 
     return skills
+
+
+def generate_dir_tree(dir_path: Path, *, max_depth: int = 10) -> str:
+    """Generate a visual directory tree string for *dir_path*.
+
+    Uses box-drawing characters and the platform-native path separator
+    as the directory trailing marker (``\\`` on Windows, ``/`` elsewhere).
+    """
+    if not dir_path.is_dir():
+        return ""
+
+    sep = os.sep
+    lines: list[str] = [str(dir_path) + sep]
+
+    def _walk(current: Path, prefix: str, depth: int) -> None:
+        if depth > max_depth:
+            return
+        try:
+            entries = sorted(
+                current.iterdir(),
+                key=lambda e: (not e.is_dir(), e.name.lower()),
+            )
+        except PermissionError:
+            return
+
+        entries = [e for e in entries if not e.name.startswith(".")]
+
+        for i, entry in enumerate(entries):
+            is_last = i == len(entries) - 1
+            connector = "└── " if is_last else "├── "
+            if entry.is_dir() and not entry.is_symlink():
+                lines.append(f"{prefix}{connector}{entry.name}{sep}")
+                extension = "    " if is_last else "│   "
+                _walk(entry, prefix + extension, depth + 1)
+            elif entry.is_dir():
+                lines.append(f"{prefix}{connector}{entry.name}{sep} -> {os.readlink(entry)}")
+            else:
+                lines.append(f"{prefix}{connector}{entry.name}")
+
+    _walk(dir_path, "", 0)
+    return "\n".join(lines)
