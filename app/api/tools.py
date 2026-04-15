@@ -7,6 +7,7 @@ configuration is also exposed here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import urllib.parse
 
@@ -14,6 +15,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from app.config.settings import BaseConfig
+from app.lib.llm.factory import create_llm_provider
 from app.tools import ToolRegistry, ToolType
 from app.tools.builtin import (
     BuiltInToolGroup,
@@ -27,7 +30,11 @@ def _profile_from_request(request: Request) -> str:
     return getattr(request.user, "username", "admin")
 
 
-def get_tool_routes(registry: ToolRegistry) -> list[Route]:
+def get_tool_routes(
+    registry: ToolRegistry,
+    config_storage=None,
+    connect_persisted_tool=None,
+) -> list[Route]:
 
     config_manager = registry.config
 
@@ -151,15 +158,49 @@ def get_tool_routes(registry: ToolRegistry) -> list[Route]:
         for key, value in llm_params.items():
             config_manager.set_llm_param(tool_id, profile, key, value)
 
-        # If full_reasoning changed, propagate to the running adapter
         tool = registry.get(tool_id)
+
+        # If provider/model/reasoning_effort changed, rebuild the adapter's LLM.
+        # Read the *post-write* DB values so partial updates (e.g. only
+        # reasoning_effort in the body) are merged with the existing settings.
+        if tool and hasattr(tool, "update_runtime_config") and any(
+            k in llm_params for k in ("llm_provider", "llm_model", "reasoning_effort")
+        ):
+            try:
+                merged = config_manager.get_llm_params(tool_id, profile)
+                new_llm = create_llm_provider(
+                    provider_name=merged.get("llm_provider")
+                        or BaseConfig.get_default_provider(),
+                    model_name=merged.get("llm_model") or None,
+                    config_storage=config_storage,
+                    profile=profile,
+                    default_reasoning_effort=merged.get("reasoning_effort"),
+                )
+                tool.update_runtime_config(llm=new_llm)
+            except ValueError as e:
+                return JSONResponse({"error": f"Invalid LLM: {e}"}, status_code=400)
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    f"Failed to apply LLM change to running tool '{tool_id}'"
+                )
+                return JSONResponse(
+                    {"error": f"Failed to apply LLM change: {e}"}, status_code=500,
+                )
+
+        # If full_reasoning changed, propagate to the running adapter
         if tool and "full_reasoning" in llm_params and hasattr(tool, "update_runtime_config"):
             tool.update_runtime_config(full_reasoning=bool(llm_params["full_reasoning"]))
 
         return JSONResponse({"success": True})
 
     async def handle_set_enabled(request: Request) -> JSONResponse:
-        """Enable / disable an A2A or MCP tool for the current profile."""
+        """Enable / disable an A2A or MCP tool for the current profile.
+
+        On enable, if the tool is currently a stub (lazy-init placeholder or
+        previous connection failure), schedule a background connect attempt.
+        The HTTP response returns immediately so the UI toggle stays snappy;
+        the next ``GET /api/tools`` will reflect the new connection state.
+        """
         profile = _profile_from_request(request)
         tool_id = request.path_params["tool_id"]
         try:
@@ -175,6 +216,12 @@ def get_tool_routes(registry: ToolRegistry) -> list[Route]:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
+
+        if bool(enabled) and connect_persisted_tool is not None:
+            tool = registry.get(tool_id)
+            if tool is not None and getattr(tool, "is_stub", False):
+                asyncio.create_task(connect_persisted_tool(tool_id))
+
         return JSONResponse({"success": True, "enabled": bool(enabled)})
 
     return [

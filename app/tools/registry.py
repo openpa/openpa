@@ -355,6 +355,29 @@ class ToolRegistry:
         logger.info(f"Registered skill '{tool.name}' (tool_id={chosen_id})")
         return chosen_id
 
+    # ── in-memory replace (stub ↔ live) ────────────────────────────────
+
+    async def replace_tool(self, tool_id: str, new_tool: Tool) -> None:
+        """Swap the in-memory Tool instance for ``tool_id`` in place.
+
+        Used when a stub is upgraded to a live connection (lazy connect) or
+        when a live tool is re-built (reconnect). The persisted ``tools`` row
+        and all ``profile_tools`` / ``tool_configs`` rows are left untouched --
+        only the in-memory mapping changes. This avoids the cascade-delete
+        that ``unregister`` + ``register_*`` would cause, which previously
+        wiped every profile's enabled state except the owner's.
+
+        Fires ``_on_change`` so the OpenPAAgent rebuilds its embedding table
+        (the agent skips stubs, so a stub → live swap must re-emit embeddings
+        to make the newly-connected tool routable).
+        """
+        async with self._lock:
+            if tool_id not in self._tools:
+                raise KeyError(f"Tool '{tool_id}' is not registered")
+            new_tool.tool_id = tool_id
+            self._tools[tool_id] = new_tool
+        self._fire_change()
+
     # ── unregister ─────────────────────────────────────────────────────
 
     async def unregister(self, tool_id: str) -> bool:

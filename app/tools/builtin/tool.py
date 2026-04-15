@@ -190,7 +190,11 @@ class BuiltInToolGroup(Tool):
         )
 
         events: list = []
-        metadata = {"arguments": arguments} if arguments else None
+        metadata: dict = {}
+        if arguments:
+            metadata["arguments"] = arguments
+        if variables:
+            metadata["variables"] = variables
 
         try:
             async for ev in self._adapter.request(

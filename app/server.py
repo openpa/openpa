@@ -136,79 +136,197 @@ class JWTCallContextBuilder(CallContextBuilder):
 # ── persisted-tool hydration ───────────────────────────────────────────────
 
 
+_STUB_ERR_LAZY = "Not connected (disabled by all profiles)"
+
+
+async def _connect_a2a_tool(row: dict):
+    """Build a live A2A tool from a persisted row; fall back to a stub on failure."""
+    url = row["source"]
+    owner = row["owner_profile"]
+    try:
+        return await build_a2a_tool(url=url, owner_profile=owner)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"A2A tool '{url}' unreachable: {e}")
+        return build_a2a_stub(
+            url=url, name=row["name"], owner_profile=owner, error=str(e),
+        )
+
+
+async def _connect_mcp_tool(
+    registry: ToolRegistry,
+    model_group_mgr: ModelGroupManager,
+    row: dict,
+):
+    """Build a live MCP tool from a persisted row; fall back to a stub on failure.
+
+    Preserves startup's LLM-resolution chain: per-tool LLM override via
+    ``config.get_llm_params`` → fallback to ``model_group_mgr`` "low" group.
+    Honors ``full_reasoning`` and the ``stdio`` vs ``http`` transport branch.
+    """
+    url = row["source"]
+    owner = row["owner_profile"]
+    extra = row.get("extra") or {}
+    try:
+        llm_params = registry.config.get_llm_params(row["tool_id"], owner or "admin")
+    except Exception:
+        llm_params = {}
+    llm = None
+    try:
+        if llm_params.get("llm_provider") or llm_params.get("llm_model"):
+            llm = create_llm_provider(
+                provider_name=llm_params.get("llm_provider")
+                    or BaseConfig.get_default_provider(),
+                model_name=llm_params.get("llm_model"),
+                config_storage=model_group_mgr.config_storage,
+                profile=owner or "admin",
+                default_reasoning_effort=llm_params.get("reasoning_effort"),
+            )
+        else:
+            llm = model_group_mgr.create_llm_for_group("low", profile=owner or "admin")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"No LLM for MCP server '{url}': {e}")
+
+    tool = None
+    if llm is not None:
+        try:
+            if extra.get("transport_type") == "stdio":
+                tool = await build_stdio_mcp_tool(
+                    command=extra["command"], args=extra.get("args", []),
+                    env=extra.get("env"), llm=llm, owner_profile=owner,
+                    full_reasoning=bool(llm_params.get("full_reasoning", False)),
+                )
+            else:
+                tool = await build_http_mcp_tool(
+                    url=url, llm=llm, owner_profile=owner,
+                    full_reasoning=bool(llm_params.get("full_reasoning", False)),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"MCP tool '{url}' unreachable: {e}")
+    if tool is None:
+        tool = build_mcp_stub(
+            url=url, name=row["name"], owner_profile=owner,
+            error="LLM not available" if llm is None else "Connection failed",
+            transport_type=extra.get("transport_type", "http"),
+            extra=extra,
+        )
+    return tool
+
+
+def _lazy_a2a_stub_from_row(row: dict):
+    return build_a2a_stub(
+        url=row["source"], name=row["name"],
+        owner_profile=row["owner_profile"], error=_STUB_ERR_LAZY,
+    )
+
+
+def _lazy_mcp_stub_from_row(row: dict):
+    extra = row.get("extra") or {}
+    return build_mcp_stub(
+        url=row["source"], name=row["name"],
+        owner_profile=row["owner_profile"], error=_STUB_ERR_LAZY,
+        transport_type=extra.get("transport_type", "http"),
+        extra=extra,
+    )
+
+
 async def _hydrate_persisted_tools(
     *,
     registry: ToolRegistry,
     model_group_mgr: ModelGroupManager,
 ) -> None:
-    """Reconnect to A2A / MCP tools recorded in the ``tools`` table."""
+    """Hydrate A2A / MCP tools recorded in the ``tools`` table.
 
+    Lazy initialization: only tools with at least one profile having
+    ``enabled = 1`` are actually connected. Everything else is registered
+    as a stub and upgraded on-demand via :func:`connect_persisted_tool`
+    when a user toggles it on in Settings.
+    """
+    enabled_ids = registry.storage.list_tool_ids_enabled_by_any_profile()
     persisted = registry.storage.list_tools()
 
     for row in persisted:
-        if row["tool_type"] != ToolType.A2A.value:
+        tool_type = row["tool_type"]
+        if tool_type not in (ToolType.A2A.value, ToolType.MCP.value):
             continue
-        url = row["source"]
-        owner = row["owner_profile"]
-        try:
-            tool = await build_a2a_tool(url=url, owner_profile=owner)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"A2A tool '{url}' unreachable on startup: {e}")
-            tool = build_a2a_stub(
-                url=url, name=row["name"], owner_profile=owner, error=str(e),
-            )
-        registry._tools[row["tool_id"]] = tool  # type: ignore[attr-defined]
-        tool.tool_id = row["tool_id"]
-
-    for row in persisted:
-        if row["tool_type"] != ToolType.MCP.value:
-            continue
-        url = row["source"]
-        owner = row["owner_profile"]
-        extra = row.get("extra") or {}
-        try:
-            llm_params = registry.config.get_llm_params(row["tool_id"], owner or "admin")
-        except Exception:
-            llm_params = {}
-        llm = None
-        try:
-            if llm_params.get("llm_provider") or llm_params.get("llm_model"):
-                llm = create_llm_provider(
-                    provider_name=llm_params.get("llm_provider")
-                        or BaseConfig.get_default_provider(),
-                    model_name=llm_params.get("llm_model"),
-                    default_reasoning_effort=llm_params.get("reasoning_effort"),
-                )
+        tool_id = row["tool_id"]
+        if tool_id in enabled_ids:
+            if tool_type == ToolType.A2A.value:
+                tool = await _connect_a2a_tool(row)
             else:
-                llm = model_group_mgr.create_llm_for_group("low", profile=owner or "admin")
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"No LLM for MCP server '{url}': {e}")
-
-        tool = None
-        if llm is not None:
-            try:
-                if extra.get("transport_type") == "stdio":
-                    tool = await build_stdio_mcp_tool(
-                        command=extra["command"], args=extra.get("args", []),
-                        env=extra.get("env"), llm=llm, owner_profile=owner,
-                        full_reasoning=bool(llm_params.get("full_reasoning", False)),
-                    )
-                else:
-                    tool = await build_http_mcp_tool(
-                        url=url, llm=llm, owner_profile=owner,
-                        full_reasoning=bool(llm_params.get("full_reasoning", False)),
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"MCP tool '{url}' unreachable on startup: {e}")
-        if tool is None:
-            tool = build_mcp_stub(
-                url=url, name=row["name"], owner_profile=owner,
-                error="LLM not available" if llm is None else "Connection failed",
-                transport_type=extra.get("transport_type", "http"),
-                extra=extra,
+                tool = await _connect_mcp_tool(registry, model_group_mgr, row)
+        else:
+            if tool_type == ToolType.A2A.value:
+                tool = _lazy_a2a_stub_from_row(row)
+            else:
+                tool = _lazy_mcp_stub_from_row(row)
+            logger.info(
+                f"{tool_type.upper()} tool '{row['name']}' (tool_id={tool_id}) "
+                f"registered as stub — no profile has it enabled"
             )
-        registry._tools[row["tool_id"]] = tool  # type: ignore[attr-defined]
-        tool.tool_id = row["tool_id"]
+        registry._tools[tool_id] = tool  # type: ignore[attr-defined]
+        tool.tool_id = tool_id
+
+
+# ── lazy connect (runtime) ─────────────────────────────────────────────────
+
+_pending_connects: dict[str, asyncio.Task] = {}
+
+
+async def connect_persisted_tool(
+    registry: ToolRegistry,
+    model_group_mgr: ModelGroupManager,
+    tool_id: str,
+) -> tuple[bool, str | None]:
+    """Upgrade a stub A2A/MCP tool to a live connection, in place.
+
+    Returns ``(success, error_message)``:
+    - ``(True, None)`` — tool is now connected (or was already connected).
+    - ``(False, "...")`` — connection attempt failed; stub remains in place.
+
+    Concurrent calls for the same ``tool_id`` share a single in-flight task,
+    so rapid toggle-on/off/on clicks collapse to one connection attempt.
+    Callers that want fire-and-forget semantics should wrap in
+    ``asyncio.create_task(...)``.
+    """
+    existing = _pending_connects.get(tool_id)
+    if existing is not None and not existing.done():
+        return await existing
+
+    async def _do() -> tuple[bool, str | None]:
+        try:
+            tool = registry.get(tool_id)
+            if tool is None:
+                return False, f"Tool '{tool_id}' not registered"
+            if tool.tool_type not in (ToolType.A2A, ToolType.MCP):
+                return False, f"Tool '{tool_id}' is not an A2A/MCP tool"
+            if not getattr(tool, "is_stub", False):
+                return True, None  # already connected
+
+            row = registry.storage.get_tool(tool_id)
+            if row is None:
+                return False, f"Tool '{tool_id}' not persisted"
+
+            if tool.tool_type is ToolType.A2A:
+                new_tool = await _connect_a2a_tool(row)
+            else:
+                new_tool = await _connect_mcp_tool(registry, model_group_mgr, row)
+
+            if getattr(new_tool, "is_stub", False):
+                err = getattr(new_tool, "connection_error", None) or "connection failed"
+                return False, str(err)
+            await registry.replace_tool(tool_id, new_tool)
+            logger.info(f"Lazy-connected tool '{tool_id}'")
+            return True, None
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"Lazy connect failed for '{tool_id}'")
+            return False, str(e)
+
+    task = asyncio.create_task(_do())
+    _pending_connects[tool_id] = task
+    try:
+        return await task
+    finally:
+        _pending_connects.pop(tool_id, None)
 
 
 # ── main ───────────────────────────────────────────────────────────────────
@@ -246,6 +364,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             config_manager=config_manager,
             llm_factory=_builtin_llm_factory,
             setup_profile="admin",
+            config_storage=config_storage,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Built-in tool registration failed: {e}")
@@ -403,6 +522,9 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             logger.warning(f"Failed to create MCP LLM: {e}")
             return None
 
+    async def _connect_persisted_tool(tool_id: str) -> tuple[bool, str | None]:
+        return await connect_persisted_tool(registry, model_group_mgr, tool_id)
+
     routes.extend(get_api_routes(
         registry=registry,
         pending_return_urls=_pending_return_urls,
@@ -410,6 +532,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         conversation_storage=conversation_storage,
         config_storage=config_storage,
         on_first_setup=on_first_setup,
+        connect_persisted_tool=_connect_persisted_tool,
     ))
 
     middleware_stack = [

@@ -221,13 +221,18 @@ class BuiltInToolAdapter:
         function_calls: List[Dict] = []
 
         logger.debug(messages)
+        logger.info(
+            f"[Built-in '{self.name}'] Invoking child LLM | "
+            f"provider={self._llm.provider_name}, model={self._llm.model_label}, "
+            f"reasoning_effort={getattr(self._llm, 'default_reasoning_effort', None)}, "
+            f"full_reasoning={self._full_reasoning}"
+        )
         try:
             async for response in self._llm.chat_completion(
                 messages=messages,
                 tools=available_tools if available_tools else None,
                 tool_choice="auto" if available_tools else None,
                 temperature=1,
-                reasoning_effort="low",
             ):
                 logger.debug(response)
                 if response["type"] == ChatCompletionTypeEnum.CONTENT:
@@ -275,6 +280,10 @@ class BuiltInToolAdapter:
                     BaseConfig.OPENPA_WORKING_DIR, profile
                 )
 
+                # Inject the active profile name so tools can scope per-profile
+                # state (e.g. browser keeps a separate Chrome profile per OpenPA profile).
+                tool_args["_profile"] = profile
+
                 # Inject arguments from metadata (e.g., latitude/longitude)
                 if metadata and "arguments" in metadata:
                     meta_arguments = metadata["arguments"]
@@ -282,6 +291,11 @@ class BuiltInToolAdapter:
                         for arg_key, arg_value in meta_arguments.items():
                             if arg_key not in tool_args:
                                 tool_args[arg_key] = arg_value
+
+                # Inject tool config variables so tools can access
+                # required_config values (e.g. API keys, URLs) at runtime.
+                if metadata and "variables" in metadata:
+                    tool_args["_variables"] = metadata["variables"]
 
                 logger.info(f"Built-in adapter executing tool '{tool_name}' with args: {tool_args}")
 
@@ -383,12 +397,17 @@ class BuiltInToolAdapter:
                         })
 
                     # Second LLM call (no tools, just generate answer)
+                    logger.info(
+                        f"[Built-in '{self.name}'] Invoking child LLM (full reasoning pass) | "
+                        f"provider={self._llm.provider_name}, model={self._llm.model_label}, "
+                        f"reasoning_effort={getattr(self._llm, 'default_reasoning_effort', None)}, "
+                        f"full_reasoning={self._full_reasoning}"
+                    )
                     reasoning_content_parts: List[str] = []
                     async for response in self._llm.chat_completion(
                         messages=second_pass_messages,
                         tools=None,
                         temperature=1,
-                        reasoning_effort="low",
                     ):
                         if response["type"] == ChatCompletionTypeEnum.CONTENT:
                             content = response.get("data")

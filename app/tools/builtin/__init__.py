@@ -23,6 +23,7 @@ from typing import Optional
 
 from app.config.settings import BaseConfig
 from app.lib.llm.base import LLMProvider
+from app.lib.llm.factory import create_llm_provider
 from app.tools.builtin.adapter import BuiltInToolAdapter
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.tools.builtin.tool import BuiltInToolGroup
@@ -50,6 +51,7 @@ _BUILTIN_MODULE_NAMES: tuple[str, ...] = (
     "weather",
     "gg_calendar",
     "gg_places",
+    "browser",
 )
 
 
@@ -110,6 +112,7 @@ async def register_builtin_tools(
     config_manager: ToolConfigManager,
     llm_factory,
     setup_profile: str = "admin",
+    config_storage=None,
 ) -> None:
     """Register all built-in tool groups from ``_BUILTIN_MODULE_NAMES``.
 
@@ -179,14 +182,40 @@ async def register_builtin_tools(
                 oauth_config=populated, server_name=server_name,
             )
 
+        # Read persisted LLM params from DB (mirrors MCP hydration in server.py).
+        # Per-tool overrides win over the model-group fallback factory.
+        tool_id_for_config = slugify(server_name)
         try:
-            llm = llm_factory(module_name, setup_profile)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                f"No LLM available for built-in tool '{server_name}': {e}. "
-                "Registering as unbound -- will be rebound after setup completes."
-            )
-            llm = None
+            _llm_params = config_manager.get_llm_params(tool_id_for_config, setup_profile)
+        except Exception:  # noqa: BLE001
+            _llm_params = {}
+
+        llm: Optional[LLMProvider] = None
+        if _llm_params.get("llm_provider") or _llm_params.get("llm_model"):
+            try:
+                llm = create_llm_provider(
+                    provider_name=_llm_params.get("llm_provider")
+                        or BaseConfig.get_default_provider(),
+                    model_name=_llm_params.get("llm_model") or None,
+                    config_storage=config_storage,
+                    profile=setup_profile,
+                    default_reasoning_effort=_llm_params.get("reasoning_effort"),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"Per-tool LLM hydrate failed for '{server_name}': {e}. "
+                    "Falling back to default model-group LLM."
+                )
+
+        if llm is None:
+            try:
+                llm = llm_factory(module_name, setup_profile)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"No LLM available for built-in tool '{server_name}': {e}. "
+                    "Registering as unbound -- will be rebound after setup completes."
+                )
+                llm = None
 
         group = BuiltInToolGroup(
             config_name=module_name,
@@ -197,7 +226,7 @@ async def register_builtin_tools(
             arguments_schema=tool_info.get("arguments") or None,
             oauth_provider=oauth_provider,
             prepare_tools=prepare_tools_fn,
-            full_reasoning=False,
+            full_reasoning=bool(_llm_params.get("full_reasoning", False)),
             server_instructions=instructions or None,
             llm_factory=llm_factory,
         )

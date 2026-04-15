@@ -1,0 +1,1281 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link "VnExpress - Bao tieng Viet nhieu nguoi xem nhat" [ref=e5] [cursor=pointer]:
+        - /url: https://vnexpress.net
+        - img "VnExpress - Bao tieng Viet nhieu nguoi xem nhat" [ref=e6]
+      - generic "TP HCM hiện tại 32 độ" [ref=e7] [cursor=pointer]:
+        - generic [ref=e8]:
+          - text: TP HCM
+          - link "Mặc định" [ref=e10]:
+            - /url: javascript:void(0);
+            - generic [ref=e11]: Mặc định
+            - img [ref=e12]
+        - generic [ref=e14]:
+          - img [ref=e15]
+          - generic [ref=e18]:
+            - text: "32"
+            - superscript [ref=e19]: o
+          - generic [ref=e20]:
+            - text: Thời tiết từng địa phương
+            - generic [ref=e21]: ×
+      - generic [ref=e22]:
+        - link "Mới nhất" [ref=e23] [cursor=pointer]:
+          - /url: https://vnexpress.net/tin-tuc-24h
+        - generic [ref=e25] [cursor=pointer]: Tin theo khu vực
+        - link "International" [ref=e26] [cursor=pointer]:
+          - /url: https://e.vnexpress.net/
+          - img [ref=e27]
+          - text: International
+        - generic [ref=e29]:
+          - textbox "Tìm kiếm"
+          - button "Tìm kiếm" [ref=e30] [cursor=pointer]:
+            - img [ref=e31]
+        - list [ref=e36]:
+          - listitem [ref=e37]:
+            - link "Đăng nhập" [ref=e38] [cursor=pointer]:
+              - /url: javascript:void(0);
+              - img [ref=e39]
+              - text: Đăng nhập
+          - listitem [ref=e41] [cursor=pointer]:
+            - link [ref=e42]:
+              - /url: javascript:;
+              - img [ref=e43]
+  - navigation [ref=e46]:
+    - list [ref=e47]:
+      - listitem [ref=e48]:
+        - link "Trang chủ" [ref=e49] [cursor=pointer]:
+          - /url: https://vnexpress.net
+          - img [ref=e50]
+          - img [ref=e52]
+      - listitem [ref=e54]:
+        - link "VnE-GO" [ref=e55] [cursor=pointer]:
+          - /url: https://vnexpress.net/vne-go
+      - listitem [ref=e56]:
+        - link "Thời sự" [ref=e57] [cursor=pointer]:
+          - /url: https://vnexpress.net/thoi-su
+      - listitem [ref=e58]:
+        - link "Thế giới" [ref=e59] [cursor=pointer]:
+          - /url: https://vnexpress.net/the-gioi
+      - listitem [ref=e60]:
+        - link "Kinh doanh" [ref=e61] [cursor=pointer]:
+          - /url: https://vnexpress.net/kinh-doanh
+      - listitem [ref=e62]:
+        - link "Khoa học công nghệ" [ref=e63] [cursor=pointer]:
+          - /url: https://vnexpress.net/khoa-hoc-cong-nghe
+      - listitem [ref=e64]:
+        - link "Góc nhìn" [ref=e65] [cursor=pointer]:
+          - /url: https://vnexpress.net/goc-nhin
+      - listitem [ref=e66]:
+        - link "Spotlight" [ref=e67] [cursor=pointer]:
+          - /url: https://vnexpress.net/spotlight
+      - listitem [ref=e68]:
+        - link "Bất động sản" [ref=e69] [cursor=pointer]:
+          - /url: https://vnexpress.net/bat-dong-san
+      - listitem [ref=e70]:
+        - link "Sức khỏe" [ref=e71] [cursor=pointer]:
+          - /url: https://vnexpress.net/suc-khoe
+      - listitem [ref=e72]:
+        - link "Giải trí" [ref=e73] [cursor=pointer]:
+          - /url: https://vnexpress.net/giai-tri
+      - listitem [ref=e74]:
+        - link "Thể thao" [ref=e75] [cursor=pointer]:
+          - /url: https://vnexpress.net/the-thao
+      - listitem [ref=e76]:
+        - link "Pháp luật" [ref=e77] [cursor=pointer]:
+          - /url: https://vnexpress.net/phap-luat
+      - listitem [ref=e78]:
+        - link "Giáo dục" [ref=e79] [cursor=pointer]:
+          - /url: https://vnexpress.net/giao-duc
+      - listitem [ref=e80]:
+        - link "Đời sống" [ref=e81] [cursor=pointer]:
+          - /url: https://vnexpress.net/doi-song
+      - listitem [ref=e82]:
+        - link "Xe" [ref=e83] [cursor=pointer]:
+          - /url: https://vnexpress.net/oto-xe-may
+      - listitem [ref=e84]:
+        - link "Du lịch" [ref=e85] [cursor=pointer]:
+          - /url: https://vnexpress.net/du-lich
+      - listitem [ref=e86]:
+        - link "Ảnh" [ref=e87] [cursor=pointer]:
+          - /url: https://vnexpress.net/anh
+      - listitem [ref=e88]:
+        - link "Infographic" [ref=e89] [cursor=pointer]:
+          - /url: https://vnexpress.net/infographics
+      - listitem [ref=e90]:
+        - link "Ý kiến" [ref=e91] [cursor=pointer]:
+          - /url: https://vnexpress.net/y-kien
+      - listitem [ref=e92]:
+        - link "Tâm sự" [ref=e93] [cursor=pointer]:
+          - /url: https://vnexpress.net/tam-su
+      - listitem [ref=e94]:
+        - link "Thư giãn" [ref=e95] [cursor=pointer]:
+          - /url: https://vnexpress.net/thu-gian
+      - listitem [ref=e96]:
+        - link "Tất cả" [ref=e97] [cursor=pointer]:
+          - /url: javascript:;
+          - text: Tất cả
+    - link [ref=e100] [cursor=pointer]:
+      - /url: javascript:;
+      - img [ref=e101]
+  - generic [ref=e104]:
+    - generic [ref=e106]:
+      - article [ref=e107]:
+        - link "Trung Quốc bắn 21 loạt đại bác chào mừng Tổng Bí thư, Chủ tịch nước Tô Lâm" [ref=e109] [cursor=pointer]:
+          - /url: https://vnexpress.net/trung-quoc-ban-21-loat-dai-bac-chao-mung-tong-bi-thu-chu-tich-nuoc-to-lam-5062578.html
+          - img "Trung Quốc bắn 21 loạt đại bác chào mừng Tổng Bí thư, Chủ tịch nước Tô Lâm" [ref=e110]
+        - heading "Trung Quốc bắn 21 loạt đại bác chào mừng Tổng Bí thư, Chủ tịch nước Tô Lâm" [level=3] [ref=e111]:
+          - link "Trung Quốc bắn 21 loạt đại bác chào mừng Tổng Bí thư, Chủ tịch nước Tô Lâm" [ref=e112] [cursor=pointer]:
+            - /url: https://vnexpress.net/trung-quoc-ban-21-loat-dai-bac-chao-mung-tong-bi-thu-chu-tich-nuoc-to-lam-5062578.html
+        - paragraph [ref=e113]:
+          - link "Tổng Bí thư, Chủ tịch Trung Quốc Tập Cận Bình chủ trì lễ đón Tổng Bí thư, Chủ tịch nước Tô Lâm tại Đại lễ đường Nhân dân Bắc Kinh với 21 loạt đại bác chào mừng." [ref=e114] [cursor=pointer]:
+            - /url: https://vnexpress.net/trung-quoc-ban-21-loat-dai-bac-chao-mung-tong-bi-thu-chu-tich-nuoc-to-lam-5062578.html
+        - paragraph [ref=e115]:
+          - generic [ref=e116]: 51' trước
+          - link "Thế giới" [ref=e117] [cursor=pointer]:
+            - /url: /the-gioi
+      - list [ref=e121]:
+        - listitem [ref=e122]:
+          - link "Phối cảnh đường sắt cao tốc đầu tiên vừa được khởi công" [ref=e124] [cursor=pointer]:
+            - /url: https://vnexpress.net/phoi-canh-duong-sat-cao-toc-dau-tien-vua-duoc-khoi-cong-5062162.html
+            - img "Phối cảnh đường sắt cao tốc đầu tiên vừa được khởi công" [ref=e125]
+            - img [ref=e127]
+          - heading "Phối cảnh đường sắt cao tốc đầu tiên vừa được khởi công 70" [level=3] [ref=e129]:
+            - link "Phối cảnh đường sắt cao tốc đầu tiên vừa được khởi công" [ref=e130] [cursor=pointer]:
+              - /url: https://vnexpress.net/phoi-canh-duong-sat-cao-toc-dau-tien-vua-duoc-khoi-cong-5062162.html
+            - link "70" [ref=e132] [cursor=pointer]:
+              - /url: https://vnexpress.net/phoi-canh-duong-sat-cao-toc-dau-tien-vua-duoc-khoi-cong-5062162.html#box_comment_vne
+              - img [ref=e133]
+              - text: "70"
+        - listitem [ref=e135]:
+          - link "Không khí lạnh gây mưa giông cho miền Bắc từ đêm mai" [ref=e137] [cursor=pointer]:
+            - /url: https://vnexpress.net/khong-khi-lanh-gay-mua-giong-cho-mien-bac-tu-dem-mai-5062483.html
+            - img "Không khí lạnh gây mưa giông cho miền Bắc từ đêm mai" [ref=e138]
+          - heading "Không khí lạnh gây mưa giông cho miền Bắc từ đêm mai" [level=3] [ref=e139]:
+            - link "Không khí lạnh gây mưa giông cho miền Bắc từ đêm mai" [ref=e140] [cursor=pointer]:
+              - /url: https://vnexpress.net/khong-khi-lanh-gay-mua-giong-cho-mien-bac-tu-dem-mai-5062483.html
+        - listitem [ref=e141]:
+          - link "Góc nhìn" [ref=e142] [cursor=pointer]:
+            - /url: /goc-nhin
+          - article [ref=e143]:
+            - heading "'Không uống là không nể anh'" [level=3] [ref=e144]:
+              - link "'Không uống là không nể anh'" [ref=e145] [cursor=pointer]:
+                - /url: https://vnexpress.net/khong-uong-la-khong-ne-anh-5062425.html
+            - paragraph [ref=e146]:
+              - link "'Ép buộc người khác uống rượu bia' thì bị phạt - nhưng căn cứ chứng minh vi phạm rất mơ hồ." [ref=e147] [cursor=pointer]:
+                - /url: https://vnexpress.net/khong-uong-la-khong-ne-anh-5062425.html
+            - generic [ref=e148]:
+              - paragraph [ref=e149]:
+                - link "Hoàng Hà" [ref=e150] [cursor=pointer]:
+                  - /url: https://vnexpress.net/tac-gia/hoang-ha-2074.html
+                - link "16" [ref=e151] [cursor=pointer]:
+                  - /url: https://vnexpress.net/khong-uong-la-khong-ne-anh-5062425.html#box_comment_vne
+                  - img [ref=e152]
+                  - text: "16"
+              - link "Hoàng Hà" [ref=e155] [cursor=pointer]:
+                - /url: https://vnexpress.net/tac-gia/hoang-ha-2074.html
+    - complementary [ref=e156]
+  - generic [ref=e158]:
+    - generic [ref=e159]:
+      - article [ref=e160]:
+        - heading "Đề xuất nâng ngưỡng thu nhập xác định người phụ thuộc lên 3 triệu đồng" [level=3] [ref=e161]:
+          - link "Đề xuất nâng ngưỡng thu nhập xác định người phụ thuộc lên 3 triệu đồng" [ref=e162] [cursor=pointer]:
+            - /url: https://vnexpress.net/de-xuat-nang-nguong-thu-nhap-xac-dinh-nguoi-phu-thuoc-len-3-trieu-dong-5062475.html
+        - link "Đề xuất nâng ngưỡng thu nhập xác định người phụ thuộc lên 3 triệu đồng" [ref=e164] [cursor=pointer]:
+          - /url: https://vnexpress.net/de-xuat-nang-nguong-thu-nhap-xac-dinh-nguoi-phu-thuoc-len-3-trieu-dong-5062475.html
+          - img "Đề xuất nâng ngưỡng thu nhập xác định người phụ thuộc lên 3 triệu đồng" [ref=e165]
+        - paragraph [ref=e166]:
+          - link "Ngưỡng thu nhập xác định người phụ thuộc có thể tăng lên 3 triệu đồng một tháng khi tính giảm trừ thuế, thay vì 1 triệu đồng như hiện nay." [ref=e167] [cursor=pointer]:
+            - /url: https://vnexpress.net/de-xuat-nang-nguong-thu-nhap-xac-dinh-nguoi-phu-thuoc-len-3-trieu-dong-5062475.html
+      - article [ref=e168]:
+        - heading "Hôm nay bắt đầu xác nhận SIM chính chủ bằng VNeID" [level=3] [ref=e169]:
+          - link "Hôm nay bắt đầu xác nhận SIM chính chủ bằng VNeID" [ref=e170] [cursor=pointer]:
+            - /url: https://vnexpress.net/hom-nay-bat-dau-xac-nhan-sim-chinh-chu-bang-vneid-5062426.html
+        - link "Hôm nay bắt đầu xác nhận SIM chính chủ bằng VNeID" [ref=e172] [cursor=pointer]:
+          - /url: https://vnexpress.net/hom-nay-bat-dau-xac-nhan-sim-chinh-chu-bang-vneid-5062426.html
+          - img "Hôm nay bắt đầu xác nhận SIM chính chủ bằng VNeID" [ref=e173]
+        - paragraph [ref=e174]:
+          - link "Từ ngày 15/4, VNeID sẽ gửi thông báo theo đợt đến người dùng về các số điện thoại họ đang đứng tên, bắt đầu chiến dịch xác nhận thuê bao chính chủ và loại bỏ SIM rác." [ref=e175] [cursor=pointer]:
+            - /url: https://vnexpress.net/hom-nay-bat-dau-xac-nhan-sim-chinh-chu-bang-vneid-5062426.html
+          - link "50" [ref=e177] [cursor=pointer]:
+            - /url: https://vnexpress.net/hom-nay-bat-dau-xac-nhan-sim-chinh-chu-bang-vneid-5062426.html#box_comment_vne
+            - img [ref=e178]
+            - text: "50"
+      - article [ref=e180]:
+        - 'heading "Thủ môn Atletico: ''Chẳng ai cướp gì của Barca''" [level=3] [ref=e181]':
+          - 'link "Thủ môn Atletico: ''Chẳng ai cướp gì của Barca''" [ref=e182] [cursor=pointer]':
+            - /url: https://vnexpress.net/thu-mon-atletico-chang-ai-cuop-gi-cua-barca-5062584.html
+        - 'link "Thủ môn Atletico: ''Chẳng ai cướp gì của Barca''" [ref=e184] [cursor=pointer]':
+          - /url: https://vnexpress.net/thu-mon-atletico-chang-ai-cuop-gi-cua-barca-5062584.html
+          - 'img "Thủ môn Atletico: ''Chẳng ai cướp gì của Barca''" [ref=e185]'
+        - paragraph [ref=e186]:
+          - link "Tây Ban NhaThủ thành Atletico Madrid, Juan Musso bức xúc khi Raphinha cho rằng Barca bị cướp suất vào bán kết Champions League." [ref=e187] [cursor=pointer]:
+            - /url: https://vnexpress.net/thu-mon-atletico-chang-ai-cuop-gi-cua-barca-5062584.html
+      - article [ref=e188]:
+        - heading "Tàu chở 21 người cháy ngùn ngụt ngoài biển Phan Thiết" [level=3] [ref=e189]:
+          - link "Tàu chở 21 người cháy ngùn ngụt ngoài biển Phan Thiết" [ref=e190] [cursor=pointer]:
+            - /url: https://vnexpress.net/tau-cho-21-nguoi-chay-ngun-ngut-ngoai-bien-phan-thiet-5062529.html
+        - link "Tàu chở 21 người cháy ngùn ngụt ngoài biển Phan Thiết" [ref=e192] [cursor=pointer]:
+          - /url: https://vnexpress.net/tau-cho-21-nguoi-chay-ngun-ngut-ngoai-bien-phan-thiet-5062529.html
+        - paragraph [ref=e194]:
+          - link "Lâm ĐồngĐang neo gần bờ sau chuyến đánh bắt, tàu cá bất ngờ bốc cháy dữ dội, 21 người trên tàu nhảy xuống biển và được cứu kịp thời, sáng 15/4." [ref=e195] [cursor=pointer]:
+            - /url: https://vnexpress.net/tau-cho-21-nguoi-chay-ngun-ngut-ngoai-bien-phan-thiet-5062529.html
+      - article [ref=e196]:
+        - heading "Sâu biển, sứa xuất hiện nhiều ở Bãi Sau Vũng Tàu" [level=3] [ref=e197]:
+          - link "Sâu biển, sứa xuất hiện nhiều ở Bãi Sau Vũng Tàu" [ref=e198] [cursor=pointer]:
+            - /url: https://vnexpress.net/sau-bien-sua-xuat-hien-nhieu-o-bai-sau-vung-tau-5062146.html
+        - link "Sâu biển, sứa xuất hiện nhiều ở Bãi Sau Vũng Tàu" [ref=e200] [cursor=pointer]:
+          - /url: https://vnexpress.net/sau-bien-sua-xuat-hien-nhieu-o-bai-sau-vung-tau-5062146.html
+          - img "Sâu biển, sứa xuất hiện nhiều ở Bãi Sau Vũng Tàu" [ref=e201]
+        - paragraph [ref=e202]:
+          - link "TP HCMNhiều du khách bị ngứa rát khi tắm biển do sứa và sâu biển xuất hiện dày đặc ở Bãi Sau, đoạn từ Hòn Bà đến cuối đường Thùy Vân những ngày qua." [ref=e203] [cursor=pointer]:
+            - /url: https://vnexpress.net/sau-bien-sua-xuat-hien-nhieu-o-bai-sau-vung-tau-5062146.html
+          - link "21" [ref=e205] [cursor=pointer]:
+            - /url: https://vnexpress.net/sau-bien-sua-xuat-hien-nhieu-o-bai-sau-vung-tau-5062146.html#box_comment_vne
+            - img [ref=e206]
+            - text: "21"
+      - article [ref=e208]:
+        - heading "Pháp vương Gyalwang Drukpa trở lại Việt Nam" [level=3] [ref=e209]:
+          - link "Pháp vương Gyalwang Drukpa trở lại Việt Nam" [ref=e210] [cursor=pointer]:
+            - /url: https://vnexpress.net/phap-vuong-gyalwang-drukpa-tro-lai-viet-nam-5062480.html
+        - link "Pháp vương Gyalwang Drukpa trở lại Việt Nam" [ref=e212] [cursor=pointer]:
+          - /url: https://vnexpress.net/phap-vuong-gyalwang-drukpa-tro-lai-viet-nam-5062480.html
+          - img "Pháp vương Gyalwang Drukpa trở lại Việt Nam" [ref=e213]
+        - paragraph [ref=e214]:
+          - link "Trở lại Việt Nam lần thứ 13, người đứng đầu Truyền thừa Drukpa cùng tăng đoàn sẽ cử hành pháp hội cầu an ở Mandala Tây Thiên, thỉnh chuông nguyện cầu hòa bình thế giới." [ref=e215] [cursor=pointer]:
+            - /url: https://vnexpress.net/phap-vuong-gyalwang-drukpa-tro-lai-viet-nam-5062480.html
+      - article [ref=e216]:
+        - 'heading "Chuyên gia: ''Miễn vé buýt chưa đủ thu hút người dân bỏ xe máy''" [level=3] [ref=e217]':
+          - 'link "Chuyên gia: ''Miễn vé buýt chưa đủ thu hút người dân bỏ xe máy''" [ref=e218] [cursor=pointer]':
+            - /url: https://vnexpress.net/chuyen-gia-mien-ve-buyt-chua-du-thu-hut-nguoi-dan-bo-xe-may-5062391.html
+        - 'link "Chuyên gia: ''Miễn vé buýt chưa đủ thu hút người dân bỏ xe máy''" [ref=e220] [cursor=pointer]':
+          - /url: https://vnexpress.net/chuyen-gia-mien-ve-buyt-chua-du-thu-hut-nguoi-dan-bo-xe-may-5062391.html
+          - 'img "Chuyên gia: ''Miễn vé buýt chưa đủ thu hút người dân bỏ xe máy''" [ref=e221]'
+        - paragraph [ref=e222]:
+          - link "TP HCMMiễn vé có thể giúp tăng lượng khách trong ngắn hạn, nhưng để người dân bỏ xe cá nhân, tuyến buýt phải đúng giờ, kết nối thuận tiện và dịch vụ tốt, theo chuyên gia." [ref=e223] [cursor=pointer]:
+            - /url: https://vnexpress.net/chuyen-gia-mien-ve-buyt-chua-du-thu-hut-nguoi-dan-bo-xe-may-5062391.html
+          - link "211" [ref=e225] [cursor=pointer]:
+            - /url: https://vnexpress.net/chuyen-gia-mien-ve-buyt-chua-du-thu-hut-nguoi-dan-bo-xe-may-5062391.html#box_comment_vne
+            - img [ref=e226]
+            - text: "211"
+      - article [ref=e228]:
+        - heading "9 năm Trung Quốc phát triển 'thành phố tương lai' Hùng An" [level=3] [ref=e229]:
+          - link "9 năm Trung Quốc phát triển 'thành phố tương lai' Hùng An" [ref=e230] [cursor=pointer]:
+            - /url: https://vnexpress.net/9-nam-trung-quoc-phat-trien-thanh-pho-tuong-lai-hung-an-5062324.html
+        - link "9 năm Trung Quốc phát triển 'thành phố tương lai' Hùng An" [ref=e232] [cursor=pointer]:
+          - /url: https://vnexpress.net/9-nam-trung-quoc-phat-trien-thanh-pho-tuong-lai-hung-an-5062324.html
+          - img "9 năm Trung Quốc phát triển 'thành phố tương lai' Hùng An" [ref=e233]
+        - paragraph [ref=e234]:
+          - link "Sau gần một thập kỷ, Hùng An chuyển mình từ những cánh đồng thành một đô thị xanh, thông minh và đáng sống của Trung Quốc." [ref=e235] [cursor=pointer]:
+            - /url: https://vnexpress.net/9-nam-trung-quoc-phat-trien-thanh-pho-tuong-lai-hung-an-5062324.html
+          - link "39" [ref=e237] [cursor=pointer]:
+            - /url: https://vnexpress.net/9-nam-trung-quoc-phat-trien-thanh-pho-tuong-lai-hung-an-5062324.html#box_comment_vne
+            - img [ref=e238]
+            - text: "39"
+      - article [ref=e240]:
+        - heading "'Đăng ký hộ tịch không theo nơi cư trú có thể triển khai ngay'" [level=3] [ref=e241]:
+          - link "'Đăng ký hộ tịch không theo nơi cư trú có thể triển khai ngay'" [ref=e242] [cursor=pointer]:
+            - /url: https://vnexpress.net/dang-ky-ho-tich-khong-theo-noi-cu-tru-co-the-trien-khai-ngay-5062389.html
+        - link "'Đăng ký hộ tịch không theo nơi cư trú có thể triển khai ngay'" [ref=e244] [cursor=pointer]:
+          - /url: https://vnexpress.net/dang-ky-ho-tich-khong-theo-noi-cu-tru-co-the-trien-khai-ngay-5062389.html
+          - img "'Đăng ký hộ tịch không theo nơi cư trú có thể triển khai ngay'" [ref=e245]
+        - paragraph [ref=e246]:
+          - link "Bộ Tư pháp khẳng định quy định đăng ký hộ tịch không phụ thuộc nơi cư trú không gây quá tải, có thể triển khai ngay nhờ hạ tầng dữ liệu và nhân lực đã được chuẩn bị." [ref=e247] [cursor=pointer]:
+            - /url: https://vnexpress.net/dang-ky-ho-tich-khong-theo-noi-cu-tru-co-the-trien-khai-ngay-5062389.html
+          - link "13" [ref=e249] [cursor=pointer]:
+            - /url: https://vnexpress.net/dang-ky-ho-tich-khong-theo-noi-cu-tru-co-the-trien-khai-ngay-5062389.html#box_comment_vne
+            - img [ref=e250]
+            - text: "13"
+      - article [ref=e252]:
+        - heading "Cách tự xác nhận SIM chính chủ trên VNeID" [level=3] [ref=e253]:
+          - link "Cách tự xác nhận SIM chính chủ trên VNeID" [ref=e254] [cursor=pointer]:
+            - /url: https://vnexpress.net/cach-tu-xac-nhan-sim-chinh-chu-tren-vneid-5062267.html
+        - link "Cách tự xác nhận SIM chính chủ trên VNeID" [ref=e256] [cursor=pointer]:
+          - /url: https://vnexpress.net/cach-tu-xac-nhan-sim-chinh-chu-tren-vneid-5062267.html
+          - img "Cách tự xác nhận SIM chính chủ trên VNeID" [ref=e257]
+          - img [ref=e259]
+        - paragraph [ref=e261]:
+          - link "Kể từ ngày 15/4, người dùng smartphone, sau khi nhận được thông báo, có thể xác thực SIM chính chủ qua ứng dụng VNeID." [ref=e262] [cursor=pointer]:
+            - /url: https://vnexpress.net/cach-tu-xac-nhan-sim-chinh-chu-tren-vneid-5062267.html
+          - link "12" [ref=e264] [cursor=pointer]:
+            - /url: https://vnexpress.net/cach-tu-xac-nhan-sim-chinh-chu-tren-vneid-5062267.html#box_comment_vne
+            - img [ref=e265]
+            - text: "12"
+      - article [ref=e267]:
+        - heading "'Việt Nam có thể nắng nóng khắc nghiệt hơn khi El Nino quay lại'" [level=3] [ref=e268]:
+          - link "'Việt Nam có thể nắng nóng khắc nghiệt hơn khi El Nino quay lại'" [ref=e269] [cursor=pointer]:
+            - /url: https://vnexpress.net/viet-nam-co-the-nang-nong-khac-nghiet-hon-khi-el-nino-quay-lai-5062364.html
+        - link "'Việt Nam có thể nắng nóng khắc nghiệt hơn khi El Nino quay lại'" [ref=e271] [cursor=pointer]:
+          - /url: https://vnexpress.net/viet-nam-co-the-nang-nong-khac-nghiet-hon-khi-el-nino-quay-lai-5062364.html
+          - img "'Việt Nam có thể nắng nóng khắc nghiệt hơn khi El Nino quay lại'" [ref=e272]
+        - paragraph [ref=e273]:
+          - link "El Nino có thể quay lại trong năm nay làm gia tăng nắng nóng, thiếu nước và các hình thái thời tiết cực đoan tại Việt Nam, đặc biệt từ nửa cuối năm, theo TS Trương Bá Kiên." [ref=e274] [cursor=pointer]:
+            - /url: https://vnexpress.net/viet-nam-co-the-nang-nong-khac-nghiet-hon-khi-el-nino-quay-lai-5062364.html
+          - link "26" [ref=e276] [cursor=pointer]:
+            - /url: https://vnexpress.net/viet-nam-co-the-nang-nong-khac-nghiet-hon-khi-el-nino-quay-lai-5062364.html#box_comment_vne
+            - img [ref=e277]
+            - text: "26"
+      - article [ref=e279]:
+        - heading "Nhà thầu xây dựng 'khát' lao động" [level=3] [ref=e280]:
+          - link "Nhà thầu xây dựng 'khát' lao động" [ref=e281] [cursor=pointer]:
+            - /url: https://vnexpress.net/nha-thau-xay-dung-khat-lao-dong-5062104.html
+        - link "Nhà thầu xây dựng 'khát' lao động" [ref=e283] [cursor=pointer]:
+          - /url: https://vnexpress.net/nha-thau-xay-dung-khat-lao-dong-5062104.html
+          - img "Nhà thầu xây dựng 'khát' lao động" [ref=e284]
+        - paragraph [ref=e285]:
+          - link "Thị trường xây dựng đang rơi vào tình trạng thiếu hụt lao động nghiêm trọng khi nhu cầu thi công tăng mạnh trong khi nguồn cung không theo kịp." [ref=e286] [cursor=pointer]:
+            - /url: https://vnexpress.net/nha-thau-xay-dung-khat-lao-dong-5062104.html
+          - link "110" [ref=e288] [cursor=pointer]:
+            - /url: https://vnexpress.net/nha-thau-xay-dung-khat-lao-dong-5062104.html#box_comment_vne
+            - img [ref=e289]
+            - text: "110"
+      - article [ref=e291]:
+        - heading "Barca bị Atletico loại khỏi Champions League" [level=3] [ref=e292]:
+          - link "Barca bị Atletico loại khỏi Champions League" [ref=e293] [cursor=pointer]:
+            - /url: https://vnexpress.net/barca-bi-atletico-loai-khoi-champions-league-5062431.html
+        - link "Barca bị Atletico loại khỏi Champions League" [ref=e295] [cursor=pointer]:
+          - /url: https://vnexpress.net/barca-bi-atletico-loai-khoi-champions-league-5062431.html
+          - img "Barca bị Atletico loại khỏi Champions League" [ref=e296]
+        - paragraph [ref=e297]:
+          - link "Tây Ban NhaGhi hai bàn chỉ sau 24 phút ở lượt về trên sân Metropolitano, Barca vẫn thua Atletico Madrid 2-3 sau hai lượt tứ kết Champions League." [ref=e298] [cursor=pointer]:
+            - /url: https://vnexpress.net/barca-bi-atletico-loai-khoi-champions-league-5062431.html
+          - link "153" [ref=e300] [cursor=pointer]:
+            - /url: https://vnexpress.net/barca-bi-atletico-loai-khoi-champions-league-5062431.html#box_comment_vne
+            - img [ref=e301]
+            - text: "153"
+      - article [ref=e303]:
+        - heading "Phe Cộng hòa có thể hứng chịu hậu quả khi ông Trump công kích Giáo hoàng" [level=3] [ref=e304]:
+          - link "Phe Cộng hòa có thể hứng chịu hậu quả khi ông Trump công kích Giáo hoàng" [ref=e305] [cursor=pointer]:
+            - /url: https://vnexpress.net/phe-cong-hoa-co-the-hung-chiu-hau-qua-khi-ong-trump-cong-kich-giao-hoang-5062108.html
+        - link "Phe Cộng hòa có thể hứng chịu hậu quả khi ông Trump công kích Giáo hoàng" [ref=e307] [cursor=pointer]:
+          - /url: https://vnexpress.net/phe-cong-hoa-co-the-hung-chiu-hau-qua-khi-ong-trump-cong-kich-giao-hoang-5062108.html
+          - img "Phe Cộng hòa có thể hứng chịu hậu quả khi ông Trump công kích Giáo hoàng" [ref=e308]
+        - paragraph [ref=e309]:
+          - link "Việc ông Trump chỉ trích gay gắt Giáo hoàng có thể làm phật lòng nhóm cử tri Công giáo, đe dọa vị thế đảng Cộng hòa trong bầu cử giữa kỳ." [ref=e310] [cursor=pointer]:
+            - /url: https://vnexpress.net/phe-cong-hoa-co-the-hung-chiu-hau-qua-khi-ong-trump-cong-kich-giao-hoang-5062108.html
+      - article [ref=e311]:
+        - heading "Dùng vỏ bọc 4 công ty môi trường, đổ lén hơn 20.000 tấn chất thải" [level=3] [ref=e312]:
+          - link "Dùng vỏ bọc 4 công ty môi trường, đổ lén hơn 20.000 tấn chất thải" [ref=e313] [cursor=pointer]:
+            - /url: https://vnexpress.net/dung-vo-boc-4-cong-ty-moi-truong-do-len-hon-20-000-tan-chat-thai-5062417.html
+        - link "Dùng vỏ bọc 4 công ty môi trường, đổ lén hơn 20.000 tấn chất thải" [ref=e315] [cursor=pointer]:
+          - /url: https://vnexpress.net/dung-vo-boc-4-cong-ty-moi-truong-do-len-hon-20-000-tan-chat-thai-5062417.html
+          - img "Dùng vỏ bọc 4 công ty môi trường, đổ lén hơn 20.000 tấn chất thải" [ref=e316]
+          - img [ref=e318]
+        - paragraph [ref=e320]:
+          - link "TP HCMDưới vỏ bọc doanh nghiệp môi trường, Lê Thị Thùy Trang, 49 tuổi, chỉ đạo thu mua chất thải giá rẻ, không xử lý mà chôn lấp, bán lại và dùng hóa đơn khống để che giấu." [ref=e321] [cursor=pointer]:
+            - /url: https://vnexpress.net/dung-vo-boc-4-cong-ty-moi-truong-do-len-hon-20-000-tan-chat-thai-5062417.html
+      - article [ref=e322]:
+        - heading "Hậu vệ Vũ Văn Thanh cầu hôn bạn gái" [level=3] [ref=e323]:
+          - link "Hậu vệ Vũ Văn Thanh cầu hôn bạn gái" [ref=e324] [cursor=pointer]:
+            - /url: https://vnexpress.net/hau-ve-vu-van-thanh-cau-hon-ban-gai-5062390.html
+        - link "Hậu vệ Vũ Văn Thanh cầu hôn bạn gái" [ref=e326] [cursor=pointer]:
+          - /url: https://vnexpress.net/hau-ve-vu-van-thanh-cau-hon-ban-gai-5062390.html
+          - img "Hậu vệ Vũ Văn Thanh cầu hôn bạn gái" [ref=e327]
+          - img [ref=e329]
+        - paragraph [ref=e331]:
+          - link "Tuyển thủ Vũ Văn Thanh quỳ gối trao nhẫn cầu hôn cho bạn gái Trần Bích Hạnh trong không gian lãng mạn." [ref=e332] [cursor=pointer]:
+            - /url: https://vnexpress.net/hau-ve-vu-van-thanh-cau-hon-ban-gai-5062390.html
+          - link "13" [ref=e334] [cursor=pointer]:
+            - /url: https://vnexpress.net/hau-ve-vu-van-thanh-cau-hon-ban-gai-5062390.html#box_comment_vne
+            - img [ref=e335]
+            - text: "13"
+      - article [ref=e337]:
+        - heading "Giá dầu thế giới quay đầu giảm" [level=3] [ref=e338]:
+          - link "Giá dầu thế giới quay đầu giảm" [ref=e339] [cursor=pointer]:
+            - /url: https://vnexpress.net/gia-dau-the-gioi-quay-dau-giam-5062462.html
+        - link "Giá dầu thế giới quay đầu giảm" [ref=e341] [cursor=pointer]:
+          - /url: https://vnexpress.net/gia-dau-the-gioi-quay-dau-giam-5062462.html
+          - img "Giá dầu thế giới quay đầu giảm" [ref=e342]
+        - paragraph [ref=e343]:
+          - link "Kỳ vọng về cuộc đàm phán lần hai giữa Mỹ và Iran kéo giá dầu thô về sát 90 USD, còn giá vàng vượt 4.800 USD một ounce." [ref=e344] [cursor=pointer]:
+            - /url: https://vnexpress.net/gia-dau-the-gioi-quay-dau-giam-5062462.html
+      - article [ref=e345]:
+        - heading "Gần 200 trụ điện chắn giữa đường nối nút giao lớn nhất TP HCM" [level=3] [ref=e346]:
+          - link "Gần 200 trụ điện chắn giữa đường nối nút giao lớn nhất TP HCM" [ref=e347] [cursor=pointer]:
+            - /url: https://vnexpress.net/gan-200-tru-dien-chan-giua-duong-noi-nut-giao-lon-nhat-tp-hcm-5062386.html
+        - link "Gần 200 trụ điện chắn giữa đường nối nút giao lớn nhất TP HCM" [ref=e349] [cursor=pointer]:
+          - /url: https://vnexpress.net/gan-200-tru-dien-chan-giua-duong-noi-nut-giao-lon-nhat-tp-hcm-5062386.html
+          - img "Gần 200 trụ điện chắn giữa đường nối nút giao lớn nhất TP HCM" [ref=e350]
+        - paragraph [ref=e351]:
+          - link "Dự án đường Nguyễn Thị Định nối nút giao An Phú và vòng xoay Mỹ Thủy (TP Thủ Đức cũ) sắp hoàn thành nhưng còn 200 trụ điện ở giữa mặt đường, tiềm ẩn nguy cơ tai nạn." [ref=e352] [cursor=pointer]:
+            - /url: https://vnexpress.net/gan-200-tru-dien-chan-giua-duong-noi-nut-giao-lon-nhat-tp-hcm-5062386.html
+          - link "28" [ref=e354] [cursor=pointer]:
+            - /url: https://vnexpress.net/gan-200-tru-dien-chan-giua-duong-noi-nut-giao-lon-nhat-tp-hcm-5062386.html#box_comment_vne
+            - img [ref=e355]
+            - text: "28"
+      - article [ref=e357]:
+        - heading "TP HCM sẽ chiếu sáng mỹ thuật công viên 30/4, Tao Đàn" [level=3] [ref=e358]:
+          - link "TP HCM sẽ chiếu sáng mỹ thuật công viên 30/4, Tao Đàn" [ref=e359] [cursor=pointer]:
+            - /url: https://vnexpress.net/tp-hcm-se-chieu-sang-my-thuat-cong-vien-30-4-tao-dan-5062408.html
+        - link "TP HCM sẽ chiếu sáng mỹ thuật công viên 30/4, Tao Đàn" [ref=e361] [cursor=pointer]:
+          - /url: https://vnexpress.net/tp-hcm-se-chieu-sang-my-thuat-cong-vien-30-4-tao-dan-5062408.html
+          - img "TP HCM sẽ chiếu sáng mỹ thuật công viên 30/4, Tao Đàn" [ref=e362]
+        - paragraph [ref=e363]:
+          - link "Công viên 30/4, Tao Đàn cùng nhiều công trình lịch sử, biểu tượng của TP HCM dự kiến được chiếu sáng mỹ thuật, tạo thêm điểm nhấn cảnh quan và sức sống về đêm." [ref=e364] [cursor=pointer]:
+            - /url: https://vnexpress.net/tp-hcm-se-chieu-sang-my-thuat-cong-vien-30-4-tao-dan-5062408.html
+          - link "17" [ref=e366] [cursor=pointer]:
+            - /url: https://vnexpress.net/tp-hcm-se-chieu-sang-my-thuat-cong-vien-30-4-tao-dan-5062408.html#box_comment_vne
+            - img [ref=e367]
+            - text: "17"
+    - generic [ref=e369]:
+      - generic [ref=e370]:
+        - heading "Xung đột Trung Đông" [level=2] [ref=e372]:
+          - link "Xung đột Trung Đông" [ref=e373] [cursor=pointer]:
+            - /url: /topic/xung-dot-trung-dong-28710
+        - generic [ref=e374]:
+          - article [ref=e375]:
+            - link "Israel, Lebanon lần đầu đàm phán trực tiếp sau 33 năm" [ref=e377] [cursor=pointer]:
+              - /url: https://vnexpress.net/israel-lebanon-lan-dau-dam-phan-truc-tiep-sau-33-nam-5062506.html
+              - img "Israel, Lebanon lần đầu đàm phán trực tiếp sau 33 năm" [ref=e378]
+            - generic [ref=e379]:
+              - heading "Israel, Lebanon lần đầu đàm phán trực tiếp sau 33 năm" [level=3] [ref=e380]:
+                - link "Israel, Lebanon lần đầu đàm phán trực tiếp sau 33 năm" [ref=e381] [cursor=pointer]:
+                  - /url: https://vnexpress.net/israel-lebanon-lan-dau-dam-phan-truc-tiep-sau-33-nam-5062506.html
+              - paragraph [ref=e382]:
+                - link "Các nhà ngoại giao cấp cao Lebanon và Israel gặp nhau tại Washington để đàm phán ngừng bắn, trong lần gặp gỡ ..." [ref=e383] [cursor=pointer]:
+                  - /url: https://vnexpress.net/israel-lebanon-lan-dau-dam-phan-truc-tiep-sau-33-nam-5062506.html
+          - article [ref=e384]:
+            - heading "Iran có thể đang cứu bệ tên lửa kẹt trong căn cứ ngầm" [level=3] [ref=e385]:
+              - link "Iran có thể đang cứu bệ tên lửa kẹt trong căn cứ ngầm" [ref=e386] [cursor=pointer]:
+                - /url: https://vnexpress.net/iran-co-the-dang-cuu-be-ten-lua-ket-trong-can-cu-ngam-5062458.html
+            - paragraph [ref=e387]:
+              - link "Ảnh vệ tinh cho thấy Iran đang dọn đất đá, khơi thông lối vào các căn cứ ngầm chứa bệ phóng tên lửa ..." [ref=e388] [cursor=pointer]:
+                - /url: https://vnexpress.net/iran-co-the-dang-cuu-be-ten-lua-ket-trong-can-cu-ngam-5062458.html
+              - link "17" [ref=e390] [cursor=pointer]:
+                - /url: https://vnexpress.net/iran-co-the-dang-cuu-be-ten-lua-ket-trong-can-cu-ngam-5062458.html#box_comment_vne
+                - img [ref=e391]
+                - text: "17"
+          - generic [ref=e393]:
+            - article [ref=e394]:
+              - heading "Mỹ xác nhận mất UAV hơn 200 triệu USD 27" [level=3] [ref=e395]:
+                - link "Mỹ xác nhận mất UAV hơn 200 triệu USD" [ref=e396] [cursor=pointer]:
+                  - /url: https://vnexpress.net/my-xac-nhan-mat-uav-hon-200-trieu-usd-5062442.html
+                - link "27" [ref=e398] [cursor=pointer]:
+                  - /url: https://vnexpress.net/my-xac-nhan-mat-uav-hon-200-trieu-usd-5062442.html#box_comment_vne
+                  - img [ref=e399]
+                  - text: "27"
+            - article [ref=e401]:
+              - 'heading "Ông Vance: Tổng thống Trump muốn đạt ''thỏa thuận lớn'' với Iran" [level=3] [ref=e402]':
+                - 'link "Ông Vance: Tổng thống Trump muốn đạt ''thỏa thuận lớn'' với Iran" [ref=e403] [cursor=pointer]':
+                  - /url: https://vnexpress.net/ong-vance-tong-thong-trump-muon-dat-thoa-thuan-lon-voi-iran-5062440.html
+            - article [ref=e404]:
+              - heading "Loạt thủy lôi giúp Iran phong tỏa eo biển Hormuz" [level=3] [ref=e405]:
+                - link "Loạt thủy lôi giúp Iran phong tỏa eo biển Hormuz" [ref=e406] [cursor=pointer]:
+                  - /url: https://vnexpress.net/loat-thuy-loi-giup-iran-phong-toa-eo-bien-hormuz-5062164.html
+      - generic [ref=e407]:
+        - generic [ref=e408]:
+          - heading "Kinh doanh" [level=2] [ref=e409]:
+            - link "Kinh doanh" [ref=e410] [cursor=pointer]:
+              - /url: /kinh-doanh
+          - link "Quốc tế" [ref=e412] [cursor=pointer]:
+            - /url: /kinh-doanh/quoc-te
+          - link "Doanh nghiệp" [ref=e414] [cursor=pointer]:
+            - /url: /kinh-doanh/doanh-nghiep
+          - link "Hàng hóa" [ref=e416] [cursor=pointer]:
+            - /url: /kinh-doanh/hang-hoa
+          - link "Vĩ mô" [ref=e418] [cursor=pointer]:
+            - /url: /kinh-doanh/vi-mo
+          - link "Ebank" [ref=e420] [cursor=pointer]:
+            - /url: /kinh-doanh/ebank
+          - link "Hậu trường kinh doanh" [ref=e422] [cursor=pointer]:
+            - /url: /topic/hau-truong-doanh-nghiep-doanh-nhan-25880
+        - generic [ref=e423]:
+          - article [ref=e424]:
+            - link "IMF cảnh báo nguy cơ suy thoái toàn cầu vì chiến sự Trung Đông" [ref=e426] [cursor=pointer]:
+              - /url: https://vnexpress.net/imf-canh-bao-nguy-co-suy-thoai-toan-cau-vi-chien-su-trung-dong-5062416.html
+              - img "IMF cảnh báo nguy cơ suy thoái toàn cầu vì chiến sự Trung Đông" [ref=e427]
+            - generic [ref=e428]:
+              - heading "IMF cảnh báo nguy cơ suy thoái toàn cầu vì chiến sự Trung Đông" [level=3] [ref=e429]:
+                - link "IMF cảnh báo nguy cơ suy thoái toàn cầu vì chiến sự Trung Đông" [ref=e430] [cursor=pointer]:
+                  - /url: https://vnexpress.net/imf-canh-bao-nguy-co-suy-thoai-toan-cau-vi-chien-su-trung-dong-5062416.html
+              - paragraph [ref=e431]:
+                - link "Với kịch bản xấu nhất, khi xung đột Trung Đông có thể kéo tăng trưởng toàn cầu về 2% - tiệm cận tình trạng suy ..." [ref=e432] [cursor=pointer]:
+                  - /url: https://vnexpress.net/imf-canh-bao-nguy-co-suy-thoai-toan-cau-vi-chien-su-trung-dong-5062416.html
+          - article [ref=e433]:
+            - heading "Chật vật đánh thức mỏ đất hiếm lớn nhất châu Âu" [level=3] [ref=e434]:
+              - link "Chật vật đánh thức mỏ đất hiếm lớn nhất châu Âu" [ref=e435] [cursor=pointer]:
+                - /url: https://vnexpress.net/chat-vat-danh-thuc-mo-dat-hiem-lon-nhat-chau-au-5062217.html
+            - paragraph [ref=e436]:
+              - link "Dù sở hữu mỏ đất hiếm có trữ lượng lớn nhất châu Âu, Na Uy vẫn chưa thể đưa vào khai thác vì vướng các ..." [ref=e437] [cursor=pointer]:
+                - /url: https://vnexpress.net/chat-vat-danh-thuc-mo-dat-hiem-lon-nhat-chau-au-5062217.html
+          - generic [ref=e438]:
+            - article [ref=e439]:
+              - heading "11 đơn vị xin cấp phép sản xuất vàng miếng" [level=3] [ref=e440]:
+                - link "11 đơn vị xin cấp phép sản xuất vàng miếng" [ref=e441] [cursor=pointer]:
+                  - /url: https://vnexpress.net/11-don-vi-xin-cap-phep-san-xuat-vang-mieng-5062354.html
+            - article [ref=e442]:
+              - heading "VinSpace của ông Phạm Nhật Vượng dự kiến đưa vệ tinh lên quỹ đạo vào 2027 42" [level=3] [ref=e443]:
+                - link "VinSpace của ông Phạm Nhật Vượng dự kiến đưa vệ tinh lên quỹ đạo vào 2027" [ref=e444] [cursor=pointer]:
+                  - /url: https://vnexpress.net/vinspace-cua-ong-pham-nhat-vuong-du-kien-dua-ve-tinh-len-quy-dao-vao-2027-5062290.html
+                - link "42" [ref=e446] [cursor=pointer]:
+                  - /url: https://vnexpress.net/vinspace-cua-ong-pham-nhat-vuong-du-kien-dua-ve-tinh-len-quy-dao-vao-2027-5062290.html#box_comment_vne
+                  - img [ref=e447]
+                  - text: "42"
+            - article [ref=e449]:
+              - heading "VN-Index tăng mạnh ba phiên liên tiếp 10" [level=3] [ref=e450]:
+                - link "VN-Index tăng mạnh ba phiên liên tiếp" [ref=e451] [cursor=pointer]:
+                  - /url: https://vnexpress.net/vn-index-tang-manh-ba-phien-lien-tiep-5062291.html
+                - link "10" [ref=e453] [cursor=pointer]:
+                  - /url: https://vnexpress.net/vn-index-tang-manh-ba-phien-lien-tiep-5062291.html#box_comment_vne
+                  - img [ref=e454]
+                  - text: "10"
+      - generic:
+        - generic [ref=e457]:
+          - link "Xăng RON 95-III 23.540 -2.990 Dầu diesel 32.960 -9.880 VND/lít Từ 15:30 9/4/2026" [ref=e459] [cursor=pointer]:
+            - /url: /chu-de/gia-xang-dau-3026
+            - generic [ref=e460]:
+              - generic [ref=e461]:
+                - generic [ref=e462]:
+                  - generic [ref=e463]: Xăng RON 95-III
+                  - generic [ref=e464]:
+                    - strong [ref=e465]: "23.540"
+                    - generic [ref=e466]: "-2.990"
+                - generic [ref=e467]:
+                  - generic [ref=e468]: Dầu diesel
+                  - generic [ref=e469]:
+                    - strong [ref=e470]: "32.960"
+                    - generic [ref=e471]: "-9.880"
+              - generic [ref=e473]:
+                - text: VND/lít
+                - text: Từ 15:30 9/4/2026
+            - img [ref=e475]
+          - generic [ref=e478]:
+            - generic [ref=e480]:
+              - link "Vàng thế giới Mua 4.824,8 Bán 4.826,8 USD/oz" [ref=e481] [cursor=pointer]:
+                - /url: /chu-de/gia-vang-the-gioi-8314
+                - generic [ref=e482]:
+                  - generic [ref=e483]: Vàng thế giới
+                  - generic [ref=e484]:
+                    - generic [ref=e485]: Mua
+                    - strong [ref=e486]: 4.824,8
+                    - generic [ref=e487]: Bán
+                    - strong [ref=e488]: 4.826,8
+                    - generic [ref=e489]: USD/oz
+              - link "Vàng SJC Mua 171,5 Bán 174,5 tr.đ/lượng" [ref=e490] [cursor=pointer]:
+                - /url: /chu-de/gia-vang-1403
+                - generic [ref=e491]:
+                  - generic [ref=e492]: Vàng SJC
+                  - generic [ref=e493]:
+                    - generic [ref=e494]: Mua
+                    - strong [ref=e495]: 171,5
+                    - generic [ref=e496]: Bán
+                    - strong [ref=e497]: 174,5
+                    - generic [ref=e498]: tr.đ/lượng
+            - link [ref=e500] [cursor=pointer]:
+              - /url: /chu-de/gia-vang-1403
+              - img [ref=e501]
+        - generic [ref=e503]:
+          - 'link "Tiết kiệm tại quầy 1 Tháng: 4.8% 3 Tháng: 4.75% 6 Tháng: 7.1% 9 Tháng: 7.1% 12 Tháng: 7.2%" [ref=e506] [cursor=pointer]':
+            - /url: /chu-de/lai-suat-ngan-hang-3210
+            - heading "Tiết kiệm tại quầy" [level=3] [ref=e507]
+            - generic [ref=e508]:
+              - generic [ref=e509]: "1 Tháng: 4.8%"
+              - generic [ref=e510]: "3 Tháng: 4.75%"
+              - generic [ref=e511]: "6 Tháng: 7.1%"
+              - generic [ref=e512]: "9 Tháng: 7.1%"
+              - generic [ref=e513]: "12 Tháng: 7.2%"
+          - img [ref=e515]
+      - generic [ref=e517]:
+        - generic [ref=e518]:
+          - generic [ref=e519]:
+            - heading "Doanh nghiệp vươn mình" [level=3] [ref=e520]:
+              - link "Doanh nghiệp vươn mình" [ref=e521] [cursor=pointer]:
+                - /url: /kinh-doanh/doanh-nghiep-vuon-minh
+                - img "Doanh nghiệp vươn mình" [ref=e522]
+            - heading "Chính sách" [level=3] [ref=e523]:
+              - link "Chính sách" [ref=e524] [cursor=pointer]:
+                - /url: /kinh-doanh/doanh-nghiep-vuon-minh/chinh-sach
+            - heading "Câu chuyện" [level=3] [ref=e525]:
+              - link "Câu chuyện" [ref=e526] [cursor=pointer]:
+                - /url: /kinh-doanh/doanh-nghiep-vuon-minh/cau-chuyen
+            - heading "Đầu tư" [level=3] [ref=e527]:
+              - link "Đầu tư" [ref=e528] [cursor=pointer]:
+                - /url: /kinh-doanh/doanh-nghiep-vuon-minh/dau-tu
+          - article [ref=e529]:
+            - link "Đà Nẵng hỗ trợ doanh nghiệp nhỏ và vừa tới 200 triệu đồng mỗi năm" [ref=e531] [cursor=pointer]:
+              - /url: https://vnexpress.net/da-nang-ho-tro-doanh-nghiep-nho-va-vua-toi-200-trieu-dong-moi-nam-5061652.html
+              - img "Đà Nẵng hỗ trợ doanh nghiệp nhỏ và vừa tới 200 triệu đồng mỗi năm" [ref=e532]
+            - heading "Đà Nẵng hỗ trợ doanh nghiệp nhỏ và vừa tới 200 triệu đồng mỗi năm" [level=3] [ref=e534]:
+              - link "Đà Nẵng hỗ trợ doanh nghiệp nhỏ và vừa tới 200 triệu đồng mỗi năm" [ref=e535] [cursor=pointer]:
+                - /url: https://vnexpress.net/da-nang-ho-tro-doanh-nghiep-nho-va-vua-toi-200-trieu-dong-moi-nam-5061652.html
+        - generic [ref=e536]:
+          - generic [ref=e537]:
+            - heading "netzero" [level=3] [ref=e538]:
+              - link "netzero" [ref=e539] [cursor=pointer]:
+                - /url: /kinh-doanh/net-zero
+                - img "netzero" [ref=e540]
+            - heading "Cẩm nang" [level=3] [ref=e541]:
+              - link "Cẩm nang" [ref=e542] [cursor=pointer]:
+                - /url: /kinh-doanh/net-zero/cam-nang-net-zero
+            - heading "Doanh nghiệp xanh" [level=3] [ref=e543]:
+              - link "Doanh nghiệp xanh" [ref=e544] [cursor=pointer]:
+                - /url: /kinh-doanh/net-zero/doanh-nghiep-xanh
+          - article [ref=e545]:
+            - link "Sắp có tàu du lịch biển chạy pin đầu tiên trên thế giới" [ref=e547] [cursor=pointer]:
+              - /url: https://vnexpress.net/sap-co-tau-du-lich-bien-chay-pin-dau-tien-tren-the-gioi-5062128.html
+              - img "Sắp có tàu du lịch biển chạy pin đầu tiên trên thế giới" [ref=e548]
+            - heading "Sắp có tàu du lịch biển chạy pin đầu tiên trên thế giới 17" [level=3] [ref=e550]:
+              - link "Sắp có tàu du lịch biển chạy pin đầu tiên trên thế giới" [ref=e551] [cursor=pointer]:
+                - /url: https://vnexpress.net/sap-co-tau-du-lich-bien-chay-pin-dau-tien-tren-the-gioi-5062128.html
+              - link "17" [ref=e553] [cursor=pointer]:
+                - /url: https://vnexpress.net/sap-co-tau-du-lich-bien-chay-pin-dau-tien-tren-the-gioi-5062128.html#box_comment_vne
+                - img [ref=e554]
+                - text: "17"
+      - generic [ref=e556]:
+        - generic [ref=e557]:
+          - heading "Bất động sản" [level=2] [ref=e558]:
+            - link "Bất động sản" [ref=e559] [cursor=pointer]:
+              - /url: /bat-dong-san
+          - link "Chính sách" [ref=e561] [cursor=pointer]:
+            - /url: /bat-dong-san/chinh-sach
+          - link "Thị trường" [ref=e563] [cursor=pointer]:
+            - /url: /bat-dong-san/thi-truong
+          - link "Dự án" [ref=e565] [cursor=pointer]:
+            - /url: /bat-dong-san/du-an
+          - link "Không gian sống" [ref=e567] [cursor=pointer]:
+            - /url: /bat-dong-san/khong-gian-song
+          - link "Tư vấn" [ref=e569] [cursor=pointer]:
+            - /url: /bat-dong-san/tu-van
+        - generic [ref=e570]:
+          - article [ref=e571]:
+            - link "Biệt thự mái ngói Thái hiện đại cho gia đình ba thế hệ" [ref=e573] [cursor=pointer]:
+              - /url: https://vnexpress.net/biet-thu-mai-ngoi-thai-hien-dai-cho-gia-dinh-ba-the-he-5061945.html
+              - img "Biệt thự mái ngói Thái hiện đại cho gia đình ba thế hệ" [ref=e574]
+              - img [ref=e576]
+            - generic [ref=e578]:
+              - heading "Biệt thự mái ngói Thái hiện đại cho gia đình ba thế hệ" [level=3] [ref=e579]:
+                - link "Biệt thự mái ngói Thái hiện đại cho gia đình ba thế hệ" [ref=e580] [cursor=pointer]:
+                  - /url: https://vnexpress.net/biet-thu-mai-ngoi-thai-hien-dai-cho-gia-dinh-ba-the-he-5061945.html
+              - paragraph [ref=e581]:
+                - link "Căn biệt thự hơn 1.300 m2 được thiết kế cho gia đình ba thế hệ, mỗi thành viên có khu riêng độc lập với đủ tiện ..." [ref=e582] [cursor=pointer]:
+                  - /url: https://vnexpress.net/biet-thu-mai-ngoi-thai-hien-dai-cho-gia-dinh-ba-the-he-5061945.html
+                - link "11" [ref=e584] [cursor=pointer]:
+                  - /url: https://vnexpress.net/biet-thu-mai-ngoi-thai-hien-dai-cho-gia-dinh-ba-the-he-5061945.html#box_comment_vne
+                  - img [ref=e585]
+                  - text: "11"
+          - article [ref=e587]:
+            - heading "Mỹ thiếu 10 triệu căn nhà" [level=3] [ref=e588]:
+              - link "Mỹ thiếu 10 triệu căn nhà" [ref=e589] [cursor=pointer]:
+                - /url: https://vnexpress.net/my-thieu-10-trieu-can-nha-5062250.html
+            - paragraph [ref=e590]:
+              - link "Hậu quả của khủng hoảng tài chính toàn cầu năm 2008 khiến Mỹ thiếu hụt 10 triệu căn nhà đến nay, theo Nhà Trắng." [ref=e591] [cursor=pointer]:
+                - /url: https://vnexpress.net/my-thieu-10-trieu-can-nha-5062250.html
+          - generic [ref=e592]:
+            - article [ref=e593]:
+              - heading "TP HCM vướng cấp phép xây dựng nhà ở do thiếu quy hoạch 10" [level=3] [ref=e594]:
+                - link "TP HCM vướng cấp phép xây dựng nhà ở do thiếu quy hoạch" [ref=e595] [cursor=pointer]:
+                  - /url: https://vnexpress.net/tp-hcm-vuong-cap-phep-xay-dung-nha-o-do-thieu-quy-hoach-5062191.html
+                - link "10" [ref=e597] [cursor=pointer]:
+                  - /url: https://vnexpress.net/tp-hcm-vuong-cap-phep-xay-dung-nha-o-do-thieu-quy-hoach-5062191.html#box_comment_vne
+                  - img [ref=e598]
+                  - text: "10"
+            - article [ref=e600]:
+              - heading "Giầy Thượng Đình muốn xây khu căn hộ, văn phòng gần 10.000 tỷ đồng ở 277 Nguyễn Trãi 16" [level=3] [ref=e601]:
+                - link "Giầy Thượng Đình muốn xây khu căn hộ, văn phòng gần 10.000 tỷ đồng ở 277 Nguyễn Trãi" [ref=e602] [cursor=pointer]:
+                  - /url: https://vnexpress.net/giay-thuong-dinh-muon-xay-khu-can-ho-van-phong-gan-10-000-ty-dong-o-277-nguyen-trai-5062119.html
+                - link "16" [ref=e604] [cursor=pointer]:
+                  - /url: https://vnexpress.net/giay-thuong-dinh-muon-xay-khu-can-ho-van-phong-gan-10-000-ty-dong-o-277-nguyen-trai-5062119.html#box_comment_vne
+                  - img [ref=e605]
+                  - text: "16"
+            - article [ref=e607]:
+              - heading "Nhà đầu tư căn hộ giảm giá để chốt nhanh giao dịch 32" [level=3] [ref=e608]:
+                - link "Nhà đầu tư căn hộ giảm giá để chốt nhanh giao dịch" [ref=e609] [cursor=pointer]:
+                  - /url: https://vnexpress.net/nha-dau-tu-can-ho-giam-gia-de-chot-nhanh-giao-dich-5059923.html
+                - link "32" [ref=e611] [cursor=pointer]:
+                  - /url: https://vnexpress.net/nha-dau-tu-can-ho-giam-gia-de-chot-nhanh-giao-dich-5059923.html#box_comment_vne
+                  - img [ref=e612]
+                  - text: "32"
+      - generic [ref=e614]:
+        - generic [ref=e615]:
+          - heading "Thể thao" [level=2] [ref=e616]:
+            - link "Thể thao" [ref=e617] [cursor=pointer]:
+              - /url: /the-thao
+          - link "Bóng đá" [ref=e619] [cursor=pointer]:
+            - /url: /bong-da
+          - link "Tennis" [ref=e621] [cursor=pointer]:
+            - /url: /the-thao/tennis
+          - link "Marathon" [ref=e623] [cursor=pointer]:
+            - /url: /the-thao/marathon
+          - link "Lịch thi đấu" [ref=e625] [cursor=pointer]:
+            - /url: /the-thao/du-lieu-bong-da
+          - link "V-League" [ref=e627] [cursor=pointer]:
+            - /url: /the-thao/v-league
+          - link "GameVerse 2026" [ref=e629] [cursor=pointer]:
+            - /url: /the-thao/gameverse
+        - generic [ref=e630]:
+          - article [ref=e631]:
+            - link "Chủ tịch Napoli muốn trận đấu rút xuống 50 phút, bỏ thẻ đỏ" [ref=e633] [cursor=pointer]:
+              - /url: https://vnexpress.net/chu-tich-napoli-muon-tran-dau-rut-xuong-50-phut-bo-the-do-5062405.html
+              - img "Chủ tịch Napoli muốn trận đấu rút xuống 50 phút, bỏ thẻ đỏ" [ref=e634]
+            - generic [ref=e635]:
+              - heading "Chủ tịch Napoli muốn trận đấu rút xuống 50 phút, bỏ thẻ đỏ" [level=3] [ref=e636]:
+                - link "Chủ tịch Napoli muốn trận đấu rút xuống 50 phút, bỏ thẻ đỏ" [ref=e637] [cursor=pointer]:
+                  - /url: https://vnexpress.net/chu-tich-napoli-muon-tran-dau-rut-xuong-50-phut-bo-the-do-5062405.html
+              - paragraph [ref=e638]:
+                - link "Tỷ phú điện ảnh người Italy Aurelio De Laurentiis - chủ sở hữu CLB Napoli - đưa ra hàng loạt đề xuất, từ rút ..." [ref=e639] [cursor=pointer]:
+                  - /url: https://vnexpress.net/chu-tich-napoli-muon-tran-dau-rut-xuong-50-phut-bo-the-do-5062405.html
+          - article [ref=e640]:
+            - heading "Tiền vệ Barca đổ máu ở Champions League" [level=3] [ref=e641]:
+              - link "Tiền vệ Barca đổ máu ở Champions League" [ref=e642] [cursor=pointer]:
+                - /url: https://vnexpress.net/tien-ve-barca-do-mau-o-champions-league-5062488.html
+            - paragraph [ref=e643]:
+              - link "Tây Ban NhaTiền vệ Fermin Lopez đổ nhiều máu sau khi bị thủ thành Juan Musso đạp trúng mặt, trong trận Barca thắng Atletico ..." [ref=e644] [cursor=pointer]:
+                - /url: https://vnexpress.net/tien-ve-barca-do-mau-o-champions-league-5062488.html
+              - link "16" [ref=e646] [cursor=pointer]:
+                - /url: https://vnexpress.net/tien-ve-barca-do-mau-o-champions-league-5062488.html#box_comment_vne
+                - img [ref=e647]
+                - text: "16"
+          - generic [ref=e649]:
+            - article [ref=e650]:
+              - 'heading "HLV Simeone: ''Atletico đi tiếp vì tấn công Barca'' 26" [level=3] [ref=e651]':
+                - 'link "HLV Simeone: ''Atletico đi tiếp vì tấn công Barca''" [ref=e652] [cursor=pointer]':
+                  - /url: https://vnexpress.net/hlv-simeone-atletico-di-tiep-vi-tan-cong-barca-5062438.html
+                - link "26" [ref=e654] [cursor=pointer]:
+                  - /url: https://vnexpress.net/hlv-simeone-atletico-di-tiep-vi-tan-cong-barca-5062438.html#box_comment_vne
+                  - img [ref=e655]
+                  - text: "26"
+            - article [ref=e657]:
+              - 'heading "Raphinha: ''Barca bị cướp suất vào bán kết Champions League'' 75" [level=3] [ref=e658]':
+                - 'link "Raphinha: ''Barca bị cướp suất vào bán kết Champions League''" [ref=e659] [cursor=pointer]':
+                  - /url: https://vnexpress.net/raphinha-barca-bi-cuop-suat-vao-ban-ket-champions-league-5062437.html
+                - link "75" [ref=e661] [cursor=pointer]:
+                  - /url: https://vnexpress.net/raphinha-barca-bi-cuop-suat-vao-ban-ket-champions-league-5062437.html#box_comment_vne
+                  - img [ref=e662]
+                  - text: "75"
+            - article [ref=e664]:
+              - heading "Sindarov giành quyền thách đấu Vua cờ Gukesh" [level=3] [ref=e665]:
+                - link "Sindarov giành quyền thách đấu Vua cờ Gukesh" [ref=e666] [cursor=pointer]:
+                  - /url: https://vnexpress.net/sindarov-gianh-quyen-thach-dau-vua-co-gukesh-5062435.html
+      - generic [ref=e668]:
+        - button "Next slide" [ref=e669] [cursor=pointer]:
+          - img [ref=e670]
+        - generic [ref=e673]:
+          - generic [ref=e674] [cursor=pointer]:
+            - link [ref=e675]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1534912/liverpool-psg#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-1&vn_term=Desktop
+            - generic [ref=e676]:
+              - generic [ref=e677]: KT
+              - generic [ref=e678]: Hôm nay
+            - generic [ref=e679]:
+              - generic [ref=e680]:
+                - img "Liverpool" [ref=e681]
+                - generic [ref=e682]: Liverpool
+              - generic [ref=e683]: "0"
+            - generic [ref=e684]:
+              - generic [ref=e685]:
+                - img "Liverpool" [ref=e686]
+                - generic [ref=e687]: PSG
+              - generic [ref=e688]: "2"
+          - generic [ref=e689] [cursor=pointer]:
+            - link [ref=e690]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1534910/atletico--barca#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-2&vn_term=Desktop
+            - generic [ref=e691]:
+              - generic [ref=e692]: KT
+              - generic [ref=e693]: Hôm nay
+            - generic [ref=e694]:
+              - generic [ref=e695]:
+                - img "Atletico" [ref=e696]
+                - generic [ref=e697]: Atletico
+              - generic [ref=e698]: "1"
+            - generic [ref=e699]:
+              - generic [ref=e700]:
+                - img "Atletico" [ref=e701]
+                - generic [ref=e702]: Barca
+              - generic [ref=e703]: "2"
+          - generic [ref=e704] [cursor=pointer]:
+            - link [ref=e705]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1436172/al-nassr-al-ettifaq#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-1&vn_term=Desktop
+            - generic [ref=e707]: Ngày mai, 01:00
+            - generic [ref=e709]:
+              - img "Al-Nassr" [ref=e710]
+              - generic [ref=e711]: Al-Nassr
+            - generic [ref=e713]:
+              - img "Al-Nassr" [ref=e714]
+              - generic [ref=e715]: Al-Ettifaq
+          - generic [ref=e716] [cursor=pointer]:
+            - link [ref=e717]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1534571/arsenal-sporting-cp#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-2&vn_term=Desktop
+            - generic [ref=e719]: Ngày mai, 02:00
+            - generic [ref=e721]:
+              - img "Arsenal" [ref=e722]
+              - generic [ref=e723]: Arsenal
+            - generic [ref=e725]:
+              - img "Arsenal" [ref=e726]
+              - generic [ref=e727]: Sporting CP
+          - generic [ref=e728] [cursor=pointer]:
+            - link [ref=e729]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1534911/bayern-real-madrid#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-3&vn_term=Desktop
+            - generic [ref=e731]: Ngày mai, 02:00
+            - generic [ref=e733]:
+              - img "Bayern" [ref=e734]
+              - generic [ref=e735]: Bayern
+            - generic [ref=e737]:
+              - img "Bayern" [ref=e738]
+              - generic [ref=e739]: Real Madrid
+          - generic [ref=e740] [cursor=pointer]:
+            - link [ref=e741]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1518054/ha-noi-fc-becamex-tp-hcm#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-4&vn_term=Desktop
+            - generic [ref=e743]: Thứ sáu, 17/4, 19:15
+            - generic [ref=e745]:
+              - img "Hà Nội FC" [ref=e746]
+              - generic [ref=e747]: Hà Nội FC
+            - generic [ref=e749]:
+              - img "Hà Nội FC" [ref=e750]
+              - generic [ref=e751]: Becamex TP HCM
+          - generic [ref=e752] [cursor=pointer]:
+            - link [ref=e753]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1378185/inter-cagliari#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-5&vn_term=Desktop
+            - generic [ref=e755]: Thứ bảy, 18/4, 01:45
+            - generic [ref=e757]:
+              - img "Inter" [ref=e758]
+              - generic [ref=e759]: Inter
+            - generic [ref=e761]:
+              - img "Inter" [ref=e762]
+              - generic [ref=e763]: Cagliari
+          - generic [ref=e764] [cursor=pointer]:
+            - link [ref=e765]:
+              - /url: /the-thao/du-lieu-bong-da/tran-dau/1518055/ha-tinh--hai-phong#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-6&vn_term=Desktop
+            - generic [ref=e767]: Thứ bảy, 18/4, 18:00
+            - generic [ref=e769]:
+              - img "Hà Tĩnh" [ref=e770]
+              - generic [ref=e771]: Hà Tĩnh
+            - generic [ref=e773]:
+              - img "Hà Tĩnh" [ref=e774]
+              - generic [ref=e775]: Hải Phòng
+          - generic [ref=e776] [cursor=pointer]:
+            - link [ref=e777]:
+              - /url: /the-thao/ngoai-hang-anh/tran-dau/1379298/tottenham-brighton#vn_source=Home&vn_campaign=Box-LichThiDau&vn_medium=Item-7&vn_term=Desktop
+            - generic [ref=e779]: Thứ bảy, 18/4, 23:30
+            - generic [ref=e781]:
+              - img "Tottenham" [ref=e782]
+              - generic [ref=e783]: Tottenham
+            - generic [ref=e785]:
+              - img "Tottenham" [ref=e786]
+              - generic [ref=e787]: Brighton
+          - link "Xem tất cả" [ref=e789] [cursor=pointer]:
+            - /url: /the-thao/du-lieu-bong-da
+            - generic [ref=e790]: Xem tất cả
+      - generic [ref=e791]:
+        - generic [ref=e792]:
+          - heading "Giải trí" [level=2] [ref=e793]:
+            - link "Giải trí" [ref=e794] [cursor=pointer]:
+              - /url: /giai-tri
+          - link "Giới sao" [ref=e796] [cursor=pointer]:
+            - /url: /giai-tri/gioi-sao
+          - link "Phim" [ref=e798] [cursor=pointer]:
+            - /url: /giai-tri/phim
+          - link "Nhạc" [ref=e800] [cursor=pointer]:
+            - /url: /giai-tri/nhac
+          - link "Thời trang" [ref=e802] [cursor=pointer]:
+            - /url: /giai-tri/thoi-trang
+        - generic [ref=e803]:
+          - article [ref=e804]:
+            - link "Váy áo tôn đường cong của bạn gái hậu vệ Vũ Văn Thanh" [ref=e806] [cursor=pointer]:
+              - /url: https://vnexpress.net/vay-ao-ton-duong-cong-cua-ban-gai-hau-ve-vu-van-thanh-5062592.html
+              - img "Váy áo tôn đường cong của bạn gái hậu vệ Vũ Văn Thanh" [ref=e807]
+              - img [ref=e809]
+            - generic [ref=e811]:
+              - heading "Váy áo tôn đường cong của bạn gái hậu vệ Vũ Văn Thanh" [level=3] [ref=e812]:
+                - link "Váy áo tôn đường cong của bạn gái hậu vệ Vũ Văn Thanh" [ref=e813] [cursor=pointer]:
+                  - /url: https://vnexpress.net/vay-ao-ton-duong-cong-cua-ban-gai-hau-ve-vu-van-thanh-5062592.html
+              - paragraph [ref=e814]:
+                - link "Trần Bích Hạnh - bạn gái tuyển thủ Vũ Văn Thanh - thường diện váy áo tôn vòng một ..." [ref=e815] [cursor=pointer]:
+                  - /url: https://vnexpress.net/vay-ao-ton-duong-cong-cua-ban-gai-hau-ve-vu-van-thanh-5062592.html
+          - article [ref=e816]:
+            - heading "Sách" [level=3] [ref=e817]:
+              - link "Sách" [ref=e818] [cursor=pointer]:
+                - /url: /giai-tri/sach
+            - heading "Shipper làm thơ về buồn vui khi giao hàng" [level=3] [ref=e819]:
+              - link "Shipper làm thơ về buồn vui khi giao hàng" [ref=e820] [cursor=pointer]:
+                - /url: https://vnexpress.net/shipper-lam-tho-ve-buon-vui-khi-giao-hang-5062134.html
+            - paragraph [ref=e821]: Vương Kế Binh, shipper người Trung Quốc, xuất bản sách với nhiều tác phẩm về những lần nhận đánh giá một sao, tai nạn trên đường.
+          - generic [ref=e822]:
+            - article [ref=e823]:
+              - 'heading "Chồng Chung Lệ Đề: ''Đồng ý nếu vợ không chia tài sản cho tôi''" [level=3] [ref=e824]':
+                - 'link "Chồng Chung Lệ Đề: ''Đồng ý nếu vợ không chia tài sản cho tôi''" [ref=e825] [cursor=pointer]':
+                  - /url: https://vnexpress.net/chong-chung-le-de-dong-y-neu-vo-khong-chia-tai-san-cho-toi-5062502.html
+            - article [ref=e826]:
+              - heading "Chuyện tình ba thập niên của nghệ sĩ Anh Tuấn - Nguyệt Hằng" [level=3] [ref=e827]:
+                - link "Chuyện tình ba thập niên của nghệ sĩ Anh Tuấn - Nguyệt Hằng" [ref=e828] [cursor=pointer]:
+                  - /url: https://vnexpress.net/chuyen-tinh-ba-thap-nien-cua-nghe-si-anh-tuan-nguyet-hang-5062059.html
+            - article [ref=e829]:
+              - heading "Sắc vóc Hoa hậu Phạm Hương ở tuổi 35" [level=3] [ref=e830]:
+                - link "Sắc vóc Hoa hậu Phạm Hương ở tuổi 35" [ref=e831] [cursor=pointer]:
+                  - /url: https://vnexpress.net/sac-voc-hoa-hau-pham-huong-o-tuoi-35-5062300.html
+      - generic [ref=e832]:
+        - generic [ref=e833]:
+          - heading "Sức khỏe" [level=2] [ref=e834]:
+            - link "Sức khỏe" [ref=e835] [cursor=pointer]:
+              - /url: /suc-khoe
+          - link "Tin tức" [ref=e837] [cursor=pointer]:
+            - /url: /suc-khoe/tin-tuc
+          - link "Sống khỏe" [ref=e839] [cursor=pointer]:
+            - /url: /suc-khoe/song-khoe
+          - link "Vaccine" [ref=e841] [cursor=pointer]:
+            - /url: /suc-khoe/vaccine
+        - generic [ref=e842]:
+          - article [ref=e843]:
+            - link "Thói quen tưởng lành mạnh đang âm thầm phá thận" [ref=e845] [cursor=pointer]:
+              - /url: https://vnexpress.net/thoi-quen-tuong-lanh-manh-dang-am-tham-pha-than-5061969.html
+              - img "Thói quen tưởng lành mạnh đang âm thầm phá thận" [ref=e846]
+            - generic [ref=e847]:
+              - heading "Thói quen tưởng lành mạnh đang âm thầm phá thận" [level=4] [ref=e848]:
+                - link "Thói quen tưởng lành mạnh đang âm thầm phá thận" [ref=e849] [cursor=pointer]:
+                  - /url: https://vnexpress.net/thoi-quen-tuong-lanh-manh-dang-am-tham-pha-than-5061969.html
+              - paragraph [ref=e850]:
+                - link "Uống quá nhiều nước, lạm dụng thực phẩm chức năng, nhịn tiểu, tập thể dục quá sức... là thói quen âm thầm tàn ..." [ref=e851] [cursor=pointer]:
+                  - /url: https://vnexpress.net/thoi-quen-tuong-lanh-manh-dang-am-tham-pha-than-5061969.html
+          - generic [ref=e852]:
+            - heading "Các bệnh" [level=3] [ref=e853]:
+              - link "Các bệnh" [ref=e854] [cursor=pointer]:
+                - /url: /suc-khoe/cac-benh
+            - generic [ref=e855]:
+              - article [ref=e856]:
+                - link "Kháng sinh sẽ thành 'thuốc vô dụng' nếu dùng bừa bãi" [ref=e858] [cursor=pointer]:
+                  - /url: https://vnexpress.net/khang-sinh-se-thanh-thuoc-vo-dung-neu-dung-bua-bai-5062356.html
+                  - img "Kháng sinh sẽ thành 'thuốc vô dụng' nếu dùng bừa bãi" [ref=e859]
+                - heading "Kháng sinh sẽ thành 'thuốc vô dụng' nếu dùng bừa bãi" [level=4] [ref=e860]:
+                  - link "Kháng sinh sẽ thành 'thuốc vô dụng' nếu dùng bừa bãi" [ref=e861] [cursor=pointer]:
+                    - /url: https://vnexpress.net/khang-sinh-se-thanh-thuoc-vo-dung-neu-dung-bua-bai-5062356.html
+                - paragraph [ref=e862]: Chuyên gia cảnh báo tình trạng lạm dụng kháng ...
+              - article [ref=e863]:
+                - heading "Xét nghiệm gì giúp chẩn đoán thiếu máu não thoáng qua?" [level=4] [ref=e864]:
+                  - link "Xét nghiệm gì giúp chẩn đoán thiếu máu não thoáng qua?" [ref=e865] [cursor=pointer]:
+                    - /url: https://vnexpress.net/xet-nghiem-gi-giup-chan-doan-thieu-mau-nao-thoang-qua-5062468.html
+              - article [ref=e866]:
+                - heading "Điều trị ung thư amidan như thế nào" [level=4] [ref=e867]:
+                  - link "Điều trị ung thư amidan như thế nào" [ref=e868] [cursor=pointer]:
+                    - /url: https://vnexpress.net/dieu-tri-ung-thu-amidan-nhu-the-nao-5062447.html
+              - article [ref=e869]:
+                - heading "7 dấu hiệu cảnh báo bệnh tiểu đường type 2" [level=4] [ref=e870]:
+                  - link "7 dấu hiệu cảnh báo bệnh tiểu đường type 2" [ref=e871] [cursor=pointer]:
+                    - /url: https://vnexpress.net/7-dau-hieu-canh-bao-benh-tieu-duong-type-2-5062180.html
+          - generic [ref=e872]:
+            - article [ref=e873]:
+              - heading "Bị mèo nặng 7,5 kg 'đè' khi ngủ, cô gái gãy xương cổ tay" [level=4] [ref=e874]:
+                - link "Bị mèo nặng 7,5 kg 'đè' khi ngủ, cô gái gãy xương cổ tay" [ref=e875] [cursor=pointer]:
+                  - /url: https://vnexpress.net/bi-meo-nang-7-5-kg-de-khi-ngu-co-gai-gay-xuong-co-tay-5062227.html
+            - article [ref=e876]:
+              - heading "Thay van tim qua ống thông cho cụ bà 96 tuổi" [level=4] [ref=e877]:
+                - link "Thay van tim qua ống thông cho cụ bà 96 tuổi" [ref=e878] [cursor=pointer]:
+                  - /url: https://vnexpress.net/thay-van-tim-qua-ong-thong-cho-cu-ba-96-tuoi-5062456.html
+            - article [ref=e879]:
+              - heading "Thu hồi dầu tràm, kem nghệ sai công thức và kém chất lượng" [level=4] [ref=e880]:
+                - link "Thu hồi dầu tràm, kem nghệ sai công thức và kém chất lượng" [ref=e881] [cursor=pointer]:
+                  - /url: https://vnexpress.net/thu-hoi-dau-tram-kem-nghe-sai-cong-thuc-va-kem-chat-luong-5062457.html
+            - article [ref=e882]:
+              - heading "5 thay đổi trên da có thể cảnh báo bệnh gan" [level=4] [ref=e883]:
+                - link "5 thay đổi trên da có thể cảnh báo bệnh gan" [ref=e884] [cursor=pointer]:
+                  - /url: https://vnexpress.net/5-thay-doi-tren-da-co-the-canh-bao-benh-gan-5062158.html
+      - generic [ref=e886]:
+        - generic [ref=e887]: Cẩm nang
+        - generic [ref=e889]:
+          - link "Hô hấp" [ref=e891] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-ho-hap
+          - link "Tai mũi họng" [ref=e893] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-tai-mui-hong
+          - link "Da liễu" [ref=e895] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/da-lieu
+          - link "Tiêu hóa" [ref=e897] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-tieu-hoa
+          - link "Cơ xương khớp" [ref=e899] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-co-xuong-khop
+          - link "Tim mạch" [ref=e901] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-tim-mach
+          - link "Nội tiết" [ref=e903] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-noi-tiet
+          - link "Ung thư" [ref=e905] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-ung-thu
+          - link "Dinh dưỡng" [ref=e907] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-dinh-duong
+          - link "Thần kinh" [ref=e909] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-than-kinh
+          - link "Hiếm muộn" [ref=e911] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-hiem-muon
+          - link "Nhi - Sơ sinh" [ref=e913] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-nhi-so-sinh
+          - link "Sản phụ khoa" [ref=e915] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-san-phu-khoa
+          - link "Tiết niệu - Nam học" [ref=e917] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/benh-tiet-nieu-nam-hoc
+          - link "Nhãn khoa" [ref=e919] [cursor=pointer]:
+            - /url: /suc-khoe/cac-benh/nhan-khoa
+        - generic [ref=e920]:
+          - button "Previous slide" [disabled] [ref=e921] [cursor=pointer]
+          - button "Next slide" [ref=e922] [cursor=pointer]
+      - generic [ref=e923]:
+        - generic [ref=e924]:
+          - heading "Đời sống" [level=2] [ref=e925]:
+            - link "Đời sống" [ref=e926] [cursor=pointer]:
+              - /url: /doi-song
+          - link "Bài học sống" [ref=e928] [cursor=pointer]:
+            - /url: /doi-song/bai-hoc-song
+          - link "Tổ ấm" [ref=e930] [cursor=pointer]:
+            - /url: /doi-song/to-am
+          - link "Tiêu dùng" [ref=e932] [cursor=pointer]:
+            - /url: /doi-song/tieu-dung
+          - link "Cooking" [ref=e934] [cursor=pointer]:
+            - /url: /doi-song/cooking
+        - generic [ref=e935]:
+          - article [ref=e936]:
+            - link "Chiếc áo len cứu vãn cuộc hôn nhân 16 năm" [ref=e938] [cursor=pointer]:
+              - /url: https://vnexpress.net/chiec-ao-len-cuu-van-cuoc-hon-nhan-16-nam-5062305.html
+              - img "Chiếc áo len cứu vãn cuộc hôn nhân 16 năm" [ref=e939]
+            - generic [ref=e940]:
+              - heading "Chiếc áo len cứu vãn cuộc hôn nhân 16 năm" [level=3] [ref=e941]:
+                - link "Chiếc áo len cứu vãn cuộc hôn nhân 16 năm" [ref=e942] [cursor=pointer]:
+                  - /url: https://vnexpress.net/chiec-ao-len-cuu-van-cuoc-hon-nhan-16-nam-5062305.html
+              - paragraph [ref=e943]:
+                - link "AnhNhìn chồng mặc chiếc áo lỗi mốt, Polly Hudson nhận ra đang rơi vào cái bẫy \"ly hôn lặng lẽ\", tình trạng xa cách âm thầm dù vẫn sống dưới ..." [ref=e944] [cursor=pointer]:
+                  - /url: https://vnexpress.net/chiec-ao-len-cuu-van-cuoc-hon-nhan-16-nam-5062305.html
+          - article [ref=e945]:
+            - heading "Ngoại tình 'mập mờ' – sóng ngầm tàn phá hôn nhân" [level=3] [ref=e946]:
+              - link "Ngoại tình 'mập mờ' – sóng ngầm tàn phá hôn nhân" [ref=e947] [cursor=pointer]:
+                - /url: https://vnexpress.net/ngoai-tinh-map-mo-song-ngam-tan-pha-hon-nhan-5062337.html
+            - paragraph [ref=e948]:
+              - link "Chưa vượt quá giới hạn thể xác nhưng những hành vi như nhắn tin thường xuyên, quan tâm quá mức lại là ..." [ref=e949] [cursor=pointer]:
+                - /url: https://vnexpress.net/ngoai-tinh-map-mo-song-ngam-tan-pha-hon-nhan-5062337.html
+          - generic [ref=e950]:
+            - article [ref=e951]:
+              - heading "Bức xúc vì hàng xóm 'chĩa camera an ninh vào nhà' 77" [level=3] [ref=e952]:
+                - link "Bức xúc vì hàng xóm 'chĩa camera an ninh vào nhà'" [ref=e953] [cursor=pointer]:
+                  - /url: https://vnexpress.net/buc-xuc-vi-hang-xom-chia-camera-an-ninh-vao-nha-5062311.html
+                - link "77" [ref=e955] [cursor=pointer]:
+                  - /url: https://vnexpress.net/buc-xuc-vi-hang-xom-chia-camera-an-ninh-vao-nha-5062311.html#box_comment_vne
+                  - img [ref=e956]
+                  - text: "77"
+            - article [ref=e958]:
+              - heading "Cuộc chiến giữ sự sống cho cậu bé phải 'nhịn đạm'" [level=3] [ref=e959]:
+                - link "Cuộc chiến giữ sự sống cho cậu bé phải 'nhịn đạm'" [ref=e960] [cursor=pointer]:
+                  - /url: https://vnexpress.net/cuoc-chien-giu-su-song-cho-cau-be-phai-nhin-dam-5061298.html
+            - article [ref=e961]:
+              - heading "Cá chiên giòn mắm xoài kiểu Nam Bộ 11" [level=3] [ref=e962]:
+                - link "Cá chiên giòn mắm xoài kiểu Nam Bộ" [ref=e963] [cursor=pointer]:
+                  - /url: https://vnexpress.net/doi-song-cooking-ca-chien-gion-mam-xoai-kieu-nam-bo-5062296.html
+                - link "11" [ref=e965] [cursor=pointer]:
+                  - /url: https://vnexpress.net/doi-song-cooking-ca-chien-gion-mam-xoai-kieu-nam-bo-5062296.html#box_comment_vne
+                  - img [ref=e966]
+                  - text: "11"
+      - generic [ref=e968]:
+        - generic [ref=e969]:
+          - heading "Giáo dục" [level=2] [ref=e970]:
+            - link "Giáo dục" [ref=e971] [cursor=pointer]:
+              - /url: /giao-duc
+          - link "Tin tức" [ref=e973] [cursor=pointer]:
+            - /url: /giao-duc/tin-tuc
+          - link "Tuyển sinh" [ref=e975] [cursor=pointer]:
+            - /url: /giao-duc/tuyen-sinh
+          - link "Chân dung" [ref=e977] [cursor=pointer]:
+            - /url: /giao-duc/chan-dung
+          - link "Du học" [ref=e979] [cursor=pointer]:
+            - /url: /giao-duc/du-hoc
+          - link "Giáo dục 4.0" [ref=e981] [cursor=pointer]:
+            - /url: /giao-duc/giao-duc-40
+          - link "Trắc nghiệm" [ref=e983] [cursor=pointer]:
+            - /url: /giao-duc/trac-nghiem
+        - generic [ref=e984]:
+          - article [ref=e985]:
+            - link "Thủ khoa Olympic Toán toàn quốc viết sách, dạy học từ sớm" [ref=e987] [cursor=pointer]:
+              - /url: https://vnexpress.net/nguyen-nhat-huy-gianh-ngoi-thu-khoa-olympic-toan-sinh-vien-toan-quoc-5062020.html
+              - img "Thủ khoa Olympic Toán toàn quốc viết sách, dạy học từ sớm" [ref=e988]
+            - generic [ref=e989]:
+              - heading "Thủ khoa Olympic Toán toàn quốc viết sách, dạy học từ sớm" [level=3] [ref=e990]:
+                - link "Thủ khoa Olympic Toán toàn quốc viết sách, dạy học từ sớm" [ref=e991] [cursor=pointer]:
+                  - /url: https://vnexpress.net/nguyen-nhat-huy-gianh-ngoi-thu-khoa-olympic-toan-sinh-vien-toan-quoc-5062020.html
+              - paragraph [ref=e992]:
+                - link "Nguyễn Nhất Huy, thủ khoa bảng A Olympic Toán toàn quốc, là tác giả cuốn sách chuyên tái bản nhiều lần, tham ..." [ref=e993] [cursor=pointer]:
+                  - /url: https://vnexpress.net/nguyen-nhat-huy-gianh-ngoi-thu-khoa-olympic-toan-sinh-vien-toan-quoc-5062020.html
+          - article [ref=e994]:
+            - heading "Điểm chuẩn lớp 10 ở TP HCM ba năm qua" [level=3] [ref=e995]:
+              - link "Điểm chuẩn lớp 10 ở TP HCM ba năm qua" [ref=e996] [cursor=pointer]:
+                - /url: https://vnexpress.net/diem-chuan-lop-10-cua-166-truong-o-tp-hcm-ba-nam-qua-gom-ca-ba-ria-vung-tau-va-binh-duong-cu-5059584.html
+            - paragraph [ref=e997]:
+              - link "Điểm chuẩn lớp 10 ở ba khu vực của TP HCM có sự phân hóa mạnh, có trường cần trung bình 8 điểm mỗi môn, ngược lại chỉ 1,75 điểm ..." [ref=e998] [cursor=pointer]:
+                - /url: https://vnexpress.net/diem-chuan-lop-10-cua-166-truong-o-tp-hcm-ba-nam-qua-gom-ca-ba-ria-vung-tau-va-binh-duong-cu-5059584.html
+          - generic [ref=e999]:
+            - article [ref=e1000]:
+              - heading "Thanh Hoa - từ trường dự bị đến 'đầu tàu' học thuật Trung Quốc 25" [level=3] [ref=e1001]:
+                - link "Thanh Hoa - từ trường dự bị đến 'đầu tàu' học thuật Trung Quốc" [ref=e1002] [cursor=pointer]:
+                  - /url: https://vnexpress.net/thanh-hoa-tu-truong-du-bi-den-dau-tau-hoc-thuat-trung-quoc-5062382.html
+                - link "25" [ref=e1004] [cursor=pointer]:
+                  - /url: https://vnexpress.net/thanh-hoa-tu-truong-du-bi-den-dau-tau-hoc-thuat-trung-quoc-5062382.html#box_comment_vne
+                  - img [ref=e1005]
+                  - text: "25"
+            - article [ref=e1007]:
+              - heading "Hòn đảo thỏ đông hơn người ở nước nào?" [level=3] [ref=e1008]:
+                - link "Hòn đảo thỏ đông hơn người ở nước nào?" [ref=e1009] [cursor=pointer]:
+                  - /url: https://vnexpress.net/hon-dao-tho-dong-hon-nguoi-o-nuoc-nao-5062342.html
+            - article [ref=e1010]:
+              - heading "Cô giáo mầm non bị đình chỉ dạy vì xoay, lắc đầu trẻ 16" [level=3] [ref=e1011]:
+                - link "Cô giáo mầm non bị đình chỉ dạy vì xoay, lắc đầu trẻ" [ref=e1012] [cursor=pointer]:
+                  - /url: https://vnexpress.net/co-giao-mam-non-bi-dinh-chi-day-vi-xoay-lac-dau-tre-5062210.html
+                - link "16" [ref=e1014] [cursor=pointer]:
+                  - /url: https://vnexpress.net/co-giao-mam-non-bi-dinh-chi-day-vi-xoay-lac-dau-tre-5062210.html#box_comment_vne
+                  - img [ref=e1015]
+                  - text: "16"
+  - generic [ref=e1076]:
+    - generic:
+      - generic:
+        - generic:
+          - insertion
+  - contentinfo [ref=e1090]:
+    - generic [ref=e1091]:
+      - list [ref=e1092]:
+        - listitem [ref=e1093]:
+          - link "Trang chủ" [ref=e1094] [cursor=pointer]:
+            - /url: https://vnexpress.net/
+        - listitem [ref=e1095]:
+          - link "Ảnh" [ref=e1096] [cursor=pointer]:
+            - /url: https://vnexpress.net/anh
+        - listitem [ref=e1097]:
+          - link "Infographics" [ref=e1098] [cursor=pointer]:
+            - /url: https://vnexpress.net/infographics
+      - list [ref=e1099]:
+        - listitem [ref=e1100]:
+          - link "VnE-GO" [ref=e1101] [cursor=pointer]:
+            - /url: https://vnexpress.net/vne-go
+        - listitem [ref=e1102]:
+          - link "Thời sự" [ref=e1103] [cursor=pointer]:
+            - /url: https://vnexpress.net/thoi-su
+        - listitem [ref=e1104]:
+          - link "Thế giới" [ref=e1105] [cursor=pointer]:
+            - /url: https://vnexpress.net/the-gioi
+        - listitem [ref=e1106]:
+          - link "Kinh doanh" [ref=e1107] [cursor=pointer]:
+            - /url: https://vnexpress.net/kinh-doanh
+        - listitem [ref=e1108]:
+          - link "Khoa học công nghệ" [ref=e1109] [cursor=pointer]:
+            - /url: https://vnexpress.net/khoa-hoc-cong-nghe
+        - listitem [ref=e1110]:
+          - link "Góc nhìn" [ref=e1111] [cursor=pointer]:
+            - /url: https://vnexpress.net/goc-nhin
+      - list [ref=e1112]:
+        - listitem [ref=e1113]:
+          - link "Bất động sản" [ref=e1114] [cursor=pointer]:
+            - /url: https://vnexpress.net/bat-dong-san
+        - listitem [ref=e1115]:
+          - link "Sức khỏe" [ref=e1116] [cursor=pointer]:
+            - /url: https://vnexpress.net/suc-khoe
+        - listitem [ref=e1117]:
+          - link "Giải trí" [ref=e1118] [cursor=pointer]:
+            - /url: https://vnexpress.net/giai-tri
+        - listitem [ref=e1119]:
+          - link "Thể thao" [ref=e1120] [cursor=pointer]:
+            - /url: https://vnexpress.net/the-thao
+        - listitem [ref=e1121]:
+          - link "Pháp luật" [ref=e1122] [cursor=pointer]:
+            - /url: https://vnexpress.net/phap-luat
+        - listitem [ref=e1123]:
+          - link "Giáo dục" [ref=e1124] [cursor=pointer]:
+            - /url: https://vnexpress.net/giao-duc
+      - list [ref=e1125]:
+        - listitem [ref=e1126]:
+          - link "Đời sống" [ref=e1127] [cursor=pointer]:
+            - /url: https://vnexpress.net/doi-song
+        - listitem [ref=e1128]:
+          - link "Xe" [ref=e1129] [cursor=pointer]:
+            - /url: https://vnexpress.net/oto-xe-may
+        - listitem [ref=e1130]:
+          - link "Du lịch" [ref=e1131] [cursor=pointer]:
+            - /url: https://vnexpress.net/du-lich
+        - listitem [ref=e1132]:
+          - link "Ý kiến" [ref=e1133] [cursor=pointer]:
+            - /url: https://vnexpress.net/y-kien
+        - listitem [ref=e1134]:
+          - link "Tâm sự" [ref=e1135] [cursor=pointer]:
+            - /url: https://vnexpress.net/tam-su
+        - listitem [ref=e1136]:
+          - link "Thư giãn" [ref=e1137] [cursor=pointer]:
+            - /url: https://vnexpress.net/thu-gian
+      - list [ref=e1138]:
+        - listitem [ref=e1139]:
+          - link "Mới nhất" [ref=e1140] [cursor=pointer]:
+            - /url: https://vnexpress.net/tin-tuc-24h
+        - listitem [ref=e1141]:
+          - link "Xem nhiều" [ref=e1142] [cursor=pointer]:
+            - /url: https://vnexpress.net/tin-xem-nhieu
+        - listitem [ref=e1143]:
+          - link "Tin nóng" [ref=e1144] [cursor=pointer]:
+            - /url: https://vnexpress.net/tin-nong
+        - listitem [ref=e1145]:
+          - link "Lịch vạn niên" [ref=e1146] [cursor=pointer]:
+            - /url: https://vnexpress.net/lich-van-nien
+        - listitem [ref=e1147]:
+          - link "Rao vặt" [ref=e1148] [cursor=pointer]:
+            - /url: https://raovat.vnexpress.net/?utm_campaign=VNEXPRESS&utm_source=footer&utm_medium=menu&_gl=1*q5n8mf*_gcl_au*NDA0NTYyOS4xNzQ0NTk0NzAx
+      - generic [ref=e1149]:
+        - generic [ref=e1150]:
+          - paragraph [ref=e1151]: Tải ứng dụng
+          - link "VnExpress" [ref=e1152] [cursor=pointer]:
+            - /url: "#down-app-popup_vne"
+            - img [ref=e1153]
+            - text: VnExpress
+          - link "International" [ref=e1155] [cursor=pointer]:
+            - /url: "#down-app-popup_evne"
+            - img [ref=e1156]
+            - text: International
+        - generic [ref=e1158]:
+          - paragraph [ref=e1159]: Liên hệ
+          - link "Tòa soạn" [ref=e1160] [cursor=pointer]:
+            - /url: https://vnexpress.net/lien-he-toa-soan
+            - img [ref=e1161]
+            - text: Tòa soạn
+          - link "Quảng cáo" [ref=e1163] [cursor=pointer]:
+            - /url: https://eclick.vn/lien-he/?utm_source=VNE&utm_medium=CPC_BOX&utm_campaign=LienHeQuangCao
+            - img [ref=e1164]
+            - text: Quảng cáo
+        - generic [ref=e1165]:
+          - paragraph [ref=e1166]: Đường dây nóng
+          - generic [ref=e1167]:
+            - strong [ref=e1168]: 083.888.0123
+            - paragraph [ref=e1169]: (Hà Nội)
+          - generic [ref=e1170]:
+            - strong [ref=e1171]: 082.233.3555
+            - paragraph [ref=e1172]: (TP. Hồ Chí Minh)
+    - generic [ref=e1173]:
+      - paragraph [ref=e1174]:
+        - link "Báo điện tử VnExpress - Bao tieng Viet nhieu nguoi xem nhat" [ref=e1175] [cursor=pointer]:
+          - /url: https://vnexpress.net/
+          - generic [ref=e1176]: Báo điện tử
+          - img "VnExpress - Bao tieng Viet nhieu nguoi xem nhat" [ref=e1177]
+      - generic [ref=e1178]:
+        - link "Điều khoản sử dụng" [ref=e1179] [cursor=pointer]:
+          - /url: https://vnexpress.net/dieu-khoan-su-dung
+        - link "Chính sách bảo mật" [ref=e1180] [cursor=pointer]:
+          - /url: https://vnexpress.net/chinh-sach-bao-mat
+        - link "Cookies" [ref=e1181] [cursor=pointer]:
+          - /url: https://vnexpress.net/chinh-sach-cookies
+        - link "RSS" [ref=e1182] [cursor=pointer]:
+          - /url: /rss
+        - generic [ref=e1183]: Theo dõi VnExpress trên
+        - link "Facebook" [ref=e1184] [cursor=pointer]:
+          - /url: https://www.facebook.com/congdongvnexpress/
+          - img [ref=e1185]
+        - link "Twitter" [ref=e1187] [cursor=pointer]:
+          - /url: https://twitter.com/VnEnews
+          - img [ref=e1188]
+        - link "Youtube" [ref=e1190] [cursor=pointer]:
+          - /url: https://www.youtube.com/channel/UCpK5nl5llhUL4QKq03qan8g?sub_confirmation=1
+          - img [ref=e1191]
+        - link "Tiktok" [ref=e1193] [cursor=pointer]:
+          - /url: https://www.tiktok.com/@vnexpress.official?lang=en
+          - img [ref=e1194]
+    - generic [ref=e1196]:
+      - paragraph [ref=e1197]:
+        - strong [ref=e1198]: Báo tiếng Việt nhiều người xem nhất
+        - text: Thuộc Bộ Khoa học và Công nghệ
+        - text: "Số giấy phép: 548/GP-BTTTT do Bộ Thông tin và Truyền thông cấp ngày 24/08/2021"
+      - paragraph [ref=e1199]:
+        - text: "Tổng biên tập: Phạm Văn Hiếu"
+        - text: "Địa chỉ: Tầng 10, Tòa A FPT Tower, số 10 Phạm Văn Bạch, phường Cầu Giấy, Hà Nội"
+        - text: "Điện thoại: 024 7300 8899 - máy lẻ 4500"
+        - 'link "Email: webmaster@vnexpress.net" [ref=e1200] [cursor=pointer]':
+          - /url: mailto:webmaster@vnexpress.net
+      - paragraph [ref=e1201]: © 1997-2026. Toàn bộ bản quyền thuộc VnExpress
+  - link "Lên đầu trang" [ref=e1202] [cursor=pointer]:
+    - /url: javascript:;
+    - img [ref=e1203]
+  - link:
+    - /url: "#notification-success-popup_vne"
+  - link:
+    - /url: "#notification-success"

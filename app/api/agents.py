@@ -17,6 +17,7 @@ agent_name in path params):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import json
@@ -207,6 +208,8 @@ def get_agent_routes(
     registry: ToolRegistry,
     pending_return_urls: dict,
     mcp_llm_factory=None,
+    config_storage=None,
+    connect_persisted_tool=None,
 ) -> list[Route]:
 
     config_manager = registry.config
@@ -284,6 +287,8 @@ def get_agent_routes(
                 llm = create_llm_provider(
                     provider_name=llm_provider or BaseConfig.get_default_provider(),
                     model_name=llm_model,
+                    config_storage=config_storage,
+                    profile=profile,
                     default_reasoning_effort=reasoning_effort,
                 )
             except ValueError as e:
@@ -366,6 +371,14 @@ def get_agent_routes(
         return JSONResponse({"success": True, "tool_id": tool_id})
 
     async def handle_toggle_enabled(request: Request) -> JSONResponse:
+        """Enable / disable an A2A or MCP tool for a profile.
+
+        On enable, if the tool is currently a stub (lazy-init placeholder or
+        previous connection failure), schedule a background connect attempt
+        so the tool flips from stub → live without user intervention. The
+        response returns immediately; the next ``GET /api/agents`` will
+        reflect the new connection state.
+        """
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
@@ -381,45 +394,44 @@ def get_agent_routes(
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
+
+        if bool(enabled) and connect_persisted_tool is not None:
+            tool = registry.get(tool_id)
+            if tool is not None and getattr(tool, "is_stub", False):
+                asyncio.create_task(connect_persisted_tool(tool_id))
+
         return JSONResponse({"success": True, "enabled": bool(enabled)})
 
     async def handle_reconnect(request: Request) -> JSONResponse:
+        """Retry a failed connection for an A2A/MCP stub tool.
+
+        Unlike the lazy-connect fire-and-forget path, this endpoint awaits
+        the connection attempt and reports success / failure synchronously.
+        Uses the same ``connect_persisted_tool`` helper, which swaps the
+        stub in place via ``registry.replace_tool`` — preserving every
+        profile's ``profile_tools.enabled`` state.
+        """
         tool_id = request.path_params["tool_id"]
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        profile = body.get("profile") or _profile_from_request(request)
         tool = registry.get(tool_id)
         if tool is None:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
+        if tool.tool_type not in (ToolType.A2A, ToolType.MCP):
+            return JSONResponse(
+                {"error": f"Tool '{tool_id}' is not an A2A/MCP tool"}, status_code=400,
+            )
         if not getattr(tool, "is_stub", False):
             return JSONResponse(
                 {"error": f"Tool '{tool_id}' is already connected"}, status_code=400,
             )
-        url = getattr(tool, "url", None)
-        if not url:
-            return JSONResponse({"error": "Tool has no URL to reconnect to"}, status_code=400)
-        try:
-            if tool.tool_type is ToolType.A2A:
-                new_tool = await build_a2a_tool(url=url, owner_profile=profile)
-            else:
-                llm = _resolve_mcp_llm()
-                if llm is None:
-                    return JSONResponse({"error": "MCP LLM not configured"}, status_code=500)
-                new_tool = await build_http_mcp_tool(
-                    url=url, llm=llm, owner_profile=profile,
-                )
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Reconnect failed for {tool_id}: {e}")
-            return JSONResponse({"error": str(e)}, status_code=400)
-
-        await registry.unregister(tool_id)
-        if new_tool.tool_type is ToolType.A2A:
-            await registry.register_a2a(new_tool, source=url, owner_profile=profile)
-        else:
-            await registry.register_mcp(new_tool, source=url, owner_profile=profile)
-        return JSONResponse({"success": True, "tool_id": new_tool.tool_id})
+        if connect_persisted_tool is None:
+            return JSONResponse(
+                {"error": "Lazy-connect not configured"}, status_code=500,
+            )
+        success, error = await connect_persisted_tool(tool_id)
+        if not success:
+            logger.error(f"Reconnect failed for {tool_id}: {error}")
+            return JSONResponse({"error": error or "Reconnect failed"}, status_code=400)
+        return JSONResponse({"success": True, "tool_id": tool_id})
 
     async def handle_get_auth_url(request: Request) -> JSONResponse:
         tool_id = request.path_params["tool_id"]
@@ -522,15 +534,15 @@ def get_agent_routes(
         tool = registry.get(tool_id)
         if tool is None:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
-        if tool.tool_type is not ToolType.MCP:
+        if tool.tool_type not in (ToolType.MCP, ToolType.BUILTIN):
             return JSONResponse(
-                {"error": f"Tool '{tool_id}' is not an MCP server"}, status_code=400,
+                {"error": f"Tool '{tool_id}' does not support agent configuration"}, status_code=400,
             )
         llm_params = config_manager.get_llm_params(tool_id, profile)
         meta = config_manager.get_meta(tool_id, profile)
         return JSONResponse({
             "config": {
-                "url": tool.url,
+                "url": getattr(tool, "url", None),
                 "llm_provider": llm_params.get("llm_provider"),
                 "llm_model": llm_params.get("llm_model"),
                 "reasoning_effort": llm_params.get("reasoning_effort"),
@@ -550,9 +562,9 @@ def get_agent_routes(
         tool = registry.get(tool_id)
         if tool is None:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
-        if tool.tool_type is not ToolType.MCP:
+        if tool.tool_type not in (ToolType.MCP, ToolType.BUILTIN):
             return JSONResponse(
-                {"error": f"Tool '{tool_id}' is not an MCP server"}, status_code=400,
+                {"error": f"Tool '{tool_id}' does not support agent configuration"}, status_code=400,
             )
 
         llm_provider = body.get("llm_provider")
@@ -567,6 +579,8 @@ def get_agent_routes(
                 new_llm = create_llm_provider(
                     provider_name=llm_provider or BaseConfig.get_default_provider(),
                     model_name=llm_model or None,
+                    config_storage=config_storage,
+                    profile=profile,
                     default_reasoning_effort=reasoning_effort,
                 )
                 tool.update_runtime_config(llm=new_llm)

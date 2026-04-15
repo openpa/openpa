@@ -252,6 +252,11 @@ class MCPAgentAdapter:
         function_calls: List[Dict] = []
 
         logger.debug(messages)
+        logger.info(
+            f"[MCP '{self.name}'] Invoking child LLM | "
+            f"provider={self._llm.provider_name}, model={self._llm.model_label}, "
+            f"reasoning_effort=low, full_reasoning={self._full_reasoning}"
+        )
         try:
             async for response in self._llm.chat_completion(
                 messages=messages,
@@ -388,6 +393,11 @@ class MCPAgentAdapter:
                         })
 
                     # Second LLM call (no tools, just generate answer)
+                    logger.info(
+                        f"[MCP '{self.name}'] Invoking child LLM (full reasoning pass) | "
+                        f"provider={self._llm.provider_name}, model={self._llm.model_label}, "
+                        f"reasoning_effort=low, full_reasoning={self._full_reasoning}"
+                    )
                     reasoning_content_parts: List[str] = []
                     async for response in self._llm.chat_completion(
                         messages=second_pass_messages,

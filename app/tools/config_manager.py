@@ -113,6 +113,6 @@ class ToolConfigManager:
         return {
             "arguments": self.get_arguments(tool_id, profile),
             "variables": scopes.get(SCOPE_VARIABLE, {}),
-            "llm": scopes.get(SCOPE_LLM, {}),
+            "llm": self.get_llm_params(tool_id, profile),
             "meta": scopes.get(SCOPE_META, {}),
         }
