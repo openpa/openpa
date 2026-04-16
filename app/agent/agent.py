@@ -83,6 +83,7 @@ class OpenPAAgent:
         task_history: List[Any],
         context_id: str | None,
         profile: str,
+        reasoning: bool = True,
     ) -> AsyncGenerator[ReasoningStreamResponseType, None]:
         logger.info(f"Running OpenPAAgent with query: {query} and profile: {profile}")
         runner = self._ensure_runner(profile)
@@ -91,6 +92,7 @@ class OpenPAAgent:
             registry=self.registry,
             profile=profile,
             context_id=context_id,
+            reasoning=reasoning,
         )
 
         async for result in reasoning_agent.run(query, task_history):

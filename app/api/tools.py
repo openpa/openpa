@@ -127,6 +127,12 @@ def get_tool_routes(
         if tool and tool.tool_type is ToolType.BUILTIN and isinstance(tool, BuiltInToolGroup):
             refresh_builtin_tool_oauth(registry, config_manager, tool_id, profile=profile)
 
+        # Mirror skill variables to ``{skill_dir}/scripts/.env`` so the skill's
+        # scripts can source them at runtime — the agent has no per-skill hook
+        # to prepare the environment for the generic exec_shell tool.
+        if tool and tool.tool_type is ToolType.SKILL:
+            _write_skill_env_file(tool, config_manager, profile)
+
         return JSONResponse({"success": True})
 
     async def handle_set_arguments(request: Request) -> JSONResponse:
@@ -168,15 +174,35 @@ def get_tool_routes(
         ):
             try:
                 merged = config_manager.get_llm_params(tool_id, profile)
-                new_llm = create_llm_provider(
-                    provider_name=merged.get("llm_provider")
-                        or BaseConfig.get_default_provider(),
-                    model_name=merged.get("llm_model") or None,
-                    config_storage=config_storage,
-                    profile=profile,
-                    default_reasoning_effort=merged.get("reasoning_effort"),
-                )
-                tool.update_runtime_config(llm=new_llm)
+                provider_name = merged.get("llm_provider") or None
+                model_name = merged.get("llm_model") or None
+
+                # When no per-tool model override, fall back to the "low"
+                # model group (same source as startup in server.py).
+                if not model_name:
+                    group_value = BaseConfig.get_model_group("low", profile=profile)
+                    if group_value:
+                        parts = group_value.split("/", 1)
+                        if not provider_name:
+                            provider_name = parts[0]
+                        model_name = parts[1] if len(parts) > 1 else parts[0]
+
+                if not provider_name:
+                    provider_name = BaseConfig.get_default_provider(profile=profile)
+
+                if model_name:
+                    new_llm = create_llm_provider(
+                        provider_name=provider_name,
+                        model_name=model_name,
+                        config_storage=config_storage,
+                        profile=profile,
+                        default_reasoning_effort=merged.get("reasoning_effort"),
+                    )
+                    tool.update_runtime_config(llm=new_llm)
+                else:
+                    logger.warning(
+                        f"No model resolved for tool '{tool_id}'; skipping LLM rebuild"
+                    )
             except ValueError as e:
                 return JSONResponse({"error": f"Invalid LLM: {e}"}, status_code=400)
             except Exception as e:  # noqa: BLE001
@@ -238,12 +264,70 @@ def get_tool_routes(
 
 
 def _schema_for_tool(tool) -> dict:
-    """Return the static config schema for a built-in tool, or {} for others."""
+    """Return the static config schema for a built-in tool or skill, or {} for others.
+
+    Skills declare their environment variables via ``metadata.environment_variables``
+    in ``SKILL.md`` (a list of variable names). They are surfaced through the same
+    ``required_config`` shape used by built-in tools so the existing UI/save flow
+    works without further branching.
+    """
     if tool is None:
         return {}
     if tool.tool_type is ToolType.BUILTIN and isinstance(tool, BuiltInToolGroup):
         return get_builtin_tool_config(tool.config_name)
+    if tool.tool_type is ToolType.SKILL:
+        names = getattr(tool, "environment_variables", []) or []
+        if not names:
+            return {}
+        required = {
+            name: {"description": name, "type": "string", "secret": False}
+            for name in names
+        }
+        return {"tool": {"required_config": required}}
     return {}
+
+
+def _escape_env_value(value: str) -> str:
+    """Quote a value for safe inclusion in a ``.env`` file.
+
+    Wraps in double quotes and escapes embedded ``"`` / ``\\`` if the value
+    contains whitespace, ``#``, or quotes; otherwise returns it as-is.
+    """
+    if value == "":
+        return ""
+    needs_quoting = any(ch in value for ch in (" ", "\t", "\n", "\r", "#", '"', "'", "\\", "$"))
+    if not needs_quoting:
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _write_skill_env_file(tool, config_manager, profile: str) -> None:
+    """Mirror persisted skill variables to ``{skill_dir}/scripts/.env``.
+
+    Overwrites the file so deletions in the DB also disappear from disk. Only
+    variables declared in the skill's ``environment_variables`` are written —
+    stray DB rows are ignored.
+    """
+    try:
+        scripts_dir = tool.info.dir_path / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        env_path = scripts_dir / ".env"
+        all_vars = config_manager.get_variables(
+            tool.tool_id, profile, include_secrets=True,
+        )
+        declared = set(getattr(tool, "environment_variables", []) or [])
+        lines = [
+            f"{k}={_escape_env_value(str(v))}"
+            for k, v in all_vars.items()
+            if k in declared and v != ""
+        ]
+        body = "\n".join(lines) + ("\n" if lines else "")
+        env_path.write_text(body, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            f"Failed to write .env for skill '{getattr(tool, 'tool_id', '?')}'"
+        )
 
 
 def _is_tool_configured(tool, snapshot: dict) -> bool:

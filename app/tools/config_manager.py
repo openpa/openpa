@@ -85,6 +85,11 @@ class ToolConfigManager:
         return out
 
     def set_llm_param(self, tool_id: str, profile: str, key: str, value: Any) -> None:
+        if value is None or (not isinstance(value, bool) and value == ""):
+            self._storage.delete_config(
+                profile=profile, tool_id=tool_id, scope=SCOPE_LLM, key=key,
+            )
+            return
         if isinstance(value, bool):
             stored = "true" if value else "false"
         else:
@@ -99,6 +104,11 @@ class ToolConfigManager:
         return self._storage.get_scope(profile=profile, tool_id=tool_id, scope=SCOPE_META)
 
     def set_meta(self, tool_id: str, profile: str, key: str, value: str) -> None:
+        if value is None or value == "":
+            self._storage.delete_config(
+                profile=profile, tool_id=tool_id, scope=SCOPE_META, key=key,
+            )
+            return
         self._storage.set_config(
             profile=profile, tool_id=tool_id, scope=SCOPE_META, key=key, value=value,
         )

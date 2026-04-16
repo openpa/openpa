@@ -146,7 +146,12 @@ def generate_dir_tree(dir_path: Path, *, max_depth: int = 10) -> str:
         except PermissionError:
             return
 
-        entries = [e for e in entries if not e.name.startswith(".")]
+        # Hide dotfiles by default, but keep `.env` visible so users (and the
+        # agent) can see that skill variables have been provisioned.
+        entries = [
+            e for e in entries
+            if not e.name.startswith(".") or e.name == ".env"
+        ]
 
         for i, entry in enumerate(entries):
             is_last = i == len(entries) - 1

@@ -16,6 +16,7 @@ implementations. The reasoning agent only knows about Tool / ToolEvent.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import datetime
@@ -146,10 +147,12 @@ class ReasoningAgent:
         context_id: Optional[str] = None,
         max_steps: int = 20,
         steps_length: int = 40,
+        reasoning: bool = True,
     ):
         self.llm = llm
         self.registry = registry
         self.profile = profile
+        self.reasoning = reasoning
 
         # Snapshot the tool list available to this profile for this run
         self._tools = registry.tools_for_profile(profile)
@@ -216,6 +219,14 @@ class ReasoningAgent:
             "Note: Your current working directory is the \"Current User Working Directory\", "
             "so to run any skill script, use the path from the \"Current Skills Directory\".\n"
         ]
+        # If any loaded skill declares environment variables, remind the agent
+        # to source the per-skill .env file before running any script -- exec_shell
+        # is generic and won't preload them automatically.
+        if any(
+            getattr(self._tools_by_id.get(tid), "environment_variables", None)
+            for tid in self._loaded_skill_sections
+        ):
+            parts.append("Always load variables from the .env file before executing commands\n")
         for tool_id, content in self._loaded_skill_sections.items():
             tool = self._tools_by_id.get(tool_id)
             display_name = tool.name if tool else tool_id
@@ -356,7 +367,6 @@ class ReasoningAgent:
                 tools=[self.reasoning_tool],
                 tool_choice="auto",
                 temperature=1,
-                reasoning_effort="low",
                 max_tokens=32768,
                 retry=3,
             ):
@@ -387,6 +397,7 @@ class ReasoningAgent:
 
         has_result = False
 
+        logger.info(f"LLM responses: {llm_responses}")
         for response in llm_responses:
             if response["type"] == ChatCompletionTypeEnum.CONTENT:
                 content = response.get("data")
@@ -503,6 +514,14 @@ class ReasoningAgent:
                     self._record_step_with_observation(step, obs)
                     if self.context_id:
                         self._save_context(self.context_id)
+                    if not self.reasoning:
+                        yield {
+                            "type": ChatCompletionTypeEnum.CLARIFY,
+                            "data": obs,
+                            "input_tokens": self._total_input_tokens,
+                            "output_tokens": self._total_output_tokens,
+                        }
+                        return
                     async for r in self._loop(step):
                         yield r
                     return
@@ -525,6 +544,7 @@ class ReasoningAgent:
             action_input = f"Load skill `{tool.name}`"
         else:
             action_input = step.action_input or step.thought or ""
+        logger.info(f"Action input '{tool.tool_id}': {action_input}")
         thinking_payload = {
             "Thought": step.thought,
             "Action": tool.tool_id,
@@ -534,16 +554,19 @@ class ReasoningAgent:
         }
         if tool.tool_type is not ToolType.INTRINSIC:
             yield {"type": ChatCompletionTypeEnum.THINKING_ARTIFACT, "data": thinking_payload}
-
-        if tool.tool_type is not ToolType.SKILL:
-            action_input = f"{step.thought} ({step.action_input})"
             
         # Drive the tool's event stream
         result_event: Optional[ToolResultEvent] = None
         error_event: Optional[ToolErrorEvent] = None
         try:
+            if tool.tool_type is not ToolType.SKILL and tool.tool_type is not ToolType.INTRINSIC:
+                tool_action_input = f"{step.thought} ({step.action_input})"
+            else:
+                tool_action_input = action_input
+            
+            logger.info(f"Tool action input '{tool.tool_id}': {tool_action_input}")
             async for event in tool.execute(
-                query=action_input,
+                query=tool_action_input,
                 context_id=self.context_id,
                 profile=self.profile,
                 arguments=arguments,
@@ -587,6 +610,14 @@ class ReasoningAgent:
             self._record_step_with_observation(step, obs)
             if self.context_id:
                 self._save_context(self.context_id)
+            if not self.reasoning:
+                yield {
+                    "type": ChatCompletionTypeEnum.CLARIFY,
+                    "data": obs,
+                    "input_tokens": self._total_input_tokens,
+                    "output_tokens": self._total_output_tokens,
+                }
+                return
             async for r in self._loop(step):
                 yield r
             return
@@ -653,6 +684,14 @@ class ReasoningAgent:
             }
             if self.context_id:
                 self._save_context(self.context_id)
+            if not self.reasoning:
+                yield {
+                    "type": ChatCompletionTypeEnum.DONE,
+                    "data": "",
+                    "input_tokens": self._total_input_tokens,
+                    "output_tokens": self._total_output_tokens,
+                }
+                return
             async for r in self._loop(step):
                 yield r
             return
@@ -669,6 +708,21 @@ class ReasoningAgent:
             tree_text = generate_dir_tree(dir_path)
             if tree_text:
                 skill_text = f"Skill Directory Structure:\n```\n{tree_text}\n```\n\n{skill_text}"
+            # If the skill declares environment variables, surface their current
+            # values inline so the agent can read them without parsing the .env
+            # file first.
+            declared_env = getattr(tool, "environment_variables", []) or []
+            if declared_env:
+                stored = self._load_variables(tool.tool_id)
+                env_lines = [
+                    f"{name}={stored[name]}" if name in stored and stored[name] != "" else f"{name}="
+                    for name in declared_env
+                ]
+                env_block = (
+                    "Skill Environment Variables (already loaded from .env):\n"
+                    "```\n" + "\n".join(env_lines) + "\n```\n\n"
+                )
+                skill_text = f"{env_block}{skill_text}"
             self._loaded_skill_sections[tool.tool_id] = skill_text
             self._loaded_skill_ids.add(tool.tool_id)
             # The full SKILL.md content is shown to the user in the frontend's
@@ -691,6 +745,10 @@ class ReasoningAgent:
             self._record_step_full(step, short_obs_text)
             if self.context_id:
                 self._save_context(self.context_id)
+            if not self.reasoning:
+                async for r in self._finalize_without_reasoning(step, short_obs_text):
+                    yield r
+                return
             async for r in self._loop(step):
                 yield r
             return
@@ -703,8 +761,90 @@ class ReasoningAgent:
         self._record_step_full(step, observation_text)
         if self.context_id:
             self._save_context(self.context_id)
+        if not self.reasoning:
+            async for r in self._finalize_without_reasoning(step, observation_text):
+                yield r
+            return
         async for r in self._loop(step):
             yield r
+
+    # ── single-step finalization (reasoning disabled) ──────────────────
+
+    async def _finalize_without_reasoning(
+        self, step: StepData, observation_text: str,
+    ) -> AsyncGenerator[ReasoningStreamResponseType, None]:
+        """Send tool result back to LLM as a tool-call output and get a final text answer."""
+
+        messages: List[ChatCompletionMessageParam] = [
+            {"role": "system", "content": "Please respond concisely based on the tool call content without including any explanation."},
+            {"role": "user", "content": step.input or (self.steps[0].replace("Input: ", "").strip() if self.steps else "")},
+        ]
+
+        # Assistant message with tool_calls (the reasoning step that picked the tool)
+        call_id = "call_0"
+        messages.append({
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "tool_result",
+                        "arguments": json.dumps({}),
+                    },
+                }
+            ],
+        })
+
+        # Tool result message
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": observation_text or "No result",
+        })
+
+        logger.info(f"Messages for final LLM call: {messages}")
+
+        # Second LLM call — no tools, just generate the final text answer
+        content_parts: List[str] = []
+        try:
+            async for response in self.llm.chat_completion(
+                messages=messages,
+                tools=None,
+                temperature=1,
+            ):
+                if response["type"] == ChatCompletionTypeEnum.CONTENT:
+                    content = response.get("data")
+                    if content:
+                        content_parts.append(content)
+                elif response["type"] == ChatCompletionTypeEnum.DONE:
+                    self._total_input_tokens += response.get("input_tokens") or 0
+                    self._total_output_tokens += response.get("output_tokens") or 0
+                    break
+        except AgentException as err:
+            logger.error(f"Final LLM call failed in single-step mode: {err}")
+            yield {
+                "type": ChatCompletionTypeEnum.CLARIFY,
+                "data": observation_text or "I encountered an error generating a response.",
+                "input_tokens": self._total_input_tokens,
+                "output_tokens": self._total_output_tokens,
+            }
+            return
+
+        final_text = "".join(content_parts) if content_parts else observation_text or ""
+
+        # Clear context (same as TERMINATE behavior)
+        self._loaded_skill_ids.clear()
+        self._loaded_skill_sections.clear()
+        if self.context_id:
+            self._clear_context(self.context_id)
+
+        yield {
+            "type": ChatCompletionTypeEnum.DONE,
+            "data": final_text,
+            "input_tokens": self._total_input_tokens,
+            "output_tokens": self._total_output_tokens,
+        }
 
     # ── step bookkeeping ──────────────────────────────────────────────
 

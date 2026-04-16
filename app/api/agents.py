@@ -567,30 +567,56 @@ def get_agent_routes(
                 {"error": f"Tool '{tool_id}' does not support agent configuration"}, status_code=400,
             )
 
-        llm_provider = body.get("llm_provider")
-        llm_model = body.get("llm_model")
-        reasoning_effort = body.get("reasoning_effort")
-        system_prompt = body.get("system_prompt")
-        agent_description = body.get("description")
-        full_reasoning = body.get("full_reasoning")
+        _MISSING = object()
+        llm_provider = body.get("llm_provider", _MISSING)
+        llm_model = body.get("llm_model", _MISSING)
+        reasoning_effort = body.get("reasoning_effort", _MISSING)
+        system_prompt = body.get("system_prompt", _MISSING)
+        agent_description = body.get("description", _MISSING)
+        full_reasoning = body.get("full_reasoning", _MISSING)
 
-        if any(v is not None for v in (llm_provider, llm_model, reasoning_effort)):
+        llm_keys_present = any(
+            v is not _MISSING for v in (llm_provider, llm_model, reasoning_effort)
+        )
+        if llm_keys_present:
             try:
-                new_llm = create_llm_provider(
-                    provider_name=llm_provider or BaseConfig.get_default_provider(),
-                    model_name=llm_model or None,
-                    config_storage=config_storage,
-                    profile=profile,
-                    default_reasoning_effort=reasoning_effort,
-                )
-                tool.update_runtime_config(llm=new_llm)
+                prov = llm_provider if llm_provider is not _MISSING else None
+                model = llm_model if llm_model is not _MISSING else None
+                effort = reasoning_effort if reasoning_effort is not _MISSING else None
+
+                # When no per-tool override, fall back to the "low" model group
+                # (same source as startup in server.py _builtin_llm_factory).
+                if not model:
+                    group_value = BaseConfig.get_model_group("low", profile=profile)
+                    if group_value:
+                        parts = group_value.split("/", 1)
+                        if not prov:
+                            prov = parts[0]
+                        model = parts[1] if len(parts) > 1 else parts[0]
+
+                if not prov:
+                    prov = BaseConfig.get_default_provider(profile=profile)
+
+                if model:
+                    new_llm = create_llm_provider(
+                        provider_name=prov or BaseConfig.get_default_provider(),
+                        model_name=model,
+                        config_storage=config_storage,
+                        profile=profile,
+                        default_reasoning_effort=effort,
+                    )
+                    tool.update_runtime_config(llm=new_llm)
+                else:
+                    logger.warning(
+                        f"No model resolved for tool '{tool_id}'; skipping LLM rebuild"
+                    )
             except ValueError as e:
                 return JSONResponse({"error": f"Invalid LLM: {e}"}, status_code=400)
 
         tool.update_runtime_config(
-            system_prompt=system_prompt,
-            description=agent_description,
-            full_reasoning=full_reasoning,
+            system_prompt=system_prompt if system_prompt is not _MISSING else None,
+            description=agent_description if agent_description is not _MISSING else None,
+            full_reasoning=full_reasoning if full_reasoning is not _MISSING else None,
         )
 
         for key, value in [
@@ -599,13 +625,13 @@ def get_agent_routes(
             ("reasoning_effort", reasoning_effort),
             ("full_reasoning", full_reasoning),
         ]:
-            if value is not None:
+            if value is not _MISSING:
                 config_manager.set_llm_param(tool_id, profile, key, value)
         for key, value in [
             ("system_prompt", system_prompt),
             ("description", agent_description),
         ]:
-            if value is not None:
+            if value is not _MISSING:
                 config_manager.set_meta(tool_id, profile, key, value)
 
         return JSONResponse({"success": True})

@@ -121,8 +121,11 @@ class OpenPAAgentExecutor(AgentExecutor):
         if not history_messages:
             history_messages = convert_task_history_to_messages(task.history or [])
 
+        # Extract reasoning preference from request metadata (default: True)
+        reasoning = context.metadata.get("reasoning", True)
+
         try:
-            async for chunk in self.openpa_agent.run(query, history_messages, context_id, profile=profile):
+            async for chunk in self.openpa_agent.run(query, history_messages, context_id, profile=profile, reasoning=reasoning):
                 # logger.debug(f"Received chunk from OpenPAAgent: {chunk}")
                 if chunk["type"] == ChatCompletionTypeEnum.CONTENT:
                     content = chunk.get("data")

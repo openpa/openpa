@@ -255,7 +255,8 @@ class MCPAgentAdapter:
         logger.info(
             f"[MCP '{self.name}'] Invoking child LLM | "
             f"provider={self._llm.provider_name}, model={self._llm.model_label}, "
-            f"reasoning_effort=low, full_reasoning={self._full_reasoning}"
+            f"reasoning_effort={getattr(self._llm, 'default_reasoning_effort', None)}, "
+            f"full_reasoning={self._full_reasoning}"
         )
         try:
             async for response in self._llm.chat_completion(
@@ -263,7 +264,6 @@ class MCPAgentAdapter:
                 tools=available_tools if available_tools else None,
                 tool_choice="auto" if available_tools else None,
                 temperature=1,
-                reasoning_effort="low",
             ):
                 logger.debug(response)
                 if response["type"] == ChatCompletionTypeEnum.CONTENT:

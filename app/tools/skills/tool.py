@@ -53,6 +53,18 @@ class SkillTool(Tool):
     def description(self) -> str:
         return self._info.description
 
+    @property
+    def environment_variables(self) -> list[str]:
+        """Names of environment variables declared in the SKILL.md frontmatter.
+
+        Declared via ``metadata.environment_variables`` as a list of strings.
+        Returns an empty list when none are declared.
+        """
+        raw = self._info.metadata.get("environment_variables") or []
+        if not isinstance(raw, list):
+            return []
+        return [v for v in raw if isinstance(v, str) and v]
+
     def get_card(self) -> AgentCard:
         return AgentCard(
             name=self._info.name,

@@ -45,6 +45,11 @@ def create_llm_provider(
         ValueError: If provider_name is unknown or required credentials are missing.
     """
     model = model_name or BaseConfig.REASONING_MODEL_NAME
+    if not model:
+        raise ValueError(
+            "No model name provided and no default model configured. "
+            "Ensure the 'low' model group is set via the setup wizard."
+        )
     # Strip provider prefix if model string starts with "provider_name/"
     # (UI sends "provider/model_id" format, e.g. "groq/openai/gpt-oss-120b")
     if model and provider_name and model.startswith(f"{provider_name}/"):
