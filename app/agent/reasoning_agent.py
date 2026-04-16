@@ -145,8 +145,8 @@ class ReasoningAgent:
         registry: ToolRegistry,
         profile: str,
         context_id: Optional[str] = None,
-        max_steps: int = 20,
-        steps_length: int = 40,
+        max_steps: int = 10,
+        steps_length: int = 20,
         reasoning: bool = True,
     ):
         self.llm = llm
@@ -222,11 +222,24 @@ class ReasoningAgent:
         # If any loaded skill declares environment variables, remind the agent
         # to source the per-skill .env file before running any script -- exec_shell
         # is generic and won't preload them automatically.
-        if any(
-            getattr(self._tools_by_id.get(tid), "environment_variables", None)
-            for tid in self._loaded_skill_sections
-        ):
-            parts.append("Always load variables from the .env file before executing commands\n")
+        # if any(
+        #     getattr(self._tools_by_id.get(tid), "environment_variables", None)
+        #     for tid in self._loaded_skill_sections
+        # ):
+        #     parts.append(
+        #         "Before running any script/app/binary in the scripts directory, "
+        #         "you must export variables from the .env file so that the script/app/binary "
+        #         "has the necessary environment variables to run.\n\n"
+        #         "For Windows:\n"
+        #         "Get-Content .env | ForEach-Object {\n"
+        #         "    if ($_ -notmatch '^#|^\\s*$') {\n"
+        #         "        $name, $value = $_ -split '=', 2\n"
+        #         "        Set-Content \"env:\\$($name.Trim())\" $value.Trim()\n"
+        #         "    }\n"
+        #         "}\n\n"
+        #         "For Linux and macOS:\n"
+        #         "export $(grep -v '^#' .env | xargs)\n"
+        #     )
         for tool_id, content in self._loaded_skill_sections.items():
             tool = self._tools_by_id.get(tool_id)
             display_name = tool.name if tool else tool_id
@@ -708,21 +721,6 @@ class ReasoningAgent:
             tree_text = generate_dir_tree(dir_path)
             if tree_text:
                 skill_text = f"Skill Directory Structure:\n```\n{tree_text}\n```\n\n{skill_text}"
-            # If the skill declares environment variables, surface their current
-            # values inline so the agent can read them without parsing the .env
-            # file first.
-            declared_env = getattr(tool, "environment_variables", []) or []
-            if declared_env:
-                stored = self._load_variables(tool.tool_id)
-                env_lines = [
-                    f"{name}={stored[name]}" if name in stored and stored[name] != "" else f"{name}="
-                    for name in declared_env
-                ]
-                env_block = (
-                    "Skill Environment Variables (already loaded from .env):\n"
-                    "```\n" + "\n".join(env_lines) + "\n```\n\n"
-                )
-                skill_text = f"{env_block}{skill_text}"
             self._loaded_skill_sections[tool.tool_id] = skill_text
             self._loaded_skill_ids.add(tool.tool_id)
             # The full SKILL.md content is shown to the user in the frontend's

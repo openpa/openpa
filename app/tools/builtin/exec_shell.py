@@ -49,6 +49,153 @@ _process_registry: Dict[str, ProcessInfo] = {}
 _PROCESS_TTL = 600  # 10 min TTL for orphaned processes
 _DEFAULT_SILENCE_TIMEOUT = 3.0  # seconds of silence = "waiting for input"
 
+# Per-profile persistent shell sessions
+_shell_sessions: Dict[str, asyncio.subprocess.Process] = {}
+
+
+async def _get_shell_session(profile: str, working_dir: str) -> asyncio.subprocess.Process:
+    """Return a persistent shell process for *profile*, creating one if needed."""
+    proc = _shell_sessions.get(profile)
+    if proc is not None and proc.returncode is None:
+        return proc
+
+    if _SYSTEM == "Windows":
+        # Run a read-eval loop via -Command so PowerShell never echoes
+        # commands or shows prompts.  Lines are buffered until the
+        # sentinel ``__OPA_EXEC__`` triggers Invoke-Expression.
+        loop_script = (
+            '$OutputEncoding = [Console]::OutputEncoding = '
+            '[System.Text.Encoding]::UTF8; '
+            '$__buf = ""; '
+            'while ($true) { '
+            '  $__line = [Console]::In.ReadLine(); '
+            '  if ($__line -eq $null) { break }; '
+            '  if ($__line -eq "__OPA_EXEC__") { '
+            '    if ($__buf) { '
+            '      try { Invoke-Expression $__buf } '
+            '      catch { [Console]::Error.WriteLine($_.Exception.Message) } '
+            '    }; '
+            '    $__buf = "" '
+            '  } else { '
+            '    if ($__buf) { $__buf += "`n" + $__line } '
+            '    else { $__buf = $__line } '
+            '  } '
+            '}'
+        )
+        proc = await asyncio.create_subprocess_exec(
+            _SHELL, "-NoLogo", "-NoProfile", "-Command", loop_script,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_dir,
+        )
+    else:
+        proc = await asyncio.create_subprocess_exec(
+            _SHELL,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_dir,
+        )
+
+    _shell_sessions[profile] = proc
+    return proc
+
+
+async def _read_until_markers(
+    process: asyncio.subprocess.Process,
+    marker: str,
+    overall_timeout: float = 120.0,
+    silence_timeout: float = 10.0,
+) -> dict:
+    """Read stdout/stderr until end-markers are found.
+
+    Looks for ``{marker}:EXIT:{code}`` on stdout and ``{marker}:ERR_END``
+    on stderr.
+    """
+    stdout_buf = ""
+    stderr_buf = ""
+    exit_code: Optional[int] = None
+    stdout_done = False
+    stderr_done = False
+    stderr_marker = f"{marker}:ERR_END"
+    start = time.monotonic()
+    last_data = start
+
+    while not (stdout_done and stderr_done):
+        elapsed = time.monotonic() - start
+        if elapsed >= overall_timeout:
+            return {"stdout": stdout_buf, "stderr": stderr_buf,
+                    "return_code": exit_code, "completed": True,
+                    "waiting_for_input": False, "timed_out": True}
+
+        task_map: Dict[asyncio.Task, str] = {}
+        if not stdout_done and process.stdout:
+            task_map[asyncio.ensure_future(process.stdout.read(4096))] = "stdout"
+        if not stderr_done and process.stderr:
+            task_map[asyncio.ensure_future(process.stderr.read(4096))] = "stderr"
+        if not task_map:
+            break
+
+        done, pending = await asyncio.wait(
+            task_map.keys(),
+            timeout=min(silence_timeout, overall_timeout - elapsed),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        if not done:
+            if process.returncode is not None:
+                return {"stdout": stdout_buf, "stderr": stderr_buf,
+                        "return_code": process.returncode, "completed": True,
+                        "waiting_for_input": False}
+            if time.monotonic() - last_data >= silence_timeout:
+                return {"stdout": stdout_buf, "stderr": stderr_buf,
+                        "return_code": None, "completed": False,
+                        "waiting_for_input": True}
+            continue
+
+        for t in done:
+            data = t.result()
+            if data == b"":
+                if task_map[t] == "stdout":
+                    stdout_done = True
+                else:
+                    stderr_done = True
+                continue
+            chunk = data.decode("utf-8", errors="replace")
+            last_data = time.monotonic()
+
+            if task_map[t] == "stdout":
+                stdout_buf += chunk
+                tag = f"{marker}:EXIT:"
+                idx = stdout_buf.find(tag)
+                if idx != -1:
+                    after = stdout_buf[idx + len(tag):]
+                    try:
+                        exit_code = int(after.split("\n", 1)[0].strip())
+                    except ValueError:
+                        exit_code = 0
+                    line_start = stdout_buf.rfind("\n", 0, idx)
+                    stdout_buf = stdout_buf[:line_start + 1] if line_start != -1 else ""
+                    stdout_done = True
+            else:
+                stderr_buf += chunk
+                idx = stderr_buf.find(stderr_marker)
+                if idx != -1:
+                    line_start = stderr_buf.rfind("\n", 0, idx)
+                    stderr_buf = stderr_buf[:line_start + 1] if line_start != -1 else ""
+                    stderr_done = True
+
+    return {"stdout": stdout_buf, "stderr": stderr_buf,
+            "return_code": exit_code if exit_code is not None else 0,
+            "completed": True, "waiting_for_input": False}
+
 
 SERVER_NAME = "Exec Shell"
 SERVER_INSTRUCTIONS = (
@@ -104,6 +251,7 @@ class ExecShellTool(BuiltInTool):
     }
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        profile = (arguments.get("_profile") or "admin").strip() or "admin"
         command = arguments.get("command", "").strip()
         working_directory = (
             arguments.get("working_directory", None)
@@ -138,20 +286,34 @@ class ExecShellTool(BuiltInTool):
         logger.debug(f"exec_shell: running '{command}' on {_SYSTEM} with shell {_SHELL}")
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                _SHELL,
-                _SHELL_FLAG,
-                command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=working_directory,
-            )
+            proc = await _get_shell_session(profile, working_directory)
 
-            result = await _read_until_blocked(
-                process,
-                silence_timeout=silence_timeout,
+            # Wrap the command with markers to delimit output
+            marker = f"__opa_{_uuid.uuid4().hex[:12]}"
+            if _SYSTEM == "Windows":
+                wrapped = (
+                    f"{command}\n"
+                    f"$__opa_ec = $LASTEXITCODE; "
+                    f"if ($null -eq $__opa_ec) {{ $__opa_ec = if ($?) {{ 0 }} else {{ 1 }} }}\n"
+                    f"Write-Host ('{marker}:EXIT:' + $__opa_ec)\n"
+                    f"[Console]::Error.WriteLine('{marker}:ERR_END')\n"
+                    f"__OPA_EXEC__\n"
+                )
+            else:
+                wrapped = (
+                    f"{command}\n"
+                    f"__opa_ec=$?\n"
+                    f"echo '{marker}:EXIT:'$__opa_ec\n"
+                    f"echo '{marker}:ERR_END' >&2\n"
+                )
+
+            proc.stdin.write(wrapped.encode("utf-8"))
+            await proc.stdin.drain()
+
+            result = await _read_until_markers(
+                proc, marker,
                 overall_timeout=timeout,
+                silence_timeout=silence_timeout,
             )
 
             if result["completed"]:
@@ -170,7 +332,7 @@ class ExecShellTool(BuiltInTool):
             # Process is waiting for input — register it
             process_id = _uuid.uuid4().hex[:8]
             _process_registry[process_id] = ProcessInfo(
-                process=process,
+                process=proc,
                 created_at=time.monotonic(),
                 working_dir=working_directory,
                 command=command,
@@ -193,6 +355,8 @@ class ExecShellTool(BuiltInTool):
             )
 
         except Exception as e:
+            # If the session broke, discard it so the next call gets a fresh one
+            _shell_sessions.pop(profile, None)
             return BuiltInToolResult(
                 structured_content={
                     "error": "Execution error",
