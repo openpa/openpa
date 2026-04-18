@@ -166,23 +166,31 @@ async def _connect_mcp_tool(
     url = row["source"]
     owner = row["owner_profile"]
     extra = row.get("extra") or {}
+    tool_id = row["tool_id"]
+
+    def _mcp_llm_factory(profile: str) -> LLMProvider:
+        """Create an LLM for this MCP tool, respecting per-tool overrides."""
+        try:
+            _params = registry.config.get_llm_params(tool_id, profile)
+        except Exception:  # noqa: BLE001
+            _params = {}
+        if _params.get("llm_provider") or _params.get("llm_model"):
+            return create_llm_provider(
+                provider_name=_params.get("llm_provider") or BaseConfig.get_default_provider(),
+                model_name=_params.get("llm_model"),
+                config_storage=model_group_mgr.config_storage,
+                profile=profile,
+                default_reasoning_effort=_params.get("reasoning_effort"),
+            )
+        return model_group_mgr.create_llm_for_group("low", profile=profile)
+
     try:
-        llm_params = registry.config.get_llm_params(row["tool_id"], owner or "admin")
+        llm_params = registry.config.get_llm_params(tool_id, owner or "admin")
     except Exception:
         llm_params = {}
     llm = None
     try:
-        if llm_params.get("llm_provider") or llm_params.get("llm_model"):
-            llm = create_llm_provider(
-                provider_name=llm_params.get("llm_provider")
-                    or BaseConfig.get_default_provider(),
-                model_name=llm_params.get("llm_model"),
-                config_storage=model_group_mgr.config_storage,
-                profile=owner or "admin",
-                default_reasoning_effort=llm_params.get("reasoning_effort"),
-            )
-        else:
-            llm = model_group_mgr.create_llm_for_group("low", profile=owner or "admin")
+        llm = _mcp_llm_factory(owner or "admin")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"No LLM for MCP server '{url}': {e}")
 
@@ -194,11 +202,13 @@ async def _connect_mcp_tool(
                     command=extra["command"], args=extra.get("args", []),
                     env=extra.get("env"), llm=llm, owner_profile=owner,
                     full_reasoning=bool(llm_params.get("full_reasoning", False)),
+                    llm_factory=_mcp_llm_factory,
                 )
             else:
                 tool = await build_http_mcp_tool(
                     url=url, llm=llm, owner_profile=owner,
                     full_reasoning=bool(llm_params.get("full_reasoning", False)),
+                    llm_factory=_mcp_llm_factory,
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"MCP tool '{url}' unreachable: {e}")
@@ -351,7 +361,20 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # 4. Model groups + built-in tools
     model_group_mgr = ModelGroupManager(config_storage)
 
-    def _builtin_llm_factory(_module_name: str, profile: str):
+    def _builtin_llm_factory(tool_id: str, profile: str):
+        """Create an LLM for a built-in tool, respecting per-tool overrides."""
+        try:
+            _llm_params = config_manager.get_llm_params(tool_id, profile)
+        except Exception:  # noqa: BLE001
+            _llm_params = {}
+        if _llm_params.get("llm_provider") or _llm_params.get("llm_model"):
+            return create_llm_provider(
+                provider_name=_llm_params.get("llm_provider") or BaseConfig.get_default_provider(),
+                model_name=_llm_params.get("llm_model") or None,
+                config_storage=config_storage,
+                profile=profile,
+                default_reasoning_effort=_llm_params.get("reasoning_effort"),
+            )
         return model_group_mgr.create_llm_for_group("low", profile=profile)
 
     # Built-in tools are always registered at startup so the setup wizard and
@@ -515,9 +538,23 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         openpa_agent.update_embeddings()
         logger.info("Post-setup: built-in tools rebound and skills synced")
 
-    def _mcp_llm_factory():
+    def _mcp_llm_factory(tool_id: str | None = None, profile: str = "admin"):
+        """Create an LLM for an MCP tool, respecting per-tool overrides."""
+        if tool_id:
+            try:
+                _params = config_manager.get_llm_params(tool_id, profile)
+            except Exception:  # noqa: BLE001
+                _params = {}
+            if _params.get("llm_provider") or _params.get("llm_model"):
+                return create_llm_provider(
+                    provider_name=_params.get("llm_provider") or BaseConfig.get_default_provider(),
+                    model_name=_params.get("llm_model") or None,
+                    config_storage=config_storage,
+                    profile=profile,
+                    default_reasoning_effort=_params.get("reasoning_effort"),
+                )
         try:
-            return model_group_mgr.create_llm_for_group("low", profile="admin")
+            return model_group_mgr.create_llm_for_group("low", profile=profile)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to create MCP LLM: {e}")
             return None

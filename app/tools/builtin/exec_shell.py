@@ -3,9 +3,16 @@
 Executes shell commands on the terminal. Detects the operating system and
 uses the appropriate shell (PowerShell on Windows, /bin/bash on Linux/macOS).
 
-exec_shell automatically detects whether a command needs user input (by
-monitoring output silence) and returns a process_id for follow-up via
-exec_shell_input.  exec_shell_stop terminates a running process.
+Classification is **behaviour-based** — the tool observes what the process
+actually does at runtime rather than guessing from the command name:
+
+- Process exits on its own                  → fire-and-forget  (Cat 1)
+- Silence + blocked on stdin                → waiting for input (Cat 2 / 5)
+- Silence + NOT blocked on stdin for >10 s  → long-running      (Cat 3)
+- TUI escape sequences in output            → full-screen app   (Cat 4)
+
+Categories 1, 2, 5, and 6 are supported.  Categories 3 and 4 are detected
+at runtime, interrupted, and reported as unsupported.
 """
 
 import asyncio
@@ -18,6 +25,13 @@ from typing import Any, Dict, Optional
 
 from app.config.settings import BaseConfig
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
+from app.types import ToolConfig
+from app.tools.builtin.exec_shell_classifier import (
+    CommandCategory,
+    UNSUPPORTED_CATEGORIES,
+    detect_tui_sequences,
+)
+from app.tools.builtin.exec_shell_process_inspect import is_child_blocked_on_read
 from app.utils.logger import logger
 
 # Detect OS and shell once at startup
@@ -47,7 +61,8 @@ class ProcessInfo:
 
 _process_registry: Dict[str, ProcessInfo] = {}
 _PROCESS_TTL = 600  # 10 min TTL for orphaned processes
-_DEFAULT_SILENCE_TIMEOUT = 3.0  # seconds of silence = "waiting for input"
+_DEFAULT_SILENCE_TIMEOUT = 3.0  # seconds of silence → trigger introspection check
+_DEFAULT_LONG_RUNNING_TIMEOUT = 10.0  # seconds of continuous silence (not stdin-blocked) → long-running
 
 # Per-profile persistent shell sessions
 _shell_sessions: Dict[str, asyncio.subprocess.Process] = {}
@@ -102,16 +117,39 @@ async def _get_shell_session(profile: str, working_dir: str) -> asyncio.subproce
     return proc
 
 
+async def _check_stdin_blocked(process: asyncio.subprocess.Process) -> bool | None:
+    """Check if the child process is blocked on stdin.
+
+    Returns ``True`` (blocked), ``False`` (not blocked), or ``None``
+    (inconclusive — e.g. on Windows).
+    """
+    return await is_child_blocked_on_read(process.pid, _SYSTEM)
+
+
 async def _read_until_markers(
     process: asyncio.subprocess.Process,
     marker: str,
     overall_timeout: float = 120.0,
-    silence_timeout: float = 10.0,
+    silence_timeout: float = 3.0,
+    long_running_timeout: float = 10.0,
 ) -> dict:
     """Read stdout/stderr until end-markers are found.
 
     Looks for ``{marker}:EXIT:{code}`` on stdout and ``{marker}:ERR_END``
     on stderr.
+
+    **Behaviour-based classification** — instead of relying on command
+    names, the function observes the process's actual behaviour:
+
+    - **Silence + stdin-blocked** → ``waiting_for_input`` (returned
+      immediately on the first silence check).
+    - **Silence + NOT stdin-blocked, accumulated silence < long_running_timeout**
+      → keep waiting (the process may resume output).
+    - **Silence + NOT stdin-blocked, accumulated silence ≥ long_running_timeout**
+      → ``long_running`` (the process is likely a daemon / server).
+    - **TUI escape sequences in output** → ``tui_detected``.
+    - **Markers found** → ``completed``.
+    - **overall_timeout exceeded** → ``timed_out``.
     """
     stdout_buf = ""
     stderr_buf = ""
@@ -137,9 +175,10 @@ async def _read_until_markers(
         if not task_map:
             break
 
+        remaining = overall_timeout - elapsed
         done, pending = await asyncio.wait(
             task_map.keys(),
-            timeout=min(silence_timeout, overall_timeout - elapsed),
+            timeout=min(silence_timeout, remaining),
             return_when=asyncio.FIRST_COMPLETED,
         )
         for t in pending:
@@ -150,16 +189,56 @@ async def _read_until_markers(
                 pass
 
         if not done:
+            # ---- No data received within this check interval ----
             if process.returncode is not None:
                 return {"stdout": stdout_buf, "stderr": stderr_buf,
                         "return_code": process.returncode, "completed": True,
                         "waiting_for_input": False}
-            if time.monotonic() - last_data >= silence_timeout:
-                return {"stdout": stdout_buf, "stderr": stderr_buf,
+
+            silence_duration = time.monotonic() - last_data
+            if silence_duration < silence_timeout:
+                # Haven't been silent long enough for a check yet.
+                continue
+
+            # --- Behaviour-based classification ---
+            blocked = await _check_stdin_blocked(process)
+
+            if blocked is True:
+                # Definitively waiting for user input.
+                return {
+                    "stdout": stdout_buf, "stderr": stderr_buf,
+                    "return_code": None, "completed": False,
+                    "waiting_for_input": True,
+                    "detected_category": "waiting_for_input",
+                }
+
+            if silence_duration >= long_running_timeout:
+                if blocked is False:
+                    # Confirmed not waiting on stdin → daemon / server.
+                    return {
+                        "stdout": stdout_buf, "stderr": stderr_buf,
                         "return_code": None, "completed": False,
-                        "waiting_for_input": True}
+                        "waiting_for_input": False,
+                        "long_running": True,
+                        "detected_category": "long_running",
+                    }
+                # blocked is None (inconclusive, e.g. Windows).
+                # After long_running_timeout of silence we still can't
+                # tell — default to waiting_for_input for safety.
+                return {
+                    "stdout": stdout_buf, "stderr": stderr_buf,
+                    "return_code": None, "completed": False,
+                    "waiting_for_input": True,
+                    "detected_category": "waiting_for_input",
+                    "classification_uncertain": True,
+                }
+
+            # Not yet at long_running_timeout — keep waiting.
+            # The process may resume output (e.g. a build step that
+            # pauses briefly between phases).
             continue
 
+        # ---- Data received ----
         for t in done:
             data = t.result()
             if data == b"":
@@ -172,6 +251,16 @@ async def _read_until_markers(
             last_data = time.monotonic()
 
             if task_map[t] == "stdout":
+                # Check for TUI escape sequences (behaviour-based).
+                if detect_tui_sequences(chunk):
+                    return {
+                        "stdout": stdout_buf + chunk,
+                        "stderr": stderr_buf,
+                        "return_code": None, "completed": False,
+                        "waiting_for_input": False,
+                        "tui_detected": True,
+                        "detected_category": "tui_fullscreen",
+                    }
                 stdout_buf += chunk
                 tag = f"{marker}:EXIT:"
                 idx = stdout_buf.find(tag)
@@ -200,14 +289,10 @@ async def _read_until_markers(
 SERVER_NAME = "Exec Shell"
 SERVER_INSTRUCTIONS = (
     f"Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS. "
-    f"Current OS: {_SYSTEM}. Current shell: {_SHELL}. "
-    f"Use exec_shell to run any command. If the command needs user input, "
-    f"exec_shell will return waiting_for_input=true and a process_id. "
-    f"Then use exec shell input to send the user's input to the running process. "
-    f"Use exec shell stop to terminate a running process."
+    f"Current OS: {_SYSTEM}. Current shell: {_SHELL}."
 )
 
-TOOL_CONFIG: dict = {
+TOOL_CONFIG: ToolConfig = {
     "name": "exec_shell",
     "display_name": "Shell Executor",
     "default_model_group": "low",
@@ -220,8 +305,6 @@ class ExecShellTool(BuiltInTool):
         "Executes a shell command on the terminal and returns its output. "
         "Automatically detects the operating system and uses the appropriate shell "
         "(PowerShell on Windows, /bin/bash on Linux/macOS). "
-        "If the command requires user input, returns waiting_for_input=true and "
-        "a process_id to use with exec shell input."
         "E.g. 'please generate public SSH keys'"
     )
     parameters: Dict[str, Any] = {
@@ -242,8 +325,25 @@ class ExecShellTool(BuiltInTool):
             "silence_timeout": {
                 "type": "number",
                 "description": (
-                    "Seconds of output silence before assuming the process is "
-                    "waiting for user input. Default: 3."
+                    "Seconds of output silence before checking whether the "
+                    "process is waiting for input. Default: 3."
+                ),
+            },
+            "long_running_timeout": {
+                "type": "number",
+                "description": (
+                    "Seconds of continuous silence (while the process is NOT "
+                    "blocked on stdin) before classifying as a long-running "
+                    "process and interrupting. Default: 10."
+                ),
+            },
+            "category": {
+                "type": "string",
+                "enum": [c.value for c in CommandCategory if c != CommandCategory.UNKNOWN],
+                "description": (
+                    "Optional hint — explicitly specify the expected command "
+                    "category. If set to tui_fullscreen or long_running the "
+                    "command will be blocked before execution."
                 ),
             },
         },
@@ -260,6 +360,8 @@ class ExecShellTool(BuiltInTool):
         )
         timeout = arguments.get("timeout", 120)
         silence_timeout = arguments.get("silence_timeout", _DEFAULT_SILENCE_TIMEOUT)
+        long_running_timeout = arguments.get("long_running_timeout", _DEFAULT_LONG_RUNNING_TIMEOUT)
+        caller_category = arguments.get("category")
 
         if not command:
             return BuiltInToolResult(
@@ -277,6 +379,30 @@ class ExecShellTool(BuiltInTool):
                     structured_content={
                         "error": "Invalid working directory",
                         "message": f"Directory does not exist: {working_directory}",
+                    }
+                )
+
+        # -----------------------------------------------------------------
+        # Optional caller-provided category hint
+        # -----------------------------------------------------------------
+        if caller_category:
+            try:
+                cat = CommandCategory(caller_category)
+            except ValueError:
+                cat = CommandCategory.UNKNOWN
+            if cat in UNSUPPORTED_CATEGORIES:
+                return BuiltInToolResult(
+                    structured_content={
+                        "error": "Unsupported command type",
+                        "unsupported": True,
+                        "category": cat.value,
+                        "message": (
+                            f"The caller marked this command as '{cat.value}' which is "
+                            "not supported by exec_shell."
+                        ),
+                        "command": command,
+                        "os": _SYSTEM,
+                        "shell": _SHELL,
                     }
                 )
 
@@ -314,14 +440,19 @@ class ExecShellTool(BuiltInTool):
                 proc, marker,
                 overall_timeout=timeout,
                 silence_timeout=silence_timeout,
+                long_running_timeout=long_running_timeout,
             )
 
+            detected_cat = result.get("detected_category", "fire_and_forget")
+
+            # --- Command completed normally (fire-and-forget) ---
             if result["completed"]:
                 return BuiltInToolResult(
                     structured_content={
                         "stdout": result["stdout"],
                         "stderr": result["stderr"],
                         "return_code": result["return_code"],
+                        "category": "fire_and_forget",
                         "command": command,
                         "os": _SYSTEM,
                         "shell": _SHELL,
@@ -329,7 +460,56 @@ class ExecShellTool(BuiltInTool):
                     }
                 )
 
-            # Process is waiting for input — register it
+            # --- TUI detected at runtime via escape sequences ---
+            if result.get("tui_detected"):
+                await _interrupt_running_command(proc, marker, profile)
+                return BuiltInToolResult(
+                    structured_content={
+                        "error": "TUI application detected",
+                        "unsupported": True,
+                        "category": "tui_fullscreen",
+                        "stdout": result["stdout"],
+                        "stderr": result["stderr"],
+                        "interrupted": True,
+                        "message": (
+                            f"The command '{command}' appears to be a TUI / full-screen "
+                            "application (detected terminal control escape sequences). "
+                            "It has been interrupted."
+                        ),
+                        "command": command,
+                        "os": _SYSTEM,
+                        "shell": _SHELL,
+                    }
+                )
+
+            # --- Long-running process detected at runtime ---
+            if result.get("long_running"):
+                await _interrupt_running_command(proc, marker, profile)
+                return BuiltInToolResult(
+                    structured_content={
+                        "error": "Long-running command detected",
+                        "unsupported": True,
+                        "category": "long_running",
+                        "stdout": result["stdout"],
+                        "stderr": result["stderr"],
+                        "interrupted": True,
+                        "message": (
+                            f"The command '{command}' has been silent for "
+                            f"{long_running_timeout}+ seconds and is not waiting "
+                            "for input — it appears to be a long-running process "
+                            "(daemon/server). It has been interrupted."
+                        ),
+                        "suggested_alternative": (
+                            "Run in a dedicated terminal, or use "
+                            "'nohup <command> &' to background it."
+                        ),
+                        "command": command,
+                        "os": _SYSTEM,
+                        "shell": _SHELL,
+                    }
+                )
+
+            # --- Process is waiting for input ---
             process_id = _uuid.uuid4().hex[:8]
             _process_registry[process_id] = ProcessInfo(
                 process=proc,
@@ -348,9 +528,11 @@ class ExecShellTool(BuiltInTool):
                     "stderr": result["stderr"],
                     "waiting_for_input": True,
                     "completed": False,
+                    "category": detected_cat,
                     "command": command,
                     "os": _SYSTEM,
                     "shell": _SHELL,
+                    **({"classification_uncertain": True} if result.get("classification_uncertain") else {}),
                 }
             )
 
@@ -510,6 +692,74 @@ async def _cleanup_stale_processes() -> int:
     return len(stale_ids)
 
 
+async def _interrupt_running_command(
+    proc: asyncio.subprocess.Process,
+    marker: str,
+    profile: str,
+) -> bool:
+    """Send Ctrl+C to interrupt a long-running command in the persistent shell.
+
+    Returns ``True`` if the shell session is still usable, ``False`` if it was
+    discarded and will be recreated on the next call.
+    """
+    if _SYSTEM == "Windows":
+        # Ctrl+C via stdin is unreliable with PowerShell's Invoke-Expression.
+        # Discard the session; a fresh one will be created on the next call.
+        _shell_sessions.pop(profile, None)
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        return False
+
+    # Unix (Linux / macOS): send SIGINT via the Ctrl+C character.
+    for attempt in range(2):
+        try:
+            proc.stdin.write(b"\x03\n")
+            await proc.stdin.drain()
+        except Exception:
+            _shell_sessions.pop(profile, None)
+            return False
+
+        # Wait briefly for the end marker to appear (shell recovered).
+        try:
+            buf = b""
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if proc.stdout:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            proc.stdout.read(4096), timeout=remaining,
+                        )
+                        if chunk:
+                            buf += chunk
+                            if marker.encode() in buf:
+                                logger.debug(
+                                    f"exec_shell: shell recovered after Ctrl+C (attempt {attempt + 1})"
+                                )
+                                return True
+                    except asyncio.TimeoutError:
+                        break
+                else:
+                    break
+        except Exception:
+            break
+
+    # Shell did not recover — discard the session.
+    logger.warning("exec_shell: shell session did not recover after Ctrl+C; discarding")
+    _shell_sessions.pop(profile, None)
+    try:
+        proc.kill()
+        await proc.wait()
+    except Exception:
+        pass
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Interactive follow-up tools
 # ---------------------------------------------------------------------------
@@ -522,7 +772,8 @@ class ExecShellInputTool(BuiltInTool):
         "Writes the input text to the process's stdin, then reads output until "
         "the process blocks again or exits."
         "Returns the new output and whether the process is still waiting for input. "
-        "E.g. 'send user input to the running Python script'"
+        "E.g. input: <text_input>\nprocess_id: <abc123>"
+        "Required: process_id, input_text"
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -648,7 +899,8 @@ class ExecShellStopTool(BuiltInTool):
         "Stop a running interactive process by process_id. "
         "Sends SIGTERM, waits briefly, then SIGKILL if needed."
         "Returns any final output and the return code if available."
-        "E.g. 'stop the running Python script'"
+        "E.g. 'stop process_id=<abc123>'. "
+        "Required: process_id"
     )
     parameters: Dict[str, Any] = {
         "type": "object",

@@ -32,7 +32,13 @@ class SkillInfo:
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    """Extract YAML frontmatter from a ``SKILL.md`` file."""
+    """Extract YAML frontmatter from a ``SKILL.md`` file.
+
+    Returns the full parsed frontmatter dict and a cleaned version of *text*
+    where the frontmatter only contains ``name`` and ``description`` (all
+    other keys such as ``metadata`` are stripped so they don't leak into the
+    agent instruction prompt).
+    """
     stripped = text.lstrip()
     if not stripped.startswith("---"):
         return {}, text
@@ -51,7 +57,17 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not isinstance(data, dict):
         return {}, text
 
-    return data, text
+    # Rebuild frontmatter with only name and description for the agent prompt.
+    clean_fm: dict[str, str] = {}
+    if "name" in data:
+        clean_fm["name"] = data["name"]
+    if "description" in data:
+        clean_fm["description"] = data["description"]
+    body = stripped[end_idx + 3:]  # text after closing ---
+    clean_yaml = yaml.dump(clean_fm, default_flow_style=False, allow_unicode=True).rstrip("\n")
+    clean_text = f"---\n{clean_yaml}\n---{body}"
+
+    return data, clean_text
 
 
 def scan_skills(skills_dir: Path) -> dict[str, SkillInfo]:

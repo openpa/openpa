@@ -70,7 +70,6 @@ Current Skills Directory: `{current_skills_directory}`
 
 Tools:
 {tools}
-{loaded_skills}
 Use the following format:
 
 Input: the input you must answer
@@ -79,6 +78,10 @@ Action: the action to take from Thought, should be one of {tool_names}
 Action_Input: the input sent to the action. For intrinsic tools, this is the response content to be sent to the user. Please respond in an easy-to-understand way, only text for the human listening (System information, technical specifications, and the device ID are hidden information)
 Thought_In_Next: you should always think about what to do next after observing the results of the action
 Observation: the result of the action, the observation content will be placed between '{OBSERVATION_START_MARKER}' and '{OBSERVATION_END_MARKER}' to help you clearly identify the observation content.
+
+==========Start Skills Instructions==========
+{loaded_skills}
+==========End Skills Instructions==========
 '''
 
 template_input = '''
@@ -215,9 +218,10 @@ class ReasoningAgent:
         if not self._loaded_skill_sections:
             return ""
         parts = [
-            "\nLoaded Skills (follow these instructions when relevant):\n"
-            "Note: Your current working directory is the \"Current User Working Directory\", "
-            "so to run any skill script, use the path from the \"Current Skills Directory\".\n"
+            "\nYou should only follow the instructions provided in the content loaded below. "
+            "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons."
+            "Important: Your current working directory is the \"Current User Working Directory\", "
+            "so to run any skill script in <skill_directory>/scripts, use the absolute path.\n"
         ]
         # If any loaded skill declares environment variables, remind the agent
         # to source the per-skill .env file before running any script -- exec_shell
@@ -357,8 +361,8 @@ class ReasoningAgent:
         # appended (and re-invoked skills are filtered out of the Tools block).
         self.instruction = self._build_instruction()
 
-        logger.info(f"=== Instruction ===\n{self.instruction}")
-        logger.info(f"=== Reasoning Step ===\n{input_section}")
+        # logger.info(f"=== Instruction ===\n{self.instruction}")
+        # logger.info(f"=== Reasoning Step ===\n{input_section}")
 
         # Action enum is the set of tool_ids, minus skills already folded into
         # the system prompt — this prevents the LLM from re-loading them.
@@ -547,6 +551,11 @@ class ReasoningAgent:
         llm_params = self._load_llm_params(tool.tool_id) if tool.tool_type in (
             ToolType.MCP, ToolType.BUILTIN,
         ) else {}
+
+        # Refresh the tool's child LLM from current config BEFORE reading
+        # Model_Label, so the Thinking Process shows the up-to-date model.
+        if tool.tool_type in (ToolType.BUILTIN, ToolType.MCP):
+            tool.refresh_llm(self.profile)
 
         # Yield a thinking artifact so the UI shows the tool invocation.
         # For skills, override the model-generated Action_Input with a concise

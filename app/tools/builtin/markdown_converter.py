@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
-from app.types import ToolResultFile, ToolResultWithFiles
+from app.types import ToolConfig, ToolResultFile, ToolResultWithFiles
 from app.utils.logger import logger
 
 
@@ -23,7 +23,7 @@ SERVER_INSTRUCTIONS = (
     "markdown for further processing, editing, or analysis."
 )
 
-TOOL_CONFIG: dict = {
+TOOL_CONFIG: ToolConfig = {
     "name": "markdown_converter",
     "display_name": "Markdown Converter",
     "default_model_group": "low",

@@ -164,6 +164,16 @@ class Tool(ABC):
         """
         return None
 
+    # ── runtime LLM refresh ────────────────────────────────────────────
+
+    def refresh_llm(self, profile: str) -> None:
+        """Re-create the child LLM from current config.
+
+        Called by the reasoning agent *before* reading the model label so
+        that ``_model_label_for()`` reflects the latest settings. No-op by
+        default; overridden by BuiltInToolGroup and MCPServerTool.
+        """
+
     # ── execution ───────────────────────────────────────────────────────
 
     @abstractmethod

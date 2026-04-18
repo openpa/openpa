@@ -8,6 +8,9 @@ from .__main__ import (
     ReasoningStreamResponseType,
     ToolResultFile,
     ToolResultWithFiles,
+    RequiredConfigField,
+    OAuthConfig,
+    ToolConfig,
 )
 __all__ = [
     "EmbeddingTable",
@@ -19,4 +22,7 @@ __all__ = [
     "ReasoningStreamResponseType",
     "ToolResultFile",
     "ToolResultWithFiles",
+    "RequiredConfigField",
+    "OAuthConfig",
+    "ToolConfig",
 ]

@@ -17,7 +17,7 @@ from typing import Any, Dict
 from tiktoken import encoding_for_model
 
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
-from app.types import ToolResultFile, ToolResultWithFiles
+from app.types import ToolConfig, ToolResultFile, ToolResultWithFiles
 from app.utils.logger import logger
 
 # ---------------------------------------------------------------------------
@@ -884,7 +884,7 @@ def get_tools(config: dict) -> list[BuiltInTool]:
 
 SERVER_NAME = "System File"
 
-TOOL_CONFIG: dict = {
+TOOL_CONFIG: ToolConfig = {
     "name": "system_file",
     "display_name": "System File",
     "default_model_group": "low",

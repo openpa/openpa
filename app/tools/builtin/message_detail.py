@@ -9,15 +9,17 @@ import sqlite3
 from typing import Any, Dict
 
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
+from app.types import ToolConfig
 
 
 SERVER_NAME = "Message Detail"
 SERVER_INSTRUCTIONS = "Retrieve the full details of conversation messages by their IDs."
 
-TOOL_CONFIG: dict = {
+TOOL_CONFIG: ToolConfig = {
     "name": "message_detail",
     "display_name": "Message Detail",
     "default_model_group": "low",
+    "visible": False,
 }
 
 

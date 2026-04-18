@@ -131,6 +131,32 @@ class ToolResultWithFiles(TypedDict):
     _files: list[ToolResultFile]
 
 
+class RequiredConfigField(TypedDict, total=False):
+    """Schema for one environment variable required by a built-in tool."""
+    description: Required[str]
+    type: Required[str]
+    secret: bool
+
+
+class OAuthConfig(TypedDict, total=False):
+    """OAuth provider endpoints and scopes."""
+    authorization_endpoint: Required[str]
+    token_endpoint: Required[str]
+    scopes: list[str]
+    extra_authorize_params: dict[str, str]
+
+
+class ToolConfig(TypedDict, total=False):
+    """Static configuration exported as ``TOOL_CONFIG`` by each built-in tool module."""
+    name: Required[str]
+    display_name: Required[str]
+    default_model_group: Required[str]
+    visible: bool
+    required_config: dict[str, RequiredConfigField]
+    oauth: OAuthConfig
+    arguments: dict[str, Any]
+
+
 class ChatCompletionStreamResponseType(TypedDict):
     type: ChatCompletionTypeEnum
     data: Required[Optional[Any]]

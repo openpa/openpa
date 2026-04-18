@@ -141,6 +141,10 @@ async def register_builtin_tools(
             )
             continue
 
+        if not tool_info.get("visible", True):
+            logger.info(f"Built-in tool '{module_name}' is marked as not visible; skipping.")
+            continue
+
         config: dict[str, str] = {}
         config["OPENPA_WORKING_DIR"] = BaseConfig.OPENPA_WORKING_DIR
         config["SQLITE_DB_PATH"] = BaseConfig.SQLITE_DB_PATH

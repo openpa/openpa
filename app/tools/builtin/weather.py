@@ -11,6 +11,7 @@ from typing import Any, Dict
 import httpx
 
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
+from app.types import ToolConfig
 from app.utils.logger import logger
 
 
@@ -19,10 +20,11 @@ ACCUWEATHER_BASE_URL = "http://dataservice.accuweather.com"
 SERVER_NAME = "Weather Agent"
 SERVER_INSTRUCTIONS = "A weather assistant that retrieves weather forecasts and current conditions."
 
-TOOL_CONFIG: dict = {
+TOOL_CONFIG: ToolConfig = {
     "name": "weather",
     "display_name": "Weather",
     "default_model_group": "low",
+    "visible": False,
     "required_config": {
         "ACCUWEATHER_API_KEY": {
             "description": "AccuWeather API Key",

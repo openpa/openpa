@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
+from app.types import ToolConfig
 from app.utils.logger import logger
 
 
 SERVER_NAME = "Google Calendar"
 SERVER_INSTRUCTIONS = "A Google Calendar assistant that can list upcoming events and create new events."
 
-TOOL_CONFIG: dict = {
+TOOL_CONFIG: ToolConfig = {
     "name": "gg_calendar",
     "display_name": "Google Calendar",
     "default_model_group": "low",

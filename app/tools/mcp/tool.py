@@ -49,6 +49,7 @@ class MCPServerTool(Tool):
         transport_type: str = "http",
         connection_error: Optional[str] = None,
         extra: Optional[dict] = None,
+        llm_factory: Optional[Callable[[str], LLMProvider]] = None,
     ):
         super().__init__()
         self._url = url
@@ -57,6 +58,7 @@ class MCPServerTool(Tool):
         self._transport_type = transport_type
         self._connection_error = connection_error
         self._extra = extra or {}
+        self._llm_factory = llm_factory
 
     # ── identity ────────────────────────────────────────────────────────
 
@@ -106,6 +108,17 @@ class MCPServerTool(Tool):
     def get_card(self) -> AgentCard:
         return self._adapter.create_synthetic_card()
 
+    # ── runtime LLM refresh ────────────────────────────────────────────
+
+    def refresh_llm(self, profile: str) -> None:
+        """Re-create the child LLM from current config (called before model-label read)."""
+        if self._llm_factory:
+            try:
+                llm = self._llm_factory(profile)
+                self._adapter.update_config(llm=llm)
+            except Exception:  # noqa: BLE001
+                pass  # keep current LLM; adapter handles the "no LLM" case
+
     # ── runtime updates ─────────────────────────────────────────────────
 
     def update_runtime_config(
@@ -147,6 +160,10 @@ class MCPServerTool(Tool):
                 )
             )
             return
+
+        # Refresh the child LLM so config changes take effect without restart.
+        # (Also called by the reasoning agent before reading Model_Label.)
+        self.refresh_llm(profile)
 
         # Apply per-call llm_params (e.g., full_reasoning override)
         if "full_reasoning" in llm_params:
@@ -218,6 +235,7 @@ async def build_http_mcp_tool(
     full_reasoning: bool = False,
     on_first_connect: Optional[Callable[[MCPAgentAdapter], None]] = None,
     extra: Optional[dict] = None,
+    llm_factory: Optional[Callable[[str], LLMProvider]] = None,
 ) -> MCPServerTool:
     """Connect to an HTTP MCP server (handling 401/no-auth) and return an MCPServerTool."""
     auth_base_url = url.rsplit("/", 1)[0]
@@ -249,7 +267,7 @@ async def build_http_mcp_tool(
         )
         return MCPServerTool(
             url=url, owner_profile=owner_profile, adapter=adapter,
-            transport_type="http", extra=extra,
+            transport_type="http", extra=extra, llm_factory=llm_factory,
         )
 
     if status == 0:
@@ -274,7 +292,7 @@ async def build_http_mcp_tool(
     )
     return MCPServerTool(
         url=url, owner_profile=owner_profile, adapter=adapter,
-        transport_type="http", extra=extra,
+        transport_type="http", extra=extra, llm_factory=llm_factory,
     )
 
 
@@ -289,6 +307,7 @@ async def build_stdio_mcp_tool(
     description: Optional[str] = None,
     full_reasoning: bool = False,
     extra: Optional[dict] = None,
+    llm_factory: Optional[Callable[[str], LLMProvider]] = None,
 ) -> MCPServerTool:
     """Spawn a stdio MCP server subprocess and return an MCPServerTool."""
     connection = MCPConnection()
@@ -314,6 +333,7 @@ async def build_stdio_mcp_tool(
         adapter=adapter,
         transport_type="stdio",
         extra=extra,
+        llm_factory=llm_factory,
     )
 
 

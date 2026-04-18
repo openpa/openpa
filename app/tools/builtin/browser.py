@@ -18,6 +18,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from app.types import ToolConfig
+
 import httpx
 
 from app.config.settings import BaseConfig
@@ -60,7 +62,7 @@ SERVER_INSTRUCTIONS = (
     "To connect to an existing browser instead, set BROWSER_CDP_URL."
 )
 
-TOOL_CONFIG: dict = {
+TOOL_CONFIG: ToolConfig = {
     "name": "browser",
     "display_name": "Browser",
     "default_model_group": "low",

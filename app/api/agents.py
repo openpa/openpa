@@ -214,13 +214,19 @@ def get_agent_routes(
 
     config_manager = registry.config
 
-    def _resolve_mcp_llm():
+    def _resolve_mcp_llm(profile: str = "admin"):
         if mcp_llm_factory is not None:
             try:
-                return mcp_llm_factory()
+                return mcp_llm_factory(profile=profile)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"mcp_llm_factory raised: {e}")
         return None
+
+    def _bind_llm_factory(tool: MCPServerTool) -> None:
+        """Attach a per-tool LLM factory so execute() picks up config changes."""
+        if mcp_llm_factory is not None:
+            tid = tool.tool_id
+            tool._llm_factory = lambda profile: mcp_llm_factory(tid, profile)
 
     async def handle_list_agents(request: Request) -> JSONResponse:
         profile = request.query_params.get("profile") or _profile_from_request(request)
@@ -270,7 +276,7 @@ def get_agent_routes(
             )
 
         # MCP path
-        llm = _resolve_mcp_llm()
+        llm = _resolve_mcp_llm(profile)
         if llm is None:
             return JSONResponse(
                 {"error": "MCP support is not configured"}, status_code=500,
@@ -321,6 +327,7 @@ def get_agent_routes(
                         "env": parsed.get("env"),
                     }.items() if v is not None},
                 )
+                _bind_llm_factory(tool)
                 _persist_llm_scope(config_manager, tool.tool_id, profile, body)
                 return JSONResponse(
                     {"success": True, "agent": _serialize_tool(tool, profile)},
@@ -340,6 +347,7 @@ def get_agent_routes(
             logger.error(f"Failed to add MCP server at {url}: {e}")
             return JSONResponse({"error": str(e)}, status_code=400)
         await registry.register_mcp(tool, source=tool.url, owner_profile=profile)
+        _bind_llm_factory(tool)
         _persist_llm_scope(config_manager, tool.tool_id, profile, body)
         if system_prompt:
             config_manager.set_meta(tool.tool_id, profile, "system_prompt", system_prompt)
