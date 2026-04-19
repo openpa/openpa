@@ -119,6 +119,11 @@ def get_tool_routes(
                 or "key" in key.lower()
                 or "password" in key.lower()
             )
+            # Normalize native JSON booleans to lowercase strings so
+            # downstream consumers (e.g. _coerce_headless) see "true"/"false"
+            # instead of Python's str(True) -> "True".
+            if isinstance(value, bool):
+                value = "true" if value else "false"
             config_manager.set_variable(
                 tool_id, profile, key, str(value), is_secret=is_secret,
             )
@@ -331,10 +336,17 @@ def _write_skill_env_file(tool, config_manager, profile: str) -> None:
 
 
 def _is_tool_configured(tool, snapshot: dict) -> bool:
-    """Return True if all required variables are populated for this tool."""
+    """Return True if all required variables are populated for this tool.
+
+    Fields that declare a ``default`` value are considered satisfied even
+    when the user has not explicitly set them.
+    """
     schema = _schema_for_tool(tool)
     required = schema.get("tool", {}).get("required_config", {})
     if not required:
         return True
     have = snapshot.get("variables", {})
-    return all(have.get(k) for k in required)
+    return all(
+        have.get(k) or field_spec.get("default") is not None
+        for k, field_spec in required.items()
+    )

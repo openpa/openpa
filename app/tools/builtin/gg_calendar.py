@@ -17,16 +17,22 @@ from app.utils.logger import logger
 SERVER_NAME = "Google Calendar"
 SERVER_INSTRUCTIONS = "A Google Calendar assistant that can list upcoming events and create new events."
 
+class Var:
+    """Variable keys for the Google Calendar tool."""
+    CLIENT_ID = "GOOGLE_CLIENT_ID"
+    CLIENT_SECRET = "GOOGLE_CLIENT_SECRET"
+
+
 TOOL_CONFIG: ToolConfig = {
     "name": "gg_calendar",
     "display_name": "Google Calendar",
     "default_model_group": "low",
     "required_config": {
-        "GOOGLE_CLIENT_ID": {
+        Var.CLIENT_ID: {
             "description": "Google OAuth Client ID",
             "type": "string",
         },
-        "GOOGLE_CLIENT_SECRET": {
+        Var.CLIENT_SECRET: {
             "description": "Google OAuth Client Secret",
             "type": "string",
             "secret": True,

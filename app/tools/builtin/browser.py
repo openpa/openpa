@@ -62,12 +62,21 @@ SERVER_INSTRUCTIONS = (
     "To connect to an existing browser instead, set BROWSER_CDP_URL."
 )
 
+class Var:
+    """Variable keys for the Browser tool (used in TOOL_CONFIG and runtime reads)."""
+    CDP_URL = "BROWSER_CDP_URL"
+    HEADLESS = "BROWSER_HEADLESS"
+    CHANNEL = "BROWSER_CHANNEL"
+    USER_DATA_DIR = "BROWSER_USER_DATA_DIR"
+    EXECUTABLE_PATH = "BROWSER_EXECUTABLE_PATH"
+
+
 TOOL_CONFIG: ToolConfig = {
     "name": "browser",
     "display_name": "Browser",
     "default_model_group": "low",
     "required_config": {
-        "BROWSER_CDP_URL": {
+        Var.CDP_URL: {
             "description": (
                 "Optional. CDP URL to connect to an existing browser "
                 "(e.g. http://localhost:9222). "
@@ -75,22 +84,25 @@ TOOL_CONFIG: ToolConfig = {
             ),
             "type": "string",
         },
-        "BROWSER_HEADLESS": {
+        Var.HEADLESS: {
             "description": (
-                "Run the auto-launched browser in headless mode (true/false). "
+                "Run the auto-launched browser in headless mode. "
                 "Default: false (visible window)."
             ),
-            "type": "string",
+            "type": "boolean",
+            "default": False,
         },
-        "BROWSER_CHANNEL": {
+        Var.CHANNEL: {
             "description": (
                 "Playwright browser channel for auto-launch. 'chrome' uses "
                 "system Google Chrome, 'msedge' uses system Edge, 'chromium' "
                 "uses Playwright's bundled test build. Default: chrome."
             ),
             "type": "string",
+            "enum": ["chrome", "msedge", "chromium"],
+            "default": "chrome",
         },
-        "BROWSER_USER_DATA_DIR": {
+        Var.USER_DATA_DIR: {
             "description": (
                 "Directory for the persistent browser profile (cookies, "
                 "logins, history). Default: <OPENPA_WORKING_DIR>/browser-profile. "
@@ -99,7 +111,7 @@ TOOL_CONFIG: ToolConfig = {
             ),
             "type": "string",
         },
-        "BROWSER_EXECUTABLE_PATH": {
+        Var.EXECUTABLE_PATH: {
             "description": (
                 "Optional absolute path to the browser executable. Leave empty "
                 "to let Playwright auto-discover the binary via the channel."
@@ -400,19 +412,19 @@ def _resolve_session(arguments: Dict[str, Any], defaults: Dict[str, Any]) -> _Br
         variables = {}
 
     # Per-profile defaults: explicit user override wins, else profile-scoped path.
-    user_data_dir = (variables.get("BROWSER_USER_DATA_DIR") or "").strip()
+    user_data_dir = (variables.get(Var.USER_DATA_DIR) or "").strip()
     if not user_data_dir:
         user_data_dir = _profile_default_user_data_dir(profile)
 
-    cdp_url = (variables.get("BROWSER_CDP_URL") or defaults.get("cdp_url", "") or "").strip()
-    channel = (variables.get("BROWSER_CHANNEL") or defaults.get("channel", "chrome") or "chrome").strip()
+    cdp_url = (variables.get(Var.CDP_URL) or defaults.get("cdp_url", "") or "").strip()
+    channel = (variables.get(Var.CHANNEL) or defaults.get("channel", "chrome") or "chrome").strip()
     executable_path = (
-        variables.get("BROWSER_EXECUTABLE_PATH")
+        variables.get(Var.EXECUTABLE_PATH)
         or defaults.get("executable_path", "")
         or ""
     ).strip()
     headless = _coerce_headless(
-        variables.get("BROWSER_HEADLESS"), default=defaults.get("headless", False)
+        variables.get(Var.HEADLESS), default=defaults.get("headless", False)
     )
 
     session = _sessions.get(profile)
@@ -969,12 +981,12 @@ def get_tools(config: dict) -> list[BuiltInTool]:
 
     # Registration-time defaults. Per-profile values come through _variables
     # at request time via _resolve_session(); these are only fallbacks.
-    headless_str = config.get("BROWSER_HEADLESS", "false") or "false"
+    headless_str = config.get(Var.HEADLESS, "false") or "false"
     defaults: Dict[str, Any] = {
-        "cdp_url": config.get("BROWSER_CDP_URL", "") or "",
+        "cdp_url": config.get(Var.CDP_URL, "") or "",
         "headless": headless_str.lower() in ("true", "1", "yes"),
-        "channel": config.get("BROWSER_CHANNEL", "chrome") or "chrome",
-        "executable_path": config.get("BROWSER_EXECUTABLE_PATH", "") or "",
+        "channel": config.get(Var.CHANNEL, "chrome") or "chrome",
+        "executable_path": config.get(Var.EXECUTABLE_PATH, "") or "",
     }
 
     return [

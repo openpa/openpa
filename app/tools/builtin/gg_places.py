@@ -28,13 +28,18 @@ SERVER_INSTRUCTIONS = (
     "and map_direction_link to create navigation URLs."
 )
 
+class Var:
+    """Variable keys for the Google Places tool."""
+    API_KEY = "GOOGLE_MAPS_API_KEY"
+
+
 TOOL_CONFIG: ToolConfig = {
     "name": "gg_places",
     "display_name": "Google Places",
     "default_model_group": "low",
     "visible": False,
     "required_config": {
-        "GOOGLE_MAPS_API_KEY": {
+        Var.API_KEY: {
             "description": "Google Maps API Key",
             "type": "string",
             "secret": True,
@@ -662,7 +667,7 @@ class MapDirectionLinkTool(BuiltInTool):
 
 def get_tools(config: dict) -> list[BuiltInTool]:
     """Return tool instances for this server."""
-    api_key = config.get("GOOGLE_MAPS_API_KEY", "")
+    api_key = config.get(Var.API_KEY, "")
     return [SearchPlacesTool(api_key=api_key), MapDirectionLinkTool()]
 
 

@@ -26,6 +26,7 @@ from app.lib.llm.base import LLMProvider
 from app.lib.llm.factory import create_llm_provider
 from app.tools.builtin.adapter import BuiltInToolAdapter
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
+from app.tools.builtin.gg_calendar import Var as CalendarVar
 from app.tools.builtin.tool import BuiltInToolGroup
 from app.tools.config_manager import ToolConfigManager
 from app.tools.ids import slugify
@@ -52,6 +53,7 @@ _BUILTIN_MODULE_NAMES: tuple[str, ...] = (
     "gg_calendar",
     "gg_places",
     "browser",
+    "sleep",
 )
 
 
@@ -178,9 +180,9 @@ async def register_builtin_tools(
             populated = dict(oauth_config)
             populated.setdefault("client_id", "")
             populated.setdefault("client_secret", "")
-            populated["client_id"] = vars_.get("GOOGLE_CLIENT_ID", populated["client_id"])
+            populated["client_id"] = vars_.get(CalendarVar.CLIENT_ID, populated["client_id"])
             populated["client_secret"] = vars_.get(
-                "GOOGLE_CLIENT_SECRET", populated["client_secret"],
+                CalendarVar.CLIENT_SECRET, populated["client_secret"],
             )
             oauth_provider = _build_oauth_provider(
                 oauth_config=populated, server_name=server_name,
@@ -257,9 +259,9 @@ def refresh_builtin_tool_oauth(
     populated = dict(oauth_config)
     populated.setdefault("client_id", "")
     populated.setdefault("client_secret", "")
-    populated["client_id"] = vars_.get("GOOGLE_CLIENT_ID", populated["client_id"])
+    populated["client_id"] = vars_.get(CalendarVar.CLIENT_ID, populated["client_id"])
     populated["client_secret"] = vars_.get(
-        "GOOGLE_CLIENT_SECRET", populated["client_secret"],
+        CalendarVar.CLIENT_SECRET, populated["client_secret"],
     )
 
     factory = _build_oauth_provider(

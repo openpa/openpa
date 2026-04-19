@@ -148,8 +148,8 @@ class ReasoningAgent:
         registry: ToolRegistry,
         profile: str,
         context_id: Optional[str] = None,
-        max_steps: int = 10,
-        steps_length: int = 20,
+        max_steps: int = 20,
+        steps_length: int = 40,
         reasoning: bool = True,
     ):
         self.llm = llm

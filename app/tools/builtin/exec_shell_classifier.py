@@ -4,20 +4,18 @@ Instead of classifying commands by name before execution, this module
 provides tools for **runtime behaviour analysis**:
 
 - TUI escape sequence detection in process output.
-- Category enum and result data structures.
+- Category enum for the three supported command types.
 
 Classification happens by observing what the process *does*:
 
-- Process exits on its own                  → fire-and-forget  (Cat 1)
-- Silence + blocked on stdin                → waiting for input (Cat 2 / 5)
-- Silence + NOT blocked on stdin for >10 s  → long-running      (Cat 3)
-- TUI escape sequences in output            → full-screen app   (Cat 4)
+- Process exits on its own       → fire-and-forget
+- TUI escape sequences in output → full-screen app (unsupported)
+- Everything else                → long-running (supported)
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from enum import Enum
 
 
@@ -29,29 +27,13 @@ class CommandCategory(str, Enum):
     """Process behaviour category for a shell command."""
 
     FIRE_AND_FORGET = "fire_and_forget"
-    OUTPUT_THEN_PROMPT = "output_then_prompt"
     LONG_RUNNING = "long_running"
     TUI_FULLSCREEN = "tui_fullscreen"
-    MULTI_STEP_WIZARD = "multi_step_wizard"
-    CONFIGURE_THEN_RUN = "configure_then_run"
-    UNKNOWN = "unknown"
 
 
 UNSUPPORTED_CATEGORIES: frozenset[CommandCategory] = frozenset({
     CommandCategory.TUI_FULLSCREEN,
-    CommandCategory.LONG_RUNNING,
 })
-
-
-@dataclass(frozen=True)
-class ClassificationResult:
-    """Result of classifying a shell command."""
-
-    category: CommandCategory
-    confidence: float  # 0.0 – 1.0
-    reason: str
-    should_block: bool  # True → do not execute / interrupt
-    suggested_alternative: str | None = None
 
 
 # ---------------------------------------------------------------------------

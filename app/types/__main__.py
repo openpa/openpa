@@ -136,6 +136,8 @@ class RequiredConfigField(TypedDict, total=False):
     description: Required[str]
     type: Required[str]
     secret: bool
+    enum: list[str]
+    default: Any
 
 
 class OAuthConfig(TypedDict, total=False):
