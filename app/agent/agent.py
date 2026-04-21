@@ -185,6 +185,12 @@ class OpenPAAgent:
         self._runners[profile] = runner
         return runner
 
+    def low_group_llm(self, profile: str) -> LLMProvider:
+        """Return the profile's 'low' group LLM provider for cheap auxiliary calls."""
+        if self._model_group_mgr is None:
+            self._model_group_mgr = ModelGroupManager(get_dynamic_config_storage())
+        return self._model_group_mgr.create_llm_for_group("low", profile=profile)
+
     async def _resolve_allowed_skill_ids(
         self, query: str, profile: str,
     ) -> set[str] | None:

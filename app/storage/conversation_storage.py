@@ -281,6 +281,7 @@ class ConversationStorage:
         self, conversation_id: str, role: str, content: str | None = None,
         parts: list | None = None, thinking_steps: list | None = None,
         token_usage: dict | None = None, metadata: dict | None = None,
+        summary: str | None = None,
     ) -> dict:
         await self._ensure_initialized()
         now = time.time() * 1000
@@ -316,6 +317,7 @@ class ConversationStorage:
                 thinking_steps=thinking_steps,
                 token_usage=token_usage,
                 message_metadata=metadata,
+                summary=summary,
                 created_at=now,
                 ordering=next_ordering,
             )
@@ -371,6 +373,7 @@ class ConversationStorage:
             "thinking_steps": msg.thinking_steps,
             "token_usage": msg.token_usage,
             "metadata": msg.message_metadata,
+            "summary": msg.summary,
             "created_at": msg.created_at,
             "ordering": msg.ordering,
         }

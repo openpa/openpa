@@ -189,6 +189,9 @@ def convert_db_messages_to_history(
             continue
         if inject_ids:
             content += f"\nmessage_id: {m['id']}"
+        summary = m.get("summary")
+        if summary:
+            content += f"\nsummary: {summary}"
         messages.append(cast(ChatCompletionMessageParam, {
             "role": role,
             "content": content,

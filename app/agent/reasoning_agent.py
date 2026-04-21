@@ -360,6 +360,7 @@ class ReasoningAgent:
             yield {
                 "type": ChatCompletionTypeEnum.DONE,
                 "data": final_answer,
+                "input_section": template_input.format(steps="\n".join(self.steps)),
                 "input_tokens": self._total_input_tokens,
                 "output_tokens": self._total_output_tokens,
             }
@@ -685,6 +686,7 @@ class ReasoningAgent:
             yield {
                 "type": ChatCompletionTypeEnum.DONE,
                 "data": observation_text,
+                "input_section": template_input.format(steps="\n".join(self.steps)),
                 "input_tokens": self._total_input_tokens,
                 "output_tokens": self._total_output_tokens,
             }

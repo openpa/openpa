@@ -65,6 +65,7 @@ class MessageModel(Base):
     thinking_steps: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     message_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, name="metadata")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     ordering: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

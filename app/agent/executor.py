@@ -99,6 +99,7 @@ class OpenPAAgentExecutor(AgentExecutor):
         total_output_tokens = 0
         collected_thinking_steps: list[dict] = []
         collected_file_parts: list[Part] = []
+        reasoning_input_section: str | None = None
 
         # Initialize tiktoken encoder for token-by-token streaming
         encoder = encoding_for_model("gpt-4o")
@@ -224,6 +225,10 @@ class OpenPAAgentExecutor(AgentExecutor):
                     # Capture token usage from the final chunk
                     total_input_tokens = chunk.get("input_tokens") or 0
                     total_output_tokens = chunk.get("output_tokens") or 0
+                    # Only DONE from the Final Answer Tool carries input_section;
+                    # presence of this field is the signal to summarize reasoning.
+                    if chunk["type"] == ChatCompletionTypeEnum.DONE and chunk.get("input_section"):
+                        reasoning_input_section = chunk["input_section"]
         except ServerError:
             raise
         except Exception as e:
@@ -245,6 +250,38 @@ class OpenPAAgentExecutor(AgentExecutor):
             append=has_sent_first_chunk,
             last_chunk=True,
         )
+
+        # Summarize the reasoning chain when the turn ended via Final Answer Tool.
+        # Uses the low model group; failures must not break the user-visible answer.
+        summary_text: str | None = None
+        if reasoning_input_section:
+            try:
+                # Signal to the UI that the indicator should say "summarizing".
+                await updater.add_artifact(
+                    [Part(root=DataPart(
+                        data={"phase": "summarizing"},
+                        kind="data", metadata=None,
+                    ))],
+                    name="phase",
+                    append=False,
+                    last_chunk=True,
+                )
+                summary_text = await self._summarize_reasoning(
+                    reasoning_input_section, profile,
+                )
+                if summary_text:
+                    await updater.add_artifact(
+                        [Part(root=DataPart(
+                            data={"summary": summary_text},
+                            kind="data", metadata=None,
+                        ))],
+                        name="summary",
+                        append=False,
+                        last_chunk=True,
+                    )
+            except Exception:
+                logger.exception("Failed to produce reasoning summary")
+                summary_text = None
 
         # Emit token_usage artifact if we have any token data
         if total_input_tokens > 0 or total_output_tokens > 0:
@@ -308,6 +345,7 @@ class OpenPAAgentExecutor(AgentExecutor):
                     parts=persist_parts,
                     thinking_steps=collected_thinking_steps if collected_thinking_steps else None,
                     token_usage=token_usage_data,
+                    summary=summary_text,
                 )
 
                 # Update conversation title from first user message if still default
@@ -324,6 +362,34 @@ class OpenPAAgentExecutor(AgentExecutor):
                 logger.debug(f"Persisted messages for conversation {conversation_id}")
             except Exception as e:
                 logger.error(f"Failed to persist conversation messages: {e}")
+
+    async def _summarize_reasoning(self, input_section: str, profile: str) -> str:
+        logger.info("input_section for reasoning summary: " + input_section)
+        """Produce a Markdown TL;DR of a completed ReAct trace via the low model group."""
+        if not self.openpa_agent:
+            return ""
+        llm = self.openpa_agent.low_group_llm(profile)
+        messages = [
+            {"role": "system", "content": (
+                "You summarize an agent's ReAct reasoning trace for AI-assisted agent introspection and debugging. "
+                "Output concise GitHub-flavored Markdown. Describe what the agent considered, which tools it used, "
+                "and what it concluded (even including the technical details like process IDs, file paths, API calls, etc). "
+                "Do not invent facts beyond the trace."
+            )},
+            {"role": "user", "content": input_section},
+        ]
+        collected: list[str] = []
+        async for resp in llm.chat_completion(
+            messages=cast(Any, messages),
+            temperature=0.3,
+            max_tokens=1024,
+            retry=2,
+        ):
+            if resp.get("type") == ChatCompletionTypeEnum.CONTENT:
+                data = resp.get("data")
+                if data:
+                    collected.append(data)
+        return "".join(collected).strip()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue):
         """Cancel the execution for the given context.

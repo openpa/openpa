@@ -18,6 +18,9 @@ TOOL_CONFIG: ToolConfig = {
     "default_model_group": "low",
     "llm_parameters": {
         "tool_instructions": "Pause execution for a specified number of seconds.",
+        "system_prompt": ("Don't answer any questions or provide any information.\n"
+        "Always use 'sleep' tool call for any user input"
+        "E.g. 'sleep 2 seconds {\"seconds\": 2}'"),
     },
 }
 

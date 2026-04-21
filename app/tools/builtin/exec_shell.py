@@ -14,6 +14,7 @@ files under ``<working_dir>/tools/builtin/exec_shell/stdout/<process_id>/``.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import platform
@@ -27,6 +28,11 @@ from app.config.settings import BaseConfig
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig
 from app.tools.builtin.exec_shell_classifier import detect_tui_sequences
+from app.tools.builtin.exec_shell_input_mode import (
+    TerminalState,
+    detect_input_mode,
+    update_terminal_state,
+)
 from app.tools.builtin.exec_shell_process_inspect import is_child_blocked_on_read
 from app.tools.builtin.exec_shell_pty import (
     PtyProcess,
@@ -70,6 +76,10 @@ class LogWriterState:
     # during a write).  Exposed on the state so flush_and_rotate can close
     # it from outside the writer task.
     current_file: Optional[Any] = None
+    # Running picture of the child's terminal state (DEC private-mode flags
+    # + last-chunk transient signals).  Updated by the writer on every
+    # stdout chunk and read by ExecShellOutputTool to classify input mode.
+    terminal_state: TerminalState = field(default_factory=TerminalState)
 
 
 @dataclass
@@ -250,6 +260,7 @@ async def _classify_stream(
     silence_timeout: float = _DEFAULT_SILENCE_TIMEOUT,
     long_running_timeout: float = _DEFAULT_LONG_RUNNING_TIMEOUT,
     skip_tui: bool = False,
+    terminal_state: Optional[TerminalState] = None,
 ) -> dict:
     """Read stdout/stderr from *process* until classification is decided.
 
@@ -345,6 +356,8 @@ async def _classify_stream(
                         "category": "tui_fullscreen",
                         "tui_detected": True,
                     }
+                if terminal_state is not None:
+                    update_terminal_state(terminal_state, chunk)
                 stdout_buf += chunk
             else:
                 stderr_buf += chunk
@@ -389,9 +402,9 @@ async def _log_writer_loop(
     - On process exit, whatever file is open is closed, then a **fresh**
       ``<current_file_number>.log`` is created containing only
       ``__OPA_EXIT__:<rc>\\n``.  This keeps the sentinel in its own file.
-    - External callers (``exec_shell_output``) can invoke
-      ``flush_and_rotate(state)`` to force close the current file and
-      increment the counter before listing files on disk.
+    - ``ExecShellOutputTool`` serialises its flush + list + read + delete
+      sequence against this loop by acquiring ``state.rotate_lock`` for the
+      whole read, so no file on disk is ever observed mid-write.
     """
     os.makedirs(state.log_dir, exist_ok=True)
 
@@ -457,6 +470,7 @@ async def _log_writer_loop(
                         if stream_name == "stderr":
                             state.current_file.write(f"[STDERR] {chunk}")
                         else:
+                            update_terminal_state(state.terminal_state, chunk)
                             state.current_file.write(chunk)
                     state.current_file.flush()
     except asyncio.CancelledError:
@@ -503,20 +517,9 @@ async def _log_writer_loop(
         )
 
 
-async def flush_and_rotate(state: LogWriterState) -> None:
-    """Close the currently-open log file and advance the counter.
-
-    Invoked by ``exec_shell_output`` before it lists files on disk so that
-    every file it sees is fully written and closed.
-    """
-    async with state.rotate_lock:
-        if state.current_file is not None:
-            try:
-                state.current_file.close()
-            except Exception:
-                pass
-            state.current_file = None
-            state.current_file_number += 1
+@contextlib.asynccontextmanager
+async def _noop_async_cm():
+    yield
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +694,8 @@ class ExecShellTool(BuiltInTool):
                 }
             )
 
+        terminal_state = TerminalState()
+
         try:
             classify_timeout = min(timeout, 5.0) if use_pty else timeout
             result = await _classify_stream(
@@ -699,6 +704,7 @@ class ExecShellTool(BuiltInTool):
                 silence_timeout=silence_timeout,
                 long_running_timeout=_DEFAULT_LONG_RUNNING_TIMEOUT,
                 skip_tui=use_pty,
+                terminal_state=terminal_state,
             )
 
             # Runtime PTY detection: if the command exited with an error whose
@@ -730,12 +736,16 @@ class ExecShellTool(BuiltInTool):
                         }
                     )
                 classify_timeout = min(timeout, 5.0)
+                # Fresh state for the respawn — the previous process's toggles
+                # died with it.
+                terminal_state = TerminalState()
                 result = await _classify_stream(
                     proc,
                     overall_timeout=classify_timeout,
                     silence_timeout=silence_timeout,
                     long_running_timeout=_DEFAULT_LONG_RUNNING_TIMEOUT,
                     skip_tui=True,
+                    terminal_state=terminal_state,
                 )
 
             # In PTY mode, user opted into a terminal session — don't reject
@@ -825,6 +835,7 @@ class ExecShellTool(BuiltInTool):
                 log_dir=log_dir,
                 current_file_number=1,
                 silence_threshold=log_silence_threshold,
+                terminal_state=terminal_state,
             )
             writer_state.task = asyncio.create_task(
                 _log_writer_loop(proc, writer_state)
@@ -898,8 +909,19 @@ class ExecShellInputTool(BuiltInTool):
         "process_id. Writes the input text to the process's stdin. "
         "Use exec shell output to read the response.\n"
         'E.g., Send input to process "708e9873": {"process_id":"708e9873","input_text":"my input"}\n'
-        "For PTY processes, use line_ending=\"none\" to send raw control "
-        "characters (e.g. input_text=\"\\x03\" for Ctrl+C, \"\\x04\" for Ctrl+D).\n"
+        "Check exec_shell_output's `input_mode` before sending input:\n"
+        "- `input_mode: \"text\"` — send a typed string with the default "
+        "line_ending (Enter is appended automatically).\n"
+        "- `input_mode: \"selection\"` — the process is showing a menu and "
+        "expects arrow keys / Tab / Space / Enter. Send raw key codes with "
+        "line_ending=\"none\" so no newline is appended: "
+        "\"\\x1b[A\" up, \"\\x1b[B\" down, \"\\x1b[C\" right, \"\\x1b[D\" "
+        "left, \"\\t\" tab, \" \" space-to-toggle, \"\\r\" enter-to-confirm, "
+        "\"\\x1b\" escape-to-cancel. One key per call.\n"
+        "- `input_mode: \"unknown\"` — fall back to text; if that's rejected, "
+        "try arrow keys.\n"
+        "Other control characters also use line_ending=\"none\" "
+        "(e.g. \"\\x03\" Ctrl+C, \"\\x04\" Ctrl+D).\n"
         "Required: process_id, input_text"
     )
     parameters: Dict[str, Any] = {
@@ -1042,9 +1064,6 @@ class ExecShellOutputTool(BuiltInTool):
                 }
             )
 
-        if info.log_writer_state:
-            await flush_and_rotate(info.log_writer_state)
-
         if not info.log_dir or not os.path.isdir(info.log_dir):
             return BuiltInToolResult(
                 structured_content={
@@ -1057,29 +1076,42 @@ class ExecShellOutputTool(BuiltInTool):
                 }
             )
 
-        log_files: List[str] = [
-            f for f in os.listdir(info.log_dir) if f.endswith(".log")
-        ]
-        log_files.sort(key=lambda f: int(f.split(".")[0]))
+        # Hold rotate_lock across flush + list + read + delete so the writer
+        # cannot open a new .log file (or resume appending to the current
+        # one) while we're iterating the directory.
+        state = info.log_writer_state
+        lock_ctx = state.rotate_lock if state is not None else _noop_async_cm()
 
         merged_output = ""
-        read_paths: List[str] = []
+        async with lock_ctx:
+            if state is not None and state.current_file is not None:
+                try:
+                    state.current_file.close()
+                except Exception:
+                    pass
+                state.current_file = None
+                state.current_file_number += 1
 
-        for fname in log_files:
-            fpath = os.path.join(info.log_dir, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as fh:
-                    content = fh.read()
-            except Exception:
-                continue
-            read_paths.append(fpath)
-            merged_output += content
+            log_files: List[str] = [
+                f for f in os.listdir(info.log_dir) if f.endswith(".log")
+            ]
+            log_files.sort(key=lambda f: int(f.split(".")[0]))
 
-        for fpath in read_paths:
-            try:
-                os.remove(fpath)
-            except Exception:
-                pass
+            read_paths: List[str] = []
+            for fname in log_files:
+                fpath = os.path.join(info.log_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as fh:
+                        merged_output += fh.read()
+                except Exception:
+                    continue
+                read_paths.append(fpath)
+
+            for fpath in read_paths:
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
 
         cleanup_ttl_hours = float(
             variables.get(Var.CLEANUP_TTL_HOURS) or _DEFAULT_CLEANUP_TTL_HOURS
@@ -1092,6 +1124,17 @@ class ExecShellOutputTool(BuiltInTool):
         if not completed and info.process.returncode is not None:
             completed = True
             exit_code = info.process.returncode
+
+        # Classify the current input mode from the tail of stdout + persistent
+        # terminal-state flags.  Only meaningful while the process is still
+        # running; once it's exited the agent has no reason to send input.
+        mode_info: Optional[dict] = None
+        if not completed and state is not None:
+            mode_info = detect_input_mode(
+                state.terminal_state,
+                merged_output[-4096:],
+                info.is_pty,
+            )
 
         total_tokens = 0
         truncated = False
@@ -1114,17 +1157,20 @@ class ExecShellOutputTool(BuiltInTool):
                     "Please confirm with the user before retrieving the full output.]"
                 )
 
-        return BuiltInToolResult(
-            structured_content={
-                "process_id": process_id,
-                "stdout": merged_output,
-                "completed": completed,
-                "return_code": exit_code,
-                "truncated": truncated,
-                "total_tokens": total_tokens,
-                "command": info.command,
-            }
-        )
+        structured: Dict[str, Any] = {
+            "process_id": process_id,
+            "stdout": merged_output,
+            "completed": completed,
+            "return_code": exit_code,
+            "truncated": truncated,
+            "total_tokens": total_tokens,
+            "command": info.command,
+        }
+        if mode_info is not None:
+            structured["input_mode"] = mode_info["input_mode"]
+            structured["input_mode_confidence"] = mode_info["confidence"]
+            structured["input_signals"] = mode_info["signals"]
+        return BuiltInToolResult(structured_content=structured)
 
 
 class ExecShellStopTool(BuiltInTool):
