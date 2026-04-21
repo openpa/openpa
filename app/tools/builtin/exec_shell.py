@@ -21,13 +21,18 @@ import shutil
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from app.config.settings import BaseConfig
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig
 from app.tools.builtin.exec_shell_classifier import detect_tui_sequences
 from app.tools.builtin.exec_shell_process_inspect import is_child_blocked_on_read
+from app.tools.builtin.exec_shell_pty import (
+    PtyProcess,
+    _looks_like_tty_error,
+    _spawn_command_pty,
+)
 from app.utils.logger import logger
 
 _SYSTEM = platform.system()  # "Windows", "Linux", "Darwin"
@@ -66,7 +71,7 @@ class LogWriterState:
 @dataclass
 class ProcessInfo:
     """Tracks a managed long-running process."""
-    process: asyncio.subprocess.Process
+    process: Union[asyncio.subprocess.Process, PtyProcess]
     created_at: float
     working_dir: str
     command: str
@@ -74,6 +79,7 @@ class ProcessInfo:
     log_writer_state: Optional[LogWriterState] = None
     expire_time: float = 0.0
     is_long_running: bool = False
+    is_pty: bool = False
 
 
 _process_registry: Dict[str, ProcessInfo] = {}
@@ -218,10 +224,11 @@ async def _check_stdin_blocked(process: asyncio.subprocess.Process) -> bool | No
 # ---------------------------------------------------------------------------
 
 async def _classify_stream(
-    process: asyncio.subprocess.Process,
+    process: Union[asyncio.subprocess.Process, PtyProcess],
     overall_timeout: float = 120.0,
     silence_timeout: float = _DEFAULT_SILENCE_TIMEOUT,
     long_running_timeout: float = _DEFAULT_LONG_RUNNING_TIMEOUT,
+    skip_tui: bool = False,
 ) -> dict:
     """Read stdout/stderr from *process* until classification is decided.
 
@@ -309,7 +316,7 @@ async def _classify_stream(
             last_data = time.monotonic()
 
             if stream_name == "stdout":
-                if detect_tui_sequences(chunk):
+                if not skip_tui and detect_tui_sequences(chunk):
                     return {
                         "stdout": stdout_buf + chunk,
                         "stderr": stderr_buf,
@@ -519,6 +526,11 @@ async def _cleanup_stale_processes() -> int:
                 await asyncio.wait_for(info.process.wait(), timeout=5.0)
             except (asyncio.TimeoutError, Exception):
                 pass
+        if info.is_pty:
+            try:
+                info.process.close_master()  # type: ignore[union-attr]
+            except Exception:
+                pass
         if info.log_dir and os.path.isdir(info.log_dir):
             shutil.rmtree(info.log_dir, ignore_errors=True)
         logger.info(f"Cleaned up expired process {pid} ({info.command!r})")
@@ -529,8 +541,15 @@ class ExecShellTool(BuiltInTool):
     name: str = "exec_shell"
     description: str = (
         "Executes a shell command on the terminal and returns its output. "
-        "Automatically detects the operating system and uses the appropriate shell\n"
-        "E.g, 'check disk usage' or 'ping google.com'"
+        "Automatically detects the operating system and uses the appropriate shell.\n"
+        "Supports interactive commands that require a TTY (ssh, docker exec -it, "
+        "kubectl exec -it, REPLs like python -i / mysql / psql). If a command "
+        "fails with a TTY-required error (e.g. 'the input device is not a TTY'), "
+        "it is automatically respawned under a pseudo-terminal. For commands "
+        "that hang without a TTY instead of erroring (notably ssh), pass "
+        "`pty: true` explicitly. In PTY mode stdout and stderr are merged into "
+        "`stdout`.\n"
+        "E.g, 'check disk usage', 'ping google.com', or 'ssh user@host' with pty=true."
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -554,6 +573,24 @@ class ExecShellTool(BuiltInTool):
                     "process is waiting for input. Default: 3."
                 ),
             },
+            "pty": {
+                "type": "boolean",
+                "description": (
+                    "Force PTY (pseudo-terminal) allocation on/off. When true, "
+                    "the command runs under a real TTY — required for ssh, "
+                    "docker exec -it, kubectl exec -it, and interactive REPLs. "
+                    "In PTY mode, stderr is merged into stdout. Default: "
+                    "auto-detect based on the command."
+                ),
+            },
+            "cols": {
+                "type": "integer",
+                "description": "Terminal width (columns) for PTY mode. Default 80.",
+            },
+            "rows": {
+                "type": "integer",
+                "description": "Terminal height (rows) for PTY mode. Default 24.",
+            },
         },
         "required": ["command"],
     }
@@ -567,6 +604,9 @@ class ExecShellTool(BuiltInTool):
         )
         timeout = arguments.get("timeout", 120)
         silence_timeout = arguments.get("silence_timeout", _DEFAULT_SILENCE_TIMEOUT)
+        pty_arg = arguments.get("pty")
+        cols = int(arguments.get("cols") or 80)
+        rows = int(arguments.get("rows") or 24)
         variables = arguments.get("_variables") or {}
         log_silence_threshold = float(variables.get(Var.LOG_SILENCE_THRESHOLD) or 3.0)
         cleanup_ttl_hours = float(variables.get(Var.CLEANUP_TTL_HOURS) or _DEFAULT_CLEANUP_TTL_HOURS)
@@ -591,10 +631,21 @@ class ExecShellTool(BuiltInTool):
 
         await _cleanup_stale_processes()
 
-        logger.debug(f"exec_shell: running '{command}' on {_SYSTEM} with shell {_SHELL}")
+        use_pty = bool(pty_arg) if pty_arg is not None else False
+        auto_retry_allowed = pty_arg is None
+
+        async def _spawn(pty_mode: bool):
+            if pty_mode:
+                return await _spawn_command_pty(command, working_directory, cols, rows)
+            return await _spawn_command(command, working_directory)
+
+        logger.debug(
+            f"exec_shell: running '{command}' on {_SYSTEM} with shell {_SHELL} "
+            f"(pty={use_pty})"
+        )
 
         try:
-            proc = await _spawn_command(command, working_directory)
+            proc = await _spawn(use_pty)
         except Exception as e:
             return BuiltInToolResult(
                 structured_content={
@@ -603,16 +654,63 @@ class ExecShellTool(BuiltInTool):
                     "command": command,
                     "os": _SYSTEM,
                     "shell": _SHELL,
+                    "pty": use_pty,
                 }
             )
 
         try:
+            classify_timeout = min(timeout, 5.0) if use_pty else timeout
             result = await _classify_stream(
                 proc,
-                overall_timeout=timeout,
+                overall_timeout=classify_timeout,
                 silence_timeout=silence_timeout,
                 long_running_timeout=_DEFAULT_LONG_RUNNING_TIMEOUT,
+                skip_tui=use_pty,
             )
+
+            # Runtime PTY detection: if the command exited with an error whose
+            # output looks like a "TTY required" failure, respawn under PTY
+            # and re-classify. Skipped if the caller pinned `pty` explicitly.
+            if (
+                auto_retry_allowed
+                and not use_pty
+                and result.get("completed")
+                and (result.get("return_code") or 0) != 0
+                and _looks_like_tty_error(result.get("stdout", ""), result.get("stderr", ""))
+            ):
+                logger.info(
+                    f"exec_shell: detected TTY-required error for '{command}', "
+                    "respawning under PTY"
+                )
+                use_pty = True
+                try:
+                    proc = await _spawn(True)
+                except Exception as e:
+                    return BuiltInToolResult(
+                        structured_content={
+                            "error": "Spawn error",
+                            "message": f"Failed to respawn command under PTY: {str(e)}",
+                            "command": command,
+                            "os": _SYSTEM,
+                            "shell": _SHELL,
+                            "pty": True,
+                        }
+                    )
+                classify_timeout = min(timeout, 5.0)
+                result = await _classify_stream(
+                    proc,
+                    overall_timeout=classify_timeout,
+                    silence_timeout=silence_timeout,
+                    long_running_timeout=_DEFAULT_LONG_RUNNING_TIMEOUT,
+                    skip_tui=True,
+                )
+
+            # In PTY mode, user opted into a terminal session — don't reject
+            # on TUI sequences; treat as long_running instead.
+            if use_pty and result.get("category") == "tui_fullscreen":
+                result["category"] = "long_running"
+                result["completed"] = False
+                result.pop("tui_detected", None)
 
             category = result.get("category", "fire_and_forget")
             logger.debug(
@@ -623,6 +721,11 @@ class ExecShellTool(BuiltInTool):
             if result["completed"]:
                 # Drain any remaining output the classifier might have missed
                 # (rare, but happens if EOF landed in the last read).
+                if use_pty:
+                    try:
+                        proc.close_master()  # type: ignore[union-attr]
+                    except Exception:
+                        pass
                 return BuiltInToolResult(
                     structured_content={
                         "stdout": result["stdout"],
@@ -632,6 +735,7 @@ class ExecShellTool(BuiltInTool):
                         "command": command,
                         "os": _SYSTEM,
                         "shell": _SHELL,
+                        **({"pty": True, "stderr_merged_into_stdout": True} if use_pty else {}),
                         **({"timed_out": True} if result.get("timed_out") else {}),
                     }
                 )
@@ -642,6 +746,11 @@ class ExecShellTool(BuiltInTool):
                     await asyncio.wait_for(proc.wait(), timeout=5.0)
                 except (asyncio.TimeoutError, Exception):
                     pass
+                if use_pty:
+                    try:
+                        proc.close_master()  # type: ignore[union-attr]
+                    except Exception:
+                        pass
                 return BuiltInToolResult(
                     structured_content={
                         "error": "TUI application detected",
@@ -698,11 +807,12 @@ class ExecShellTool(BuiltInTool):
                 log_writer_state=writer_state,
                 expire_time=expire_time,
                 is_long_running=True,
+                is_pty=use_pty,
             )
 
             logger.info(
                 f"exec_shell: long-running process {process_id} started "
-                f"(command={command!r})"
+                f"(command={command!r}, pty={use_pty})"
             )
 
             return BuiltInToolResult(
@@ -716,6 +826,7 @@ class ExecShellTool(BuiltInTool):
                     "command": command,
                     "os": _SYSTEM,
                     "shell": _SHELL,
+                    **({"pty": True, "stderr_merged_into_stdout": True} if use_pty else {}),
                     "message": (
                         f"Long-running process started with id '{process_id}'. "
                         "Use exec shell stdout to read output, exec shell input "
@@ -730,6 +841,11 @@ class ExecShellTool(BuiltInTool):
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
             except (asyncio.TimeoutError, Exception):
                 pass
+            if use_pty:
+                try:
+                    proc.close_master()  # type: ignore[union-attr]
+                except Exception:
+                    pass
             return BuiltInToolResult(
                 structured_content={
                     "error": "Execution error",
@@ -737,6 +853,7 @@ class ExecShellTool(BuiltInTool):
                     "command": command,
                     "os": _SYSTEM,
                     "shell": _SHELL,
+                    "pty": use_pty,
                 }
             )
 
@@ -748,6 +865,8 @@ class ExecShellInputTool(BuiltInTool):
         "process_id. Writes the input text to the process's stdin. "
         "Use exec shell output to read the response.\n"
         'E.g., Send input to process "708e9873": {"process_id":"708e9873","input_text":"my input"}\n'
+        "For PTY processes, use line_ending=\"none\" to send raw control "
+        "characters (e.g. input_text=\"\\x03\" for Ctrl+C, \"\\x04\" for Ctrl+D).\n"
         "Required: process_id, input_text"
     )
     parameters: Dict[str, Any] = {
@@ -763,6 +882,14 @@ class ExecShellInputTool(BuiltInTool):
                     "The text to send to the process's stdin."
                 ),
             },
+            "line_ending": {
+                "type": "string",
+                "enum": ["\n", "\r", "\r\n", "none"],
+                "description": (
+                    "Line terminator appended to input_text. 'none' sends the "
+                    "raw bytes (useful for control characters). Default: '\\n'."
+                ),
+            },
         },
         "required": ["process_id", "input_text"],
     }
@@ -770,6 +897,7 @@ class ExecShellInputTool(BuiltInTool):
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         process_id = arguments.get("process_id", "").strip()
         input_text = arguments.get("input_text", "")
+        line_ending = arguments.get("line_ending", "\n")
 
         if not process_id:
             return BuiltInToolResult(
@@ -808,7 +936,11 @@ class ExecShellInputTool(BuiltInTool):
             )
 
         try:
-            process.stdin.write((input_text + "\n").encode("utf-8"))
+            if line_ending == "none":
+                payload = input_text
+            else:
+                payload = input_text + line_ending
+            process.stdin.write(payload.encode("utf-8"))
             await process.stdin.drain()
         except Exception as e:
             return BuiltInToolResult(
@@ -1014,6 +1146,18 @@ class ExecShellStopTool(BuiltInTool):
             except (asyncio.CancelledError, Exception):
                 pass
 
+        # PTY processes need EOF (^D) before terminate so interactive shells
+        # (ssh, bash -i) exit cleanly instead of being killed mid-session.
+        if info.is_pty and process.returncode is None:
+            try:
+                process.send_eof()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+
         if process.stdin:
             try:
                 process.stdin.close()
@@ -1031,6 +1175,12 @@ class ExecShellStopTool(BuiltInTool):
                         await asyncio.wait_for(process.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
                         pass
+            except Exception:
+                pass
+
+        if info.is_pty:
+            try:
+                process.close_master()  # type: ignore[union-attr]
             except Exception:
                 pass
 

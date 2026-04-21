@@ -144,8 +144,8 @@ class ReasoningAgent:
         registry: ToolRegistry,
         profile: str,
         context_id: Optional[str] = None,
-        max_steps: int = 20,
-        steps_length: int = 40,
+        max_steps: int = 40,
+        steps_length: int = 80,
         reasoning: bool = True,
         allowed_skill_ids: Optional[set[str]] = None,
     ):

@@ -32,6 +32,7 @@ dependencies = [
     "anthropic>=0.52.0",
     "qdrant-client>=1.9.0",
     "tenacity>=8.2.0",
+    "pywinpty>=2.0 ; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
