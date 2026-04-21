@@ -14,6 +14,7 @@ files under ``<working_dir>/tools/builtin/exec_shell/stdout/<process_id>/``.
 """
 
 import asyncio
+import json
 import os
 import platform
 import shutil
@@ -80,7 +81,41 @@ _DEFAULT_SILENCE_TIMEOUT = 3.0
 _DEFAULT_LONG_RUNNING_TIMEOUT = 10.0
 _MAX_CLASSIFICATION_TIME = 30.0
 _DEFAULT_CLEANUP_TTL_HOURS = 24
-_EXIT_SENTINEL = "__OPA_EXIT__"
+_STATE_FILENAME = "state.json"
+
+
+def _state_path(log_dir: str) -> str:
+    return os.path.join(log_dir, _STATE_FILENAME)
+
+
+def _write_state(log_dir: str, data: Dict[str, Any]) -> None:
+    """Atomically write ``state.json`` in *log_dir*.
+
+    Uses write-to-temp + os.replace so the reader never observes a partial
+    file.  Failures are logged but not raised — state.json is advisory and
+    callers fall back to ``process.returncode`` when it's missing.
+    """
+    path = _state_path(log_dir)
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        os.replace(tmp_path, path)
+    except Exception as exc:
+        logger.error(f"_write_state({log_dir}): {exc}")
+
+
+def _read_state(log_dir: str) -> Optional[Dict[str, Any]]:
+    """Read ``state.json`` from *log_dir*; return None if missing/invalid."""
+    path = _state_path(log_dir)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.error(f"_read_state({log_dir}): {exc}")
+        return None
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -414,9 +449,8 @@ async def _log_writer_loop(
         except (asyncio.TimeoutError, Exception):
             pass
 
-        # Sentinel rule: sentinel always lives in its own file.  Close the
-        # current file (if any), then open the NEXT number and write the
-        # sentinel into it alone.
+        # Exit status goes into state.json alongside the .log files.  The
+        # .log files now contain only program output — no sentinel.
         try:
             async with state.rotate_lock:
                 if state.current_file is not None:
@@ -424,14 +458,15 @@ async def _log_writer_loop(
                     state.current_file = None
                     state.current_file_number += 1
                 rc = process.returncode if process.returncode is not None else -1
-                sentinel_path = os.path.join(
-                    state.log_dir, f"{state.current_file_number}.log",
-                )
-                with open(sentinel_path, "a", encoding="utf-8") as fh:
-                    fh.write(f"{_EXIT_SENTINEL}:{rc}\n")
-                state.current_file_number += 1
+                existing = _read_state(state.log_dir) or {}
+                existing.update({
+                    "status": "completed",
+                    "return_code": rc,
+                    "exited_at": time.time(),
+                })
+                _write_state(state.log_dir, existing)
         except Exception as exc:
-            logger.error(f"log_writer_loop({state.process_id}): sentinel write failed: {exc}")
+            logger.error(f"log_writer_loop({state.process_id}): state.json update failed: {exc}")
 
         state.stopped = True
         logger.debug(
@@ -633,6 +668,15 @@ class ExecShellTool(BuiltInTool):
                 "stdout", process_id,
             )
             os.makedirs(log_dir, exist_ok=True)
+
+            _write_state(log_dir, {
+                "process_id": process_id,
+                "command": command,
+                "status": "running",
+                "return_code": None,
+                "created_at": time.time(),
+                "exited_at": None,
+            })
 
             writer_state = LogWriterState(
                 process_id=process_id,
@@ -854,8 +898,6 @@ class ExecShellOutputTool(BuiltInTool):
         log_files.sort(key=lambda f: int(f.split(".")[0]))
 
         merged_output = ""
-        exit_code: Optional[int] = None
-        completed = False
         read_paths: List[str] = []
 
         for fname in log_files:
@@ -866,17 +908,6 @@ class ExecShellOutputTool(BuiltInTool):
             except Exception:
                 continue
             read_paths.append(fpath)
-
-            sentinel_idx = content.find(_EXIT_SENTINEL + ":")
-            if sentinel_idx != -1:
-                completed = True
-                after = content[sentinel_idx + len(_EXIT_SENTINEL) + 1:]
-                try:
-                    exit_code = int(after.split("\n", 1)[0].strip())
-                except ValueError:
-                    exit_code = -1
-                content = content[:sentinel_idx].rstrip("\n")
-
             merged_output += content
 
         for fpath in read_paths:
@@ -890,6 +921,9 @@ class ExecShellOutputTool(BuiltInTool):
         )
         info.expire_time = time.monotonic() + (cleanup_ttl_hours * 3600)
 
+        state_data = _read_state(info.log_dir) or {}
+        completed = state_data.get("status") == "completed"
+        exit_code: Optional[int] = state_data.get("return_code")
         if not completed and info.process.returncode is not None:
             completed = True
             exit_code = info.process.returncode
@@ -1010,11 +1044,7 @@ class ExecShellStopTool(BuiltInTool):
                 try:
                     with open(os.path.join(info.log_dir, fname), "r",
                               encoding="utf-8") as fh:
-                        content = fh.read()
-                    sentinel_idx = content.find(_EXIT_SENTINEL + ":")
-                    if sentinel_idx != -1:
-                        content = content[:sentinel_idx].rstrip("\n")
-                    final_output += content
+                        final_output += fh.read()
                 except Exception:
                     pass
             shutil.rmtree(info.log_dir, ignore_errors=True)
