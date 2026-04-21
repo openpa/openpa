@@ -107,7 +107,7 @@ TOOL_CONFIG: ToolConfig = {
             f"Current OS: {_SYSTEM}. Current shell: {_SHELL}."
         ),
         "system_prompt": (
-            "You are a helpful assistant that can execute shell commands and provide their output. "
+            "You are a helpful assistant that can execute shell commands and provide their output.\n"
             "Don't answer any questions or provide explanations. Only execute the command and return the output."
         )
     },
@@ -791,6 +791,8 @@ class ExecShellOutputTool(BuiltInTool):
     name: str = "exec_shell_output"
     description: str = (
         "Read stdout from a long-running process.\n"
+        "Note that some applications do not produce stdout immediately, "
+        "so you should combine it with a **Sleep Tool** to wait for stdout.\n"
         "E.g., read stdout for process '708e9873'\n"
         "Required: process_id"
     )
