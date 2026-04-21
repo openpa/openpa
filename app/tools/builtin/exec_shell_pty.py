@@ -28,12 +28,12 @@ from app.utils.logger import logger
 
 _SYSTEM = platform.system()
 
-if _SYSTEM == "Windows":
-    _PTY_SHELL = "powershell.exe"
-    _PTY_SHELL_FLAGS = ["-NoLogo", "-NoProfile", "-Command"]
-else:
-    _PTY_SHELL = "/bin/bash"
-    _PTY_SHELL_FLAGS = ["-c"]
+
+def _pty_shell_for(system: str) -> tuple[str, list[str]]:
+    """Return (shell, flags) pair for PTY spawning on the given OS."""
+    if system == "Windows":
+        return "powershell.exe", ["-NoLogo", "-NoProfile", "-Command"]
+    return "/bin/bash", ["-c"]
 
 
 # ---------------------------------------------------------------------------
@@ -356,13 +356,14 @@ class _WindowsPtyProcess(PtyProcess):
 # ---------------------------------------------------------------------------
 
 async def _spawn_unix_pty(
-    command: str, working_dir: str, cols: int, rows: int,
+    command: str, working_dir: str, cols: int, rows: int, system: str,
 ) -> PtyProcess:
     import fcntl
     import pty
     import struct
     import termios
 
+    shell, flags = _pty_shell_for(system)
     master_fd, slave_fd = pty.openpty()
     try:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
@@ -376,7 +377,7 @@ async def _spawn_unix_pty(
         env["LINES"] = str(rows)
 
         proc = await asyncio.create_subprocess_exec(
-            _PTY_SHELL, *_PTY_SHELL_FLAGS, command,
+            shell, *flags, command,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
@@ -394,7 +395,7 @@ async def _spawn_unix_pty(
 
 
 async def _spawn_windows_pty(
-    command: str, working_dir: str, cols: int, rows: int,
+    command: str, working_dir: str, cols: int, rows: int, system: str,
 ) -> PtyProcess:
     try:
         import winpty  # type: ignore  # PyPI package: `pywinpty`; import name: `winpty`
@@ -404,12 +405,13 @@ async def _spawn_windows_pty(
             "Install it with `pip install pywinpty`."
         ) from exc
 
+    shell, flags = _pty_shell_for(system)
     loop = asyncio.get_running_loop()
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
     env["COLUMNS"] = str(cols)
     env["LINES"] = str(rows)
-    argv = [_PTY_SHELL, *_PTY_SHELL_FLAGS, command]
+    argv = [shell, *flags, command]
 
     def _spawn():
         return winpty.PtyProcess.spawn(
@@ -422,10 +424,12 @@ async def _spawn_windows_pty(
 
 async def _spawn_command_pty(
     command: str, working_dir: str, cols: int = 80, rows: int = 24,
+    system: Optional[str] = None,
 ) -> PtyProcess:
-    if _SYSTEM == "Windows":
-        return await _spawn_windows_pty(command, working_dir, cols, rows)
-    return await _spawn_unix_pty(command, working_dir, cols, rows)
+    system = system or _SYSTEM
+    if system == "Windows":
+        return await _spawn_windows_pty(command, working_dir, cols, rows, system)
+    return await _spawn_unix_pty(command, working_dir, cols, rows, system)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, cast
@@ -64,6 +65,7 @@ You must be cautious and think carefully about which tool to use and whether to 
 Reasoning steps should avoid repeating previous reasoning to prevent redundant information and conserve resources. If you have sufficient information, proceed to the next step. Please detect if the Thought content across the steps is repeating itself. If it is, immediately modify the Thought content to avoid entering a loop.
 
 Current time: {current_time}
+Current OS: {current_os}
 Current Working Directory: `{current_working_directory}`
 Current User Working Directory: `{current_user_working_directory}`
 Current Skills Directory: `{current_skills_directory}`
@@ -266,6 +268,7 @@ class ReasoningAgent:
         return template_instruction.format(
             persona_description=persona,
             current_time=f"{datetime.now().isoformat()}",
+            current_os=platform.system(),
             current_working_directory=BaseConfig.OPENPA_WORKING_DIR,
             current_skills_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills"),
             current_user_working_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile),
@@ -335,7 +338,7 @@ class ReasoningAgent:
         self.steps = []
         self.current_step_count = 0
         self.instruction = self._build_instruction()
-        # logger.info(f"instruction: {self.instruction}")
+        logger.info(f"instruction: {self.instruction}")
         self._append_input_step(input)
         async for item in self._loop(StepData(input=input)):
             yield item

@@ -35,14 +35,18 @@ from app.tools.builtin.exec_shell_pty import (
 )
 from app.utils.logger import logger
 
-_SYSTEM = platform.system()  # "Windows", "Linux", "Darwin"
+def _resolve_os(selected: Optional[str]) -> str:
+    """Return concrete OS; resolve 'Auto-Detect'/None via platform.system()."""
+    if not selected or selected == "Auto-Detect":
+        return platform.system()
+    return selected
 
-if _SYSTEM == "Windows":
-    _SHELL = "powershell.exe"
-    _SHELL_FLAG = "-Command"
-else:
-    _SHELL = "/bin/bash"
-    _SHELL_FLAG = "-c"
+
+def _shell_for(system: str) -> tuple[str, str]:
+    """Return (shell, flag) for the given OS."""
+    if system == "Windows":
+        return "powershell.exe", "-Command"
+    return "/bin/bash", "-c"
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +148,7 @@ TOOL_CONFIG: ToolConfig = {
     "default_model_group": "low",
     "llm_parameters": {
         "tool_instructions": (
-            f"Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS. "
-            f"Current OS: {_SYSTEM}. Current shell: {_SHELL}."
+            f"Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS."
         ),
         "system_prompt": (
             "You are a helpful assistant that can execute shell commands and provide their output.\n"
@@ -190,14 +193,27 @@ TOOL_CONFIG: ToolConfig = {
             "default": 24,
         },
     },
+    "arguments": {
+        "type": "object",
+        "properties": {
+            "os": {
+                "type": "string",
+                "enum": ["Windows", "Linux", "Darwin", "Auto-Detect"],
+                "default": "Auto-Detect",
+                "description": "Operating system to target for shell selection.",
+            },
+        },
+    },
 }
 
 
-async def _spawn_command(command: str, working_dir: str) -> asyncio.subprocess.Process:
+async def _spawn_command(
+    command: str, working_dir: str, system: str, shell: str, shell_flag: str,
+) -> asyncio.subprocess.Process:
     """Spawn a command as a standalone subprocess with piped stdin/stdout/stderr."""
-    if _SYSTEM == "Windows":
+    if system == "Windows":
         proc = await asyncio.create_subprocess_exec(
-            _SHELL, "-NoLogo", "-NoProfile", _SHELL_FLAG, command,
+            shell, "-NoLogo", "-NoProfile", shell_flag, command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -205,7 +221,7 @@ async def _spawn_command(command: str, working_dir: str) -> asyncio.subprocess.P
         )
     else:
         proc = await asyncio.create_subprocess_exec(
-            _SHELL, _SHELL_FLAG, command,
+            shell, shell_flag, command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -215,8 +231,13 @@ async def _spawn_command(command: str, working_dir: str) -> asyncio.subprocess.P
 
 
 async def _check_stdin_blocked(process: asyncio.subprocess.Process) -> bool | None:
-    """True if the child process is blocked on stdin; None if inconclusive."""
-    return await is_child_blocked_on_read(process.pid, _SYSTEM)
+    """True if the child process is blocked on stdin; None if inconclusive.
+
+    Uses the host OS (the machine OpenPA runs on), not the caller's target OS:
+    stdin-block detection inspects the live process table via /proc (Linux) or
+    Windows APIs, which only the host provides.
+    """
+    return await is_child_blocked_on_read(process.pid, platform.system())
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +612,16 @@ class ExecShellTool(BuiltInTool):
                 "type": "integer",
                 "description": "Terminal height (rows) for PTY mode. Default 24.",
             },
+            "os": {
+                "type": "string",
+                "enum": ["Windows", "Linux", "Darwin"],
+                "default": "Linux",
+                "description": (
+                    "Target operating system for shell selection. Controls "
+                    "which shell binary is used to run the command "
+                    "(powershell.exe on Windows, /bin/bash on Linux/Darwin)."
+                ),
+            },
         },
         "required": ["command"],
     }
@@ -607,6 +638,8 @@ class ExecShellTool(BuiltInTool):
         pty_arg = arguments.get("pty")
         cols = int(arguments.get("cols") or 80)
         rows = int(arguments.get("rows") or 24)
+        system = _resolve_os(arguments.get("os"))
+        shell, shell_flag = _shell_for(system)
         variables = arguments.get("_variables") or {}
         log_silence_threshold = float(variables.get(Var.LOG_SILENCE_THRESHOLD) or 3.0)
         cleanup_ttl_hours = float(variables.get(Var.CLEANUP_TTL_HOURS) or _DEFAULT_CLEANUP_TTL_HOURS)
@@ -636,11 +669,11 @@ class ExecShellTool(BuiltInTool):
 
         async def _spawn(pty_mode: bool):
             if pty_mode:
-                return await _spawn_command_pty(command, working_directory, cols, rows)
-            return await _spawn_command(command, working_directory)
+                return await _spawn_command_pty(command, working_directory, cols, rows, system)
+            return await _spawn_command(command, working_directory, system, shell, shell_flag)
 
         logger.debug(
-            f"exec_shell: running '{command}' on {_SYSTEM} with shell {_SHELL} "
+            f"exec_shell: running '{command}' on {system} with shell {shell} "
             f"(pty={use_pty})"
         )
 
@@ -652,8 +685,8 @@ class ExecShellTool(BuiltInTool):
                     "error": "Spawn error",
                     "message": f"Failed to spawn command: {str(e)}",
                     "command": command,
-                    "os": _SYSTEM,
-                    "shell": _SHELL,
+                    "os": system,
+                    "shell": shell,
                     "pty": use_pty,
                 }
             )
@@ -691,8 +724,8 @@ class ExecShellTool(BuiltInTool):
                             "error": "Spawn error",
                             "message": f"Failed to respawn command under PTY: {str(e)}",
                             "command": command,
-                            "os": _SYSTEM,
-                            "shell": _SHELL,
+                            "os": system,
+                            "shell": shell,
                             "pty": True,
                         }
                     )
@@ -733,8 +766,8 @@ class ExecShellTool(BuiltInTool):
                         "return_code": result["return_code"],
                         "category": "fire_and_forget",
                         "command": command,
-                        "os": _SYSTEM,
-                        "shell": _SHELL,
+                        "os": system,
+                        "shell": shell,
                         **({"pty": True, "stderr_merged_into_stdout": True} if use_pty else {}),
                         **({"timed_out": True} if result.get("timed_out") else {}),
                     }
@@ -765,8 +798,8 @@ class ExecShellTool(BuiltInTool):
                             "This type of command is not supported."
                         ),
                         "command": command,
-                        "os": _SYSTEM,
-                        "shell": _SHELL,
+                        "os": system,
+                        "shell": shell,
                     }
                 )
 
@@ -824,8 +857,8 @@ class ExecShellTool(BuiltInTool):
                     "category": "long_running",
                     "waiting_for_input": result.get("waiting_for_input", False),
                     "command": command,
-                    "os": _SYSTEM,
-                    "shell": _SHELL,
+                    "os": system,
+                    "shell": shell,
                     **({"pty": True, "stderr_merged_into_stdout": True} if use_pty else {}),
                     "message": (
                         f"Long-running process started with id '{process_id}'. "
@@ -851,8 +884,8 @@ class ExecShellTool(BuiltInTool):
                     "error": "Execution error",
                     "message": f"Failed to execute command: {str(e)}",
                     "command": command,
-                    "os": _SYSTEM,
-                    "shell": _SHELL,
+                    "os": system,
+                    "shell": shell,
                     "pty": use_pty,
                 }
             )
