@@ -20,6 +20,7 @@ def get_api_routes(
     config_storage=None,
     on_first_setup=None,
     connect_persisted_tool=None,
+    drop_profile_embeddings=None,
 ) -> list[Route]:
     """Collect all API routes.
 
@@ -39,7 +40,9 @@ def get_api_routes(
         registry=registry, pending_return_urls=pending_return_urls,
     ))
     routes.extend(get_profile_routes(
-        conversation_storage, registry=registry,
+        conversation_storage,
+        registry=registry,
+        drop_profile_embeddings=drop_profile_embeddings,
     ))
     routes.extend(get_token_routes())
     routes.extend(get_file_routes())

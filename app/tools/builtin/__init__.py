@@ -4,12 +4,20 @@ Each tool group lives at ``app.tools.builtin.{module_name}`` and exports:
 
 - ``TOOL_CONFIG`` (dict)              -- static config (name, display_name,
                                          default_model_group, required_config,
-                                         optional ``arguments`` / ``oauth``)
+                                         optional ``arguments`` / ``oauth`` /
+                                         ``llm_parameters``). ``llm_parameters``
+                                         carries code-level defaults for the
+                                         tool's tool_instructions, system
+                                         prompt, provider/model, reasoning
+                                         effort and full_reasoning. DB overrides
+                                         (from the ``llm``/``meta`` tool-config
+                                         scopes) win per-key.
 - ``SERVER_NAME`` (str)               -- display name in the UI
-- ``SERVER_INSTRUCTIONS`` (str)       -- description shown to the reasoning agent
 - ``get_tools(config: dict) -> list[BuiltInTool]`` -- in-process functions
 - ``get_prepare_tools()`` (optional)  -- per-request tool customization callback
-- ``_make_server_instructions(working_dir: str)`` (optional) -- dynamic description
+- ``_make_server_instructions(working_dir: str)`` (optional) -- dynamic
+                                         override for ``tool_instructions``
+                                         (wins over ``TOOL_CONFIG["llm_parameters"]["tool_instructions"]``)
 
 Registration is driven by the explicit ``_BUILTIN_MODULE_NAMES`` tuple below.
 Adding a new built-in tool means adding a module in this package, exporting
@@ -19,6 +27,7 @@ Adding a new built-in tool means adding a module in this package, exporting
 from __future__ import annotations
 
 import importlib
+import inspect
 from typing import Optional
 
 from app.config.settings import BaseConfig
@@ -115,6 +124,7 @@ async def register_builtin_tools(
     llm_factory,
     setup_profile: str = "admin",
     config_storage=None,
+    vector_store=None,
 ) -> None:
     """Register all built-in tool groups from ``_BUILTIN_MODULE_NAMES``.
 
@@ -158,13 +168,18 @@ async def register_builtin_tools(
             continue
 
         server_name = getattr(module, "SERVER_NAME", module_name)
-        instructions = getattr(module, "SERVER_INSTRUCTIONS", "") or ""
+        llm_defaults: dict = dict(tool_info.get("llm_parameters") or {})
+        instructions = llm_defaults.get("tool_instructions", "") or ""
         if hasattr(module, "_make_server_instructions"):
             instructions = module._make_server_instructions(config["OPENPA_WORKING_DIR"])
 
-        prepare_tools_fn = (
-            module.get_prepare_tools() if hasattr(module, "get_prepare_tools") else None
-        )
+        prepare_tools_fn = None
+        if hasattr(module, "get_prepare_tools"):
+            fn = module.get_prepare_tools
+            kwargs = {}
+            if "vector_store" in inspect.signature(fn).parameters:
+                kwargs["vector_store"] = vector_store
+            prepare_tools_fn = fn(**kwargs)
 
         # OAuth provider: read GOOGLE_CLIENT_ID/SECRET from the variable scope
         oauth_provider = None
@@ -189,23 +204,36 @@ async def register_builtin_tools(
             )
 
         # Read persisted LLM params from DB (mirrors MCP hydration in server.py).
-        # Per-tool overrides win over the model-group fallback factory.
+        # Per-key precedence: DB override > TOOL_CONFIG["llm_parameters"] default.
         tool_id_for_config = slugify(server_name)
         try:
             _llm_params = config_manager.get_llm_params(tool_id_for_config, setup_profile)
         except Exception:  # noqa: BLE001
             _llm_params = {}
 
+        try:
+            _meta = config_manager.get_meta(tool_id_for_config, setup_profile)
+        except Exception:  # noqa: BLE001
+            _meta = {}
+
+        effective_llm: dict = {**llm_defaults, **(_llm_params or {})}
+        effective_meta: dict = {
+            k: llm_defaults[k]
+            for k in ("system_prompt", "description")
+            if k in llm_defaults
+        }
+        effective_meta.update(_meta or {})
+
         llm: Optional[LLMProvider] = None
-        if _llm_params.get("llm_provider") or _llm_params.get("llm_model"):
+        if effective_llm.get("llm_provider") or effective_llm.get("llm_model"):
             try:
                 llm = create_llm_provider(
-                    provider_name=_llm_params.get("llm_provider")
+                    provider_name=effective_llm.get("llm_provider")
                         or BaseConfig.get_default_provider(),
-                    model_name=_llm_params.get("llm_model") or None,
+                    model_name=effective_llm.get("llm_model") or None,
                     config_storage=config_storage,
                     profile=setup_profile,
-                    default_reasoning_effort=_llm_params.get("reasoning_effort"),
+                    default_reasoning_effort=effective_llm.get("reasoning_effort"),
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(
@@ -226,14 +254,15 @@ async def register_builtin_tools(
         group = BuiltInToolGroup(
             config_name=module_name,
             display_name=server_name,
-            description=instructions or server_name,
+            description=effective_meta.get("description") or instructions or server_name,
             functions=functions,
             llm=llm,
             arguments_schema=tool_info.get("arguments") or None,
             oauth_provider=oauth_provider,
             prepare_tools=prepare_tools_fn,
-            full_reasoning=bool(_llm_params.get("full_reasoning", False)),
-            server_instructions=instructions or None,
+            full_reasoning=bool(effective_llm.get("full_reasoning", False)),
+            system_prompt=effective_meta.get("system_prompt") or None,
+            tool_instructions=instructions or None,
             llm_factory=llm_factory,
         )
         registry.register_builtin(group, source=module_name)

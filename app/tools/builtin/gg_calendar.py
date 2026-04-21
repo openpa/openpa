@@ -15,7 +15,6 @@ from app.utils.logger import logger
 
 
 SERVER_NAME = "Google Calendar"
-SERVER_INSTRUCTIONS = "A Google Calendar assistant that can list upcoming events and create new events."
 
 class Var:
     """Variable keys for the Google Calendar tool."""
@@ -27,6 +26,9 @@ TOOL_CONFIG: ToolConfig = {
     "name": "gg_calendar",
     "display_name": "Google Calendar",
     "default_model_group": "low",
+    "llm_parameters": {
+        "tool_instructions": "A Google Calendar assistant that can list upcoming events and create new events.",
+    },
     "required_config": {
         Var.CLIENT_ID: {
             "description": "Google OAuth Client ID",

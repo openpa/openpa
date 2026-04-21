@@ -156,7 +156,16 @@ def get_config_routes(
         # (must happen before on_first_setup so tool enabled states are persisted)
         llm_config = body.get("llm_config", {})
         for key, value in llm_config.items():
-            is_secret = "api_key" in key or "service_account" in key
+            is_secret = (
+                "api_key" in key
+                or "service_account" in key
+                or "setup_token" in key
+                or "oauth_token" in key
+                or "bearer_token" in key
+            )
+            # auth_method selections are not secrets
+            if key.endswith(".auth_method") or key == "auth_method":
+                is_secret = False
             config_storage.set("llm_config", key, str(value), is_secret=is_secret, profile=profile_name)
 
         # Tool config payload from the wizard. The frontend bundles four

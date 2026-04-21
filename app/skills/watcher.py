@@ -14,7 +14,7 @@ from typing import Callable
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from app.tools.skills.scanner import SkillInfo, scan_skills
+from app.skills.scanner import SkillInfo, scan_skills
 from app.utils.logger import logger
 
 # Debounce window in seconds — multiple rapid filesystem events are

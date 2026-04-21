@@ -11,12 +11,14 @@ from app.types import ToolConfig
 
 
 SERVER_NAME = "Sleep"
-SERVER_INSTRUCTIONS = "Pause execution for a specified number of seconds."
 
 TOOL_CONFIG: ToolConfig = {
     "name": "sleep",
     "display_name": "Sleep",
     "default_model_group": "low",
+    "llm_parameters": {
+        "tool_instructions": "Pause execution for a specified number of seconds.",
+    },
 }
 
 MAX_SLEEP = 300  # 5 minutes

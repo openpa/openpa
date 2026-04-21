@@ -13,6 +13,12 @@ profile = ""
 grpc_host = "localhost"
 grpc_port = 50051
 
+[qdrant]
+host = "localhost"
+port = 6333
+api_key = ""
+https = false
+
 [llm]
 # Provider and model groups are configured via the setup wizard (stored in SQLite).
 # No defaults — setup must be completed first.

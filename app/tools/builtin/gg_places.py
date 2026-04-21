@@ -22,11 +22,6 @@ from app.utils.logger import logger
 
 
 SERVER_NAME = "Google Places"
-SERVER_INSTRUCTIONS = (
-    "A places assistant that searches for nearby places using Google Maps "
-    "and generates direction links. Use search_places to find nearby locations "
-    "and map_direction_link to create navigation URLs."
-)
 
 class Var:
     """Variable keys for the Google Places tool."""
@@ -37,7 +32,14 @@ TOOL_CONFIG: ToolConfig = {
     "name": "gg_places",
     "display_name": "Google Places",
     "default_model_group": "low",
-    "visible": False,
+    "visible": True,
+    "llm_parameters": {
+        "tool_instructions": (
+            "A places assistant that searches for nearby places using Google Maps "
+            "and generates direction links. Use search_places to find nearby locations "
+            "and map_direction_link to create navigation URLs."
+        ),
+    },
     "required_config": {
         Var.API_KEY: {
             "description": "Google Maps API Key",
@@ -394,16 +396,29 @@ INCLUDED_TYPES_TABLE: dict[str, str] = {
 # Embedding-based type filtering
 # ---------------------------------------------------------------------------
 
-def _build_embedding_table():
+_GG_PLACES_COLLECTION = "gg_places_types"
+
+
+def _build_embedding_table(vector_store=None):
     """Build the embedding table for INCLUDED_TYPES_TABLE at startup.
 
-    Returns the EmbeddingTable, or None if the embedding service is unavailable.
+    When `vector_store` is provided, cached embeddings are loaded from Qdrant
+    on subsequent startups — skipping the 336 gRPC calls entirely.
+
+    Returns (embedding_vendor, embedding_table), or (None, None) if the
+    embedding service is unavailable.
     """
     try:
         from app.lib.embedding import GrpcEmbeddings
-        from app.utils.common import build_table_embeddings
+        from app.vectorstores import get_or_build_embedding_table
+
         embedding_vendor = GrpcEmbeddings()
-        table = build_table_embeddings(embedding_vendor, INCLUDED_TYPES_TABLE)
+        table = get_or_build_embedding_table(
+            vector_store=vector_store,
+            embedding=embedding_vendor,
+            data=INCLUDED_TYPES_TABLE,
+            collection_name=_GG_PLACES_COLLECTION,
+        )
         if table and len(table) > 0:
             logger.info(f"[gg_places] Built embedding table with {len(table)} place types")
             return embedding_vendor, table
@@ -671,12 +686,14 @@ def get_tools(config: dict) -> list[BuiltInTool]:
     return [SearchPlacesTool(api_key=api_key), MapDirectionLinkTool()]
 
 
-def get_prepare_tools() -> Optional[Callable]:
+def get_prepare_tools(vector_store=None) -> Optional[Callable]:
     """Build embedding table and return the prepare_tools callback.
 
-    Called once at startup by init_builtin_tools(). Returns None if the
-    embedding service is unavailable (graceful degradation -- the tool
-    still works, just without type filtering).
+    Called once at startup by register_builtin_tools(). When `vector_store`
+    is provided, cached place-type embeddings are loaded from Qdrant instead
+    of being re-generated via gRPC. Returns None if the embedding service
+    is unavailable (graceful degradation -- the tool still works, just
+    without type filtering).
     """
-    embedding_vendor, embedding_table = _build_embedding_table()
+    embedding_vendor, embedding_table = _build_embedding_table(vector_store=vector_store)
     return create_prepare_tools(embedding_vendor, embedding_table)

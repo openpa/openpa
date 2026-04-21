@@ -6,3 +6,10 @@ class AgentException(Exception):
         self.code = code
         self.msg = msg
         super().__init__(msg)
+
+
+class VectorStoreException(Exception):
+    def __init__(self, code: Status, msg: str):
+        self.code = code
+        self.msg = msg
+        super().__init__(msg)

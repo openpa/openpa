@@ -20,8 +20,11 @@ from .base import LLMProvider
 
 
 class OpenAILLMProvider(LLMProvider):
-    def __init__(self, api_key: str, model_name: str, default_reasoning_effort: Optional[str] = None):
-        self.openai = OpenAI(api_key=api_key)
+    def __init__(self, api_key: str, model_name: str, default_reasoning_effort: Optional[str] = None, base_url: Optional[str] = None):
+        kwargs: Dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.openai = OpenAI(**kwargs)
         self.model_name = model_name
         self.default_reasoning_effort = default_reasoning_effort
         self.encoder = encoding_for_model("gpt-4o")  # Fallback

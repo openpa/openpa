@@ -45,22 +45,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 SERVER_NAME = "Browser"
-SERVER_INSTRUCTIONS = (
-    "A browser automation tool that controls a Chrome browser via CDP "
-    "(Chrome DevTools Protocol). It supports the following actions:\n"
-    "- navigate: open a URL in the browser\n"
-    "- snapshot: read current page content as an accessibility tree\n"
-    "- screenshot: capture the page as a PNG image\n"
-    "- click: click an element identified by selector, text, or role\n"
-    "- type: type text into an input or press keyboard keys\n"
-    "- tabs: list, switch, close, or open browser tabs\n"
-    "- evaluate: run JavaScript on the page and return the result\n\n"
-    "Always use the 'snapshot' action first to understand page structure "
-    "before using 'click' or 'type'. By default the tool launches the "
-    "system-installed Google Chrome (BROWSER_CHANNEL='chrome') with a "
-    "persistent profile so logins and cookies persist across sessions. "
-    "To connect to an existing browser instead, set BROWSER_CDP_URL."
-)
 
 class Var:
     """Variable keys for the Browser tool (used in TOOL_CONFIG and runtime reads)."""
@@ -75,6 +59,24 @@ TOOL_CONFIG: ToolConfig = {
     "name": "browser",
     "display_name": "Browser",
     "default_model_group": "low",
+    "llm_parameters": {
+        "tool_instructions": (
+            "A browser automation tool that controls a Chrome browser via CDP "
+            "(Chrome DevTools Protocol). It supports the following actions:\n"
+            "- navigate: open a URL in the browser\n"
+            "- snapshot: read current page content as an accessibility tree\n"
+            "- screenshot: capture the page as a PNG image\n"
+            "- click: click an element identified by selector, text, or role\n"
+            "- type: type text into an input or press keyboard keys\n"
+            "- tabs: list, switch, close, or open browser tabs\n"
+            "- evaluate: run JavaScript on the page and return the result\n\n"
+            "Always use the 'snapshot' action first to understand page structure "
+            "before using 'click' or 'type'. By default the tool launches the "
+            "system-installed Google Chrome (BROWSER_CHANNEL='chrome') with a "
+            "persistent profile so logins and cookies persist across sessions. "
+            "To connect to an existing browser instead, set BROWSER_CDP_URL."
+        ),
+    },
     "required_config": {
         Var.CDP_URL: {
             "description": (

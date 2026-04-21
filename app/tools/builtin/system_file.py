@@ -888,6 +888,12 @@ TOOL_CONFIG: ToolConfig = {
     "name": "system_file",
     "display_name": "System File",
     "default_model_group": "low",
+    "llm_parameters": {
+        "tool_instructions": (
+            "A file management assistant. "
+            "Operates within the user's profile-specific working directory."
+        ),
+    },
 }
 
 

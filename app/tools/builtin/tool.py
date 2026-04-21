@@ -68,7 +68,7 @@ class BuiltInToolGroup(Tool):
         prepare_tools: Optional[Callable[[str, list], list]] = None,
         full_reasoning: bool = False,
         system_prompt: Optional[str] = None,
-        server_instructions: Optional[str] = None,
+        tool_instructions: Optional[str] = None,
         llm_factory: Optional[Callable[[str, str], LLMProvider]] = None,
     ):
         super().__init__()
@@ -84,7 +84,7 @@ class BuiltInToolGroup(Tool):
             description=description,
             name=display_name,
             system_prompt=system_prompt,
-            server_instructions=server_instructions,
+            tool_instructions=tool_instructions,
             prepare_tools=prepare_tools,
             full_reasoning=full_reasoning,
         )

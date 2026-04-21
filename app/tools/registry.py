@@ -14,8 +14,11 @@ their tool_ids are. It owns:
   interleave with the reasoning loop.
 
 Profile-availability rules:
-- intrinsic / builtin / skill : always available to every profile (no
+- intrinsic / builtin : always available to every profile (no
   ``profile_tools`` row).
+- skill               : owned by exactly one profile -- ``tool_id`` is
+  prefixed ``<profile>__<slug>`` and ``tools.owner_profile`` records the
+  owner. Only the owning profile sees the skill.
 - a2a / mcp : visible to every profile; enabled only where
   ``profile_tools.enabled = 1``.
 """
@@ -57,18 +60,27 @@ class ToolRegistry:
         # Async lock guarding all multi-step mutations (sync_skills, register_*).
         self._lock = asyncio.Lock()
         # Optional callback fired after add/remove/sync mutations -- used by
-        # the OpenPAAgent to refresh its embedding table.
-        self._on_change: Optional[Callable[[], None]] = None
+        # the OpenPAAgent to refresh its embedding tables. The callback may
+        # accept an optional ``profile`` kwarg; when set, only that profile's
+        # embedding table needs rebuilding (skill sync). When ``None``, the
+        # mutation affects every profile (builtin rebind, a2a/mcp change).
+        self._on_change: Optional[Callable[..., None]] = None
 
     # ── observability ──────────────────────────────────────────────────
 
-    def set_change_callback(self, cb: Optional[Callable[[], None]]) -> None:
+    def set_change_callback(self, cb: Optional[Callable[..., None]]) -> None:
         self._on_change = cb
 
-    def _fire_change(self) -> None:
+    def _fire_change(self, profile: Optional[str] = None) -> None:
         if self._on_change:
             try:
-                self._on_change()
+                self._on_change(profile=profile)
+            except TypeError:
+                # Back-compat: callback that takes no arguments.
+                try:
+                    self._on_change()
+                except Exception:  # noqa: BLE001
+                    logger.exception("ToolRegistry change callback failed")
             except Exception:  # noqa: BLE001
                 logger.exception("ToolRegistry change callback failed")
 
@@ -92,12 +104,27 @@ class ToolRegistry:
     def _default_enabled(tool_type: ToolType) -> bool:
         """Default enabled state when no ``profile_tools`` row exists.
 
-        - intrinsic       : always on (never persisted)
-        - builtin / skill : on by default (always available, opt-out per profile)
-        - a2a / mcp       : off by default (opt-in per profile, except for the
-                            owner profile which gets enabled=1 at registration)
+        - intrinsic / builtin : on by default (always available, opt-out per
+                                profile)
+        - skill               : on by default *for its owner profile*; invisible
+                                to other profiles (filtered in
+                                :meth:`tools_for_profile`).
+        - a2a / mcp           : off by default (opt-in per profile, except for
+                                the owner profile which gets enabled=1 at
+                                registration)
         """
         return tool_type in (ToolType.INTRINSIC, ToolType.BUILTIN, ToolType.SKILL)
+
+    @staticmethod
+    def _skill_belongs_to_profile(tool: Tool, profile: str) -> bool:
+        """Return True if ``tool`` is a skill owned by ``profile``.
+
+        Ownership is encoded in the tool_id prefix ``<profile>__``.
+        """
+        return (
+            tool.tool_type is ToolType.SKILL
+            and tool.tool_id.startswith(f"{profile}__")
+        )
 
     def is_enabled_for_profile(self, tool: Tool, profile: str) -> bool:
         """Resolve a tool's enabled state for ``profile``.
@@ -113,15 +140,20 @@ class ToolRegistry:
     def tools_for_profile(self, profile: str) -> List[Tool]:
         """Return tools the reasoning agent should expose to ``profile``.
 
-        Intrinsic tools are always included. Every other type honors a
-        per-profile ``profile_tools`` row when present, falling back to the
-        type's default (built-in / skill = on; a2a / mcp = off).
+        Intrinsic tools are always included. Skills owned by other profiles
+        are excluded. Every other type honors a per-profile ``profile_tools``
+        row when present, falling back to the type's default (built-in = on;
+        a2a / mcp = off).
         """
         enabled_per_profile = self._storage.list_profile_tools(profile)
         out: List[Tool] = []
         for tool in self._tools.values():
             if tool.tool_type is ToolType.INTRINSIC:
                 out.append(tool)
+                continue
+            if tool.tool_type is ToolType.SKILL:
+                if self._skill_belongs_to_profile(tool, profile):
+                    out.append(tool)
                 continue
             explicit = enabled_per_profile.get(tool.tool_id)
             enabled = explicit if explicit is not None else self._default_enabled(tool.tool_type)
@@ -133,11 +165,15 @@ class ToolRegistry:
         """Return UI rows for ``profile`` -- includes disabled stubs.
 
         Used by ``GET /api/tools``. Hidden tools (intrinsic) are excluded.
+        Skills owned by other profiles are excluded entirely -- each profile
+        only sees its own skills.
         """
         enabled_per_profile = self._storage.list_profile_tools(profile)
         rows: List[dict] = []
         for tool in self._tools.values():
             if tool.hidden:
+                continue
+            if tool.tool_type is ToolType.SKILL and not self._skill_belongs_to_profile(tool, profile):
                 continue
             explicit = enabled_per_profile.get(tool.tool_id)
             enabled = explicit if explicit is not None else self._default_enabled(tool.tool_type)
@@ -295,25 +331,48 @@ class ToolRegistry:
         )
         return tool_id
 
-    # ── skills (persisted, no profile_tools row -- always-available) ──
+    # ── skills (persisted, no profile_tools row; owned by a profile) ───
 
-    def register_skill_sync(self, tool: Tool, *, source: str) -> str:
+    def _unique_skill_id(self, preferred: str, *, ignore: Optional[str] = None) -> str:
+        """Return ``preferred`` if free, else suffix ``_2``, ``_3`` ... .
+
+        ``ignore`` lets the caller mark one existing id as "don't count as
+        taken" -- used during rename when we want to keep the current slot
+        reachable as a candidate for the new name.
+        """
+        taken = self._taken()
+        if ignore is not None:
+            taken.discard(ignore)
+        if preferred not in taken:
+            return preferred
+        n = 2
+        while f"{preferred}_{n}" in taken:
+            n += 1
+        return f"{preferred}_{n}"
+
+    def register_skill_sync(
+        self,
+        tool: Tool,
+        *,
+        source: str,
+        owner_profile: str,
+    ) -> str:
         """Synchronous skill registration helper used from inside ``sync_skills``.
 
-        Tool-id selection follows three rules, in order:
+        Tool-ids are profile-scoped: ``<owner_profile>__<slug(tool.name)>``.
+        Rules, in order:
 
-        1. If this skill's ``source`` is already persisted AND its existing
-           ``tool_id`` is still free (or owned only by this same skill),
-           reuse it -- preserves identity across restarts.
-        2. If the persisted ``tool_id`` is now owned by a fixed-name tool
-           (intrinsic / built-in) the skill is *renamed*: a fresh unique
-           suffix is allocated and the persisted row's id is rewritten.
-        3. If the source is brand new, allocate a unique slug from
-           ``tool.name`` (suffixed if needed).
+        1. If this skill's ``source`` is already persisted, reuse its existing
+           ``tool_id`` unless a fixed-name tool (intrinsic / built-in) now
+           owns that slug -- in which case rename to a fresh profile-prefixed
+           id.
+        2. If the source is new, allocate ``<profile>__<slug>`` (suffixed on
+           collision).
         """
         if tool.tool_type is not ToolType.SKILL:
             raise ValueError("register_skill_sync requires a Tool with tool_type=SKILL")
 
+        preferred = f"{owner_profile}__{slugify(tool.name)}"
         existing = self._storage.find_tool_by_source(ToolType.SKILL.value, source)
         chosen_id: str
         if existing:
@@ -325,22 +384,19 @@ class ToolRegistry:
                 and owner.tool_type in (ToolType.INTRINSIC, ToolType.BUILTIN)
             )
             if owner_is_other_fixed:
-                # Skill's previous slug is now claimed by a fixed-name tool.
-                # Re-allocate this skill's id and migrate the DB row.
-                fresh = allocate_unique_tool_id(tool.name, self._taken() | {candidate})
+                fresh = self._unique_skill_id(preferred)
                 if not self._storage.rename_tool(candidate, fresh):
-                    # Extremely unlikely (concurrent rename), fall back to insert
                     self._storage.delete_tool(candidate)
                 logger.warning(
-                    f"Skill '{tool.name}' previously held tool_id='{candidate}', "
-                    f"which is now owned by a fixed-name tool. "
+                    f"Skill '{tool.name}' (owner='{owner_profile}') previously held "
+                    f"tool_id='{candidate}', which is now owned by a fixed-name tool. "
                     f"Renamed skill to '{fresh}'."
                 )
                 chosen_id = fresh
             else:
                 chosen_id = candidate
         else:
-            chosen_id = allocate_unique_tool_id(tool.name, self._taken())
+            chosen_id = self._unique_skill_id(preferred)
 
         tool.tool_id = chosen_id
         self._tools[chosen_id] = tool
@@ -351,8 +407,11 @@ class ToolRegistry:
             source=source,
             description=tool.description,
             arguments_schema=tool.arguments_schema,
+            owner_profile=owner_profile,
         )
-        logger.info(f"Registered skill '{tool.name}' (tool_id={chosen_id})")
+        logger.info(
+            f"Registered skill '{tool.name}' (tool_id={chosen_id}, owner={owner_profile})"
+        )
         return chosen_id
 
     # ── in-memory replace (stub ↔ live) ────────────────────────────────
@@ -392,52 +451,91 @@ class ToolRegistry:
 
     async def sync_skills(
         self,
+        profile: str,
         current: Dict[str, Any],
         skill_factory: Callable[[Any], Tool],
     ) -> None:
-        """Diff persisted skills against the on-disk set and reconcile.
+        """Diff persisted skills for ``profile`` against the on-disk set.
 
         Args
         ----
-        current : ``{name: SkillInfo}`` from a fresh disk scan.
+        profile : owning profile whose skills are being reconciled.
+        current : ``{name: SkillInfo}`` from a fresh scan of that profile's
+                  skills directory.
         skill_factory : callable that turns a ``SkillInfo`` into a ``Tool``.
 
-        For each entry:
+        For each entry owned by ``profile``:
         - existing source (dir_path) → reuse tool_id, refresh name/description.
-        - new source                  → allocate fresh tool_id, register.
-        - source vanished from disk   → remove tool (cascades configs).
+        - new source                 → allocate fresh tool_id, register.
+        - source vanished from disk  → remove tool (cascades configs).
+
+        Skills belonging to other profiles are left untouched.
         """
         async with self._lock:
             persisted = self._storage.list_tools(tool_type=ToolType.SKILL.value)
-            persisted_by_source = {row["source"]: row for row in persisted}
+            # Scope diff to rows owned by this profile. Rows without an
+            # ``owner_profile`` (legacy data) are ignored here -- the startup
+            # purge handles those.
+            persisted_by_source = {
+                row["source"]: row
+                for row in persisted
+                if row.get("owner_profile") == profile
+            }
 
             current_sources = {str(info.dir_path) for info in current.values()}
 
-            # Remove vanished skills
+            # Remove skills for this profile whose on-disk dir vanished.
             for source, row in persisted_by_source.items():
                 if source in current_sources:
                     continue
                 tool_id = row["tool_id"]
                 self._tools.pop(tool_id, None)
                 self._storage.delete_tool(tool_id)
-                logger.info(f"Removed skill (no longer on disk): tool_id={tool_id}")
+                logger.info(
+                    f"Removed skill (no longer on disk): tool_id={tool_id}, "
+                    f"profile={profile}"
+                )
 
-            # Drop in-memory skill entries whose source no longer matches any current skill
+            # Drop in-memory skill entries for this profile whose source is stale.
             stale_in_memory = [
                 t.tool_id for t in list(self._tools.values())
                 if t.tool_type is ToolType.SKILL
+                and t.tool_id.startswith(f"{profile}__")
                 and getattr(t, "_source", None) not in current_sources
             ]
             for tid in stale_in_memory:
                 self._tools.pop(tid, None)
 
-            # Add / update current skills
+            # Add / update current skills.
             for info in current.values():
                 source = str(info.dir_path)
                 tool = skill_factory(info)
-                self.register_skill_sync(tool, source=source)
+                self.register_skill_sync(tool, source=source, owner_profile=profile)
 
-        self._fire_change()
+        self._fire_change(profile=profile)
+
+    def purge_legacy_skill_rows(self, valid_sources: Iterable[str]) -> int:
+        """Remove persisted skill rows whose source is not under any known
+        profile's skills directory.
+
+        Returns the number of rows deleted. Runs synchronously -- invoked once
+        at startup, before any per-profile ``sync_skills`` call, so no lock is
+        needed (registry is still empty of skill tools at this point).
+        """
+        valid = tuple(str(s) for s in valid_sources)
+        removed = 0
+        for row in self._storage.list_tools(tool_type=ToolType.SKILL.value):
+            source = row.get("source") or ""
+            if any(source.startswith(prefix) for prefix in valid):
+                continue
+            tool_id = row["tool_id"]
+            self._tools.pop(tool_id, None)
+            self._storage.delete_tool(tool_id)
+            removed += 1
+            logger.info(
+                f"Purged legacy skill row: tool_id={tool_id}, source={source}"
+            )
+        return removed
 
     # ── profile lifecycle hooks ────────────────────────────────────────
 

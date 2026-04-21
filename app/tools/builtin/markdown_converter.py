@@ -17,16 +17,18 @@ from app.utils.logger import logger
 
 
 SERVER_NAME = "Markdown Converter"
-SERVER_INSTRUCTIONS = (
-    "Converts files (PDF, DOCX, XLSX, PPTX, HTML, CSV, etc.) to Markdown "
-    "format. Use this tool when the user wants to convert a document to "
-    "markdown for further processing, editing, or analysis."
-)
 
 TOOL_CONFIG: ToolConfig = {
     "name": "markdown_converter",
     "display_name": "Markdown Converter",
     "default_model_group": "low",
+    "llm_parameters": {
+        "tool_instructions": (
+            "Converts files (PDF, DOCX, XLSX, PPTX, HTML, CSV, etc.) to Markdown "
+            "format. Use this tool when the user wants to convert a document to "
+            "markdown for further processing, editing, or analysis."
+        ),
+    },
 }
 
 MAX_MARKITDOWN_FILE_SIZE = 50 * 1024 * 1024  # 50 MB

@@ -156,7 +156,7 @@ class MCPConnection:
         return self._server_name
 
     @property
-    def server_instructions(self) -> str:
+    def tool_instructions(self) -> str:
         """Return the server instructions from MCP initialize result."""
         return self._server_instructions
 

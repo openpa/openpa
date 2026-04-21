@@ -98,6 +98,12 @@ class BaseConfig:
     EMBEDDING_GRPC_HOST = _dynaconf_get("embedding.grpc_host", "localhost")
     EMBEDDING_GRPC_PORT = int(_dynaconf_get("embedding.grpc_port", 50051))
 
+    # ── Qdrant ──
+    QDRANT_HOST =  _dynaconf_get("qdrant.host", "localhost")
+    QDRANT_PORT = int(_dynaconf_get("qdrant.port", 6333))
+    QDRANT_API_KEY = _dynaconf_get("qdrant.api_key", "")
+    QDRANT_HTTPS = _bool(_dynaconf_get("qdrant.https", "false"))
+
     # ── LLM (configured via setup wizard, stored in SQLite) ──
     DEFAULT_MODEL_NAME = _dynaconf_get("llm.model_groups.high", "")
     REASONING_MODEL_NAME = _dynaconf_get("llm.model_groups.low", "")

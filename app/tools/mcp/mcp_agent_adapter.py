@@ -86,8 +86,8 @@ class MCPAgentAdapter:
         """
         if self._description:
             return self._description
-        if self._connection.server_instructions:
-            return self._connection.server_instructions
+        if self._connection.tool_instructions:
+            return self._connection.tool_instructions
         tool_names = [t.name for t in self._connection.get_tools()]
         return f"MCP Server providing tools: {', '.join(tool_names)}"
 

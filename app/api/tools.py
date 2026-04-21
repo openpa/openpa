@@ -60,6 +60,7 @@ def get_tool_routes(
                 "configured": _is_tool_configured(tool, snapshot),
                 "config": snapshot,
                 "required_fields": required_fields,
+                "llm_defaults": _llm_defaults_for_tool(tool),
                 "full_reasoning": bool(snapshot.get("llm", {}).get("full_reasoning", False)),
             })
             if hasattr(tool, "connection_error") and getattr(tool, "connection_error"):
@@ -92,6 +93,7 @@ def get_tool_routes(
             "arguments_schema": tool.arguments_schema,
             "schema": schema,
             "config": snapshot,
+            "llm_defaults": _llm_defaults_for_tool(tool),
             "configured": _is_tool_configured(tool, snapshot),
         })
 
@@ -224,6 +226,86 @@ def get_tool_routes(
 
         return JSONResponse({"success": True})
 
+    async def handle_reset_llm_params(request: Request) -> JSONResponse:
+        """Delete selected LLM-parameter overrides so code defaults apply again.
+
+        Body: ``{"keys": ["system_prompt", "llm_provider", ...]}``.
+
+        Keys in ``{system_prompt, description}`` are removed from the ``meta``
+        scope; all other keys are removed from the ``llm`` scope. When any
+        provider-shaping key is reset, the adapter's child LLM is rebuilt so
+        the change takes effect without a restart.
+        """
+        profile = _profile_from_request(request)
+        tool_id = request.path_params["tool_id"]
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        keys = body.get("keys", [])
+        if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+            return JSONResponse(
+                {"error": "'keys' must be an array of strings"}, status_code=400,
+            )
+
+        tool = registry.get(tool_id)
+        if tool is None:
+            return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
+
+        storage = config_manager.storage
+        from app.storage.tool_storage import SCOPE_LLM, SCOPE_META
+        for key in keys:
+            scope = SCOPE_META if key in _META_KEYS else SCOPE_LLM
+            try:
+                storage.delete_config(
+                    profile=profile, tool_id=tool_id, scope=scope, key=key,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    f"Failed to delete {scope}.{key} for tool '{tool_id}'"
+                )
+
+        # If a provider-shaping key was reset, rebuild the child LLM using
+        # the remaining DB values (falling back to the profile's model group).
+        if any(k in ("llm_provider", "llm_model", "reasoning_effort") for k in keys) \
+                and hasattr(tool, "update_runtime_config"):
+            try:
+                merged = config_manager.get_llm_params(tool_id, profile)
+                provider_name = merged.get("llm_provider") or None
+                model_name = merged.get("llm_model") or None
+                if not model_name:
+                    group_value = BaseConfig.get_model_group("low", profile=profile)
+                    if group_value:
+                        parts = group_value.split("/", 1)
+                        if not provider_name:
+                            provider_name = parts[0]
+                        model_name = parts[1] if len(parts) > 1 else parts[0]
+                if not provider_name:
+                    provider_name = BaseConfig.get_default_provider(profile=profile)
+                if model_name:
+                    new_llm = create_llm_provider(
+                        provider_name=provider_name,
+                        model_name=model_name,
+                        config_storage=config_storage,
+                        profile=profile,
+                        default_reasoning_effort=merged.get("reasoning_effort"),
+                    )
+                    tool.update_runtime_config(llm=new_llm)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    f"Failed to rebuild LLM for tool '{tool_id}' after reset"
+                )
+
+        # Push cleared system_prompt / description straight to the running
+        # adapter so in-flight changes take effect immediately.
+        if hasattr(tool, "update_runtime_config"):
+            if "system_prompt" in keys:
+                tool.update_runtime_config(system_prompt="")
+            if "description" in keys:
+                tool.update_runtime_config(description="")
+
+        return JSONResponse({"success": True})
+
     async def handle_set_enabled(request: Request) -> JSONResponse:
         """Enable / disable an A2A or MCP tool for the current profile.
 
@@ -261,11 +343,29 @@ def get_tool_routes(
         Route("/api/tools/{tool_id}/variables", handle_set_variables, methods=["PUT"]),
         Route("/api/tools/{tool_id}/arguments", handle_set_arguments, methods=["PUT"]),
         Route("/api/tools/{tool_id}/llm", handle_set_llm_params, methods=["PUT"]),
+        Route("/api/tools/{tool_id}/llm", handle_reset_llm_params, methods=["DELETE"]),
         Route("/api/tools/{tool_id}/enabled", handle_set_enabled, methods=["PUT"]),
     ]
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
+
+
+_META_KEYS: frozenset[str] = frozenset({"system_prompt", "description"})
+
+
+def _llm_defaults_for_tool(tool) -> dict:
+    """Return the code-level ``llm_parameters`` defaults for a built-in tool.
+
+    For skills / MCP / A2A / intrinsic tools, returns ``{}`` — those don't ship
+    code-level defaults via ``TOOL_CONFIG``.
+    """
+    if tool is None:
+        return {}
+    if tool.tool_type is ToolType.BUILTIN and isinstance(tool, BuiltInToolGroup):
+        schema = get_builtin_tool_config(tool.config_name)
+        return dict(schema.get("tool", {}).get("llm_parameters") or {})
+    return {}
 
 
 def _schema_for_tool(tool) -> dict:

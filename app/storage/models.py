@@ -35,6 +35,7 @@ class ProfileModel(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    skill_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
 
 
 class ConversationModel(Base):

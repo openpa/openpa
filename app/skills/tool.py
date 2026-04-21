@@ -24,7 +24,7 @@ from app.tools.base import (
     ToolResultEvent,
     ToolType,
 )
-from app.tools.skills.scanner import SkillInfo
+from app.skills.scanner import SkillInfo
 
 
 class SkillTool(Tool):

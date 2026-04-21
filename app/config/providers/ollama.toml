@@ -3,6 +3,13 @@ name = "ollama"
 display_name = "Ollama (Local)"
 requires_api_key = false
 
+[[provider.auth_methods]]
+id = "none"
+label = "No Auth Required"
+hint = "Ollama runs locally, no credentials needed"
+kind = "none"
+is_default = true
+
 [[models]]
 id = "llama3.3:70b"
 display_name = "Llama 3.3 70B"
@@ -18,15 +25,29 @@ input_price_per_1m = 0.00
 output_price_per_1m = 0.00
 
 [[models]]
-id = "qwen2.5:7b"
-display_name = "Qwen 2.5 7B"
+id = "qwen3:32b"
+display_name = "Qwen 3 32B"
+group_hint = "high"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00
+
+[[models]]
+id = "qwen3:8b"
+display_name = "Qwen 3 8B"
 group_hint = "low"
 input_price_per_1m = 0.00
 output_price_per_1m = 0.00
 
 [[models]]
-id = "gpt-oss:20b"
-display_name = "GPT-OSS 20B"
+id = "gemma3:27b"
+display_name = "Gemma 3 27B"
+group_hint = "high"
+input_price_per_1m = 0.00
+output_price_per_1m = 0.00
+
+[[models]]
+id = "deepseek-r1:14b"
+display_name = "DeepSeek R1 14B"
 group_hint = "low"
 input_price_per_1m = 0.00
 output_price_per_1m = 0.00

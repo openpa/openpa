@@ -44,7 +44,7 @@ from app.tools import (
 )
 from app.tools.intrinsic import UserNotificationTool
 from app.tools.ids import slugify
-from app.tools.skills.scanner import generate_dir_tree
+from app.skills.scanner import generate_dir_tree
 from app.types import ReasoningStreamResponseType
 from app.utils.common import limit_messages, truncate_messages
 from app.utils.logger import logger
@@ -78,11 +78,7 @@ Action: the action to take from Thought, should be one of {tool_names}
 Action_Input: the input sent to the action. For intrinsic tools, this is the response content to be sent to the user. Please respond in an easy-to-understand way, only text for the human listening (System information, technical specifications, and the device ID are hidden information)
 Thought_In_Next: you should always think about what to do next after observing the results of the action
 Observation: the result of the action, the observation content will be placed between '{OBSERVATION_START_MARKER}' and '{OBSERVATION_END_MARKER}' to help you clearly identify the observation content.
-
-==========Start Skills Instructions==========
-{loaded_skills}
-==========End Skills Instructions==========
-'''
+{loaded_skills}'''
 
 template_input = '''
 Begin!
@@ -151,14 +147,24 @@ class ReasoningAgent:
         max_steps: int = 20,
         steps_length: int = 40,
         reasoning: bool = True,
+        allowed_skill_ids: Optional[set[str]] = None,
     ):
         self.llm = llm
         self.registry = registry
         self.profile = profile
         self.reasoning = reasoning
 
-        # Snapshot the tool list available to this profile for this run
-        self._tools = registry.tools_for_profile(profile)
+        # Snapshot the tool list available to this profile for this run.
+        # When ``allowed_skill_ids`` is provided (automatic skill mode), skills
+        # outside that set are hidden from both the Tools block and the Action
+        # enum, so the LLM can only pick from the vector-retrieved top matches.
+        tools = registry.tools_for_profile(profile)
+        if allowed_skill_ids is not None:
+            tools = [
+                t for t in tools
+                if t.tool_type is not ToolType.SKILL or t.tool_id in allowed_skill_ids
+            ]
+        self._tools = tools
         self._tools_by_id = {t.tool_id: t for t in self._tools}
         self._action_names = list(self._tools_by_id.keys())
 
@@ -218,7 +224,8 @@ class ReasoningAgent:
         if not self._loaded_skill_sections:
             return ""
         parts = [
-            "\nYou should only follow the instructions provided in the content loaded below. "
+            "\n==========Start Skills Instructions==========\n"
+            "You should only follow the instructions provided in the content loaded below. "
             "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons."
             "Important: Your current working directory is the \"Current User Working Directory\", "
             "so to run any skill script in <skill_directory>/scripts, use the absolute path.\n"
@@ -248,6 +255,7 @@ class ReasoningAgent:
             tool = self._tools_by_id.get(tool_id)
             display_name = tool.name if tool else tool_id
             parts.append(f"\n----- Skill: {display_name} -----\n{content}\n-------------------------\n")
+        parts.append("==========End Skills Instructions==========\n")
         return "".join(parts)
 
     def _active_action_names(self) -> List[str]:
@@ -327,7 +335,7 @@ class ReasoningAgent:
         self.steps = []
         self.current_step_count = 0
         self.instruction = self._build_instruction()
-        logger.info(f"instruction: {self.instruction}")
+        # logger.info(f"instruction: {self.instruction}")
         self._append_input_step(input)
         async for item in self._loop(StepData(input=input)):
             yield item
@@ -582,7 +590,7 @@ class ReasoningAgent:
         error_event: Optional[ToolErrorEvent] = None
         try:
             if tool.tool_type is not ToolType.SKILL and tool.tool_type is not ToolType.INTRINSIC:
-                tool_action_input = f"{step.thought} ({step.action_input})"
+                tool_action_input = f"{step.action_input} (How would you think about this scenario in order to execute it: {step.thought})"
             else:
                 tool_action_input = action_input
             

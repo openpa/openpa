@@ -1,13 +1,16 @@
 """Profile management API."""
 
+import asyncio
 import json
 import re
 import urllib.parse
+from typing import Callable
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from app.skills import initialize_profile_skills, teardown_profile_skills
 from app.storage.conversation_storage import ConversationStorage
 from app.tools import ToolRegistry
 from app.utils import logger
@@ -18,6 +21,7 @@ def get_profile_routes(
     conversation_storage: ConversationStorage,
     *,
     registry: ToolRegistry | None = None,
+    drop_profile_embeddings: Callable[[str], None] | None = None,
 ) -> list[Route]:
 
     async def handle_list_profiles(request: Request) -> JSONResponse:
@@ -48,8 +52,20 @@ def get_profile_routes(
             profile = await conversation_storage.create_profile(name)
             ensure_persona_file(name)
 
-            # Backfill profile_tools rows for every existing a2a/mcp tool
+            # Seed the new profile's skills directory with builtins and start
+            # its watcher. This fires a registry change callback that builds
+            # the per-profile embedding table.
             if registry is not None:
+                try:
+                    await initialize_profile_skills(
+                        name, registry, loop=asyncio.get_running_loop(),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        f"Skill init failed for new profile '{name}'"
+                    )
+
+                # Backfill profile_tools rows for every existing a2a/mcp tool
                 inserted = registry.on_profile_created(name)
                 logger.info(
                     f"Backfilled {inserted} profile_tools row(s) for new profile '{name}'"
@@ -82,6 +98,21 @@ def get_profile_routes(
                 return JSONResponse(
                     {"error": f"Profile '{profile_name}' not found"}, status_code=404,
                 )
+
+            # Stop the watcher, drop the profile's skill rows, and remove the
+            # per-profile embedding collection. The on-disk skills directory is
+            # left intact so the profile's data can be recovered if desired.
+            if registry is not None:
+                try:
+                    await teardown_profile_skills(
+                        profile_name,
+                        registry,
+                        drop_embeddings=drop_profile_embeddings,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        f"Skill teardown failed for deleted profile '{profile_name}'"
+                    )
 
             return JSONResponse(
                 {
@@ -124,6 +155,41 @@ def get_profile_routes(
             logger.error(f"Error writing persona for '{profile_name}': {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    async def handle_get_skill_mode(request: Request) -> JSONResponse:
+        profile_name = urllib.parse.unquote(request.path_params.get("profile_name", ""))
+        if not profile_name:
+            return JSONResponse({"error": "Profile name is required"}, status_code=400)
+        try:
+            if not await conversation_storage.profile_exists(profile_name):
+                return JSONResponse({"error": f"Profile '{profile_name}' not found"}, status_code=404)
+            mode = await conversation_storage.get_skill_mode(profile_name)
+            return JSONResponse({"mode": mode})
+        except Exception as e:
+            logger.error(f"Error reading skill_mode for '{profile_name}': {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def handle_update_skill_mode(request: Request) -> JSONResponse:
+        profile_name = urllib.parse.unquote(request.path_params.get("profile_name", ""))
+        if not profile_name:
+            return JSONResponse({"error": "Profile name is required"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        mode = body.get("mode")
+        if mode not in ("manual", "automatic"):
+            return JSONResponse(
+                {"error": "'mode' must be 'manual' or 'automatic'"}, status_code=400,
+            )
+        try:
+            updated = await conversation_storage.set_skill_mode(profile_name, mode)
+            if not updated:
+                return JSONResponse({"error": f"Profile '{profile_name}' not found"}, status_code=404)
+            return JSONResponse({"success": True, "mode": mode})
+        except Exception as e:
+            logger.error(f"Error updating skill_mode for '{profile_name}': {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     return [
         Route(path="/api/profiles", methods=["GET"], endpoint=handle_list_profiles),
         Route(path="/api/profiles", methods=["POST"], endpoint=handle_add_profile),
@@ -134,6 +200,14 @@ def get_profile_routes(
         Route(
             path="/api/profiles/{profile_name}/persona",
             methods=["PUT"], endpoint=handle_update_persona,
+        ),
+        Route(
+            path="/api/profiles/{profile_name}/skill-mode",
+            methods=["GET"], endpoint=handle_get_skill_mode,
+        ),
+        Route(
+            path="/api/profiles/{profile_name}/skill-mode",
+            methods=["PUT"], endpoint=handle_update_skill_mode,
         ),
         Route(
             path="/api/profiles/{profile_name}",

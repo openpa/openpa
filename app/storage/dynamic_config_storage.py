@@ -104,6 +104,27 @@ class DynamicConfigStorage:
         finally:
             conn.close()
 
+    def delete_by_prefix(self, table: str, prefix: str, profile: str = "admin") -> int:
+        """Delete all keys matching a prefix. Returns the number of rows deleted."""
+        if table not in ("server_config", "llm_config"):
+            return 0
+        conn = self._get_conn()
+        try:
+            if table == "server_config":
+                result = conn.execute(
+                    "DELETE FROM server_config WHERE key LIKE ?",
+                    (prefix + "%",),
+                )
+            else:
+                result = conn.execute(
+                    "DELETE FROM llm_config WHERE profile = ? AND key LIKE ?",
+                    (profile, prefix + "%"),
+                )
+            conn.commit()
+            return result.rowcount
+        finally:
+            conn.close()
+
     def get_all(self, table: str, include_secrets: bool = False, profile: str = "admin") -> dict[str, str]:
         if table not in ("server_config", "llm_config"):
             return {}

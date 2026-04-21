@@ -6,10 +6,12 @@ from .__main__ import (
     FunctionCallingResponseType,
     VectorEmbeddingType,
     ReasoningStreamResponseType,
+    ToolEmbeddingRecord,
     ToolResultFile,
     ToolResultWithFiles,
     RequiredConfigField,
     OAuthConfig,
+    LLMParameters,
     ToolConfig,
 )
 __all__ = [
@@ -20,9 +22,11 @@ __all__ = [
     "FunctionCallingResponseType",
     "VectorEmbeddingType",
     "ReasoningStreamResponseType",
+    "ToolEmbeddingRecord",
     "ToolResultFile",
     "ToolResultWithFiles",
     "RequiredConfigField",
     "OAuthConfig",
+    "LLMParameters",
     "ToolConfig",
 ]

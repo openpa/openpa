@@ -7,3 +7,4 @@ class Status(Enum):
     UNKNOWN = 1000
 
     LLM_CHAT_COMPLETION_ERROR = 2001
+    VECTOR_STORE_ERROR = 3001

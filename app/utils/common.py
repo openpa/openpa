@@ -11,8 +11,11 @@ from a2a.types import (
 )
 
 from app.lib.embedding import GrpcEmbeddings
-from app.types import EmbeddingTable
+from app.types import EmbeddingTable, ToolEmbeddingRecord
 from app.utils import logger
+
+
+EMBEDDING_TABLE_COLUMNS = ['id', 'text', 'embeddings', 'tool_id', 'name', 'tool_type', 'enabled']
 
 
 def generate_embeddings(embedding_vendor: GrpcEmbeddings, text):
@@ -27,21 +30,37 @@ def generate_embeddings(embedding_vendor: GrpcEmbeddings, text):
     return embedding
 
 
-def build_table_embeddings(embedding_vendor: GrpcEmbeddings, data: dict[str, str]) -> EmbeddingTable:
-    """Generates embeddings for the given data dictionary and returns an EmbeddingTable.
+def build_table_embeddings(
+    embedding_vendor: GrpcEmbeddings,
+    data: dict[str, ToolEmbeddingRecord],
+) -> EmbeddingTable:
+    """Generates embeddings for the given record dictionary and returns an EmbeddingTable.
 
     Args:
-        data (dict): A dictionary where keys are identifiers and values are text data.
+        data: Dict keyed by ``tool_id``; each value is a ``ToolEmbeddingRecord``
+            carrying ``text`` plus filter metadata (``tool_type``, ``name``,
+            ``enabled``).  Callers that only have ``{id: text}`` should normalise
+            upstream (see ``app/vectorstores/cache.py``).
+
     Returns:
-        EmbeddingTable: A type-safe wrapper containing a DataFrame with 'id', 'text',
-        and 'embeddings' columns.
+        EmbeddingTable wrapping a DataFrame with columns
+        ``id, text, embeddings, tool_id, name, tool_type, enabled``.
     """
     logger.info('Generating Embeddings for provided data')
     try:
         if data:
-            df = pd.DataFrame(
-                {'id': list(data.keys()), 'text': list(data.values())}
-            )
+            rows = [
+                {
+                    'id': key,
+                    'text': rec['text'],
+                    'tool_id': rec['tool_id'],
+                    'name': rec['name'],
+                    'tool_type': rec['tool_type'],
+                    'enabled': bool(rec['enabled']),
+                }
+                for key, rec in data.items()
+            ]
+            df = pd.DataFrame(rows)
             df['embeddings'] = df.apply(
                 lambda row: generate_embeddings(embedding_vendor, row['text']),
                 axis=1,
@@ -50,13 +69,11 @@ def build_table_embeddings(embedding_vendor: GrpcEmbeddings, data: dict[str, str
             return EmbeddingTable(df)
         else:
             logger.info('No data provided, returning empty EmbeddingTable')
-            # Create empty DataFrame with required columns
-            empty_df = pd.DataFrame(columns=['id', 'text', 'embeddings'])
+            empty_df = pd.DataFrame(columns=EMBEDDING_TABLE_COLUMNS)
             return EmbeddingTable(empty_df)
     except Exception as e:
         logger.error(f'An unexpected error occurred : {e}.', exc_info=True)
-        # Create empty DataFrame with required columns
-        empty_df = pd.DataFrame(columns=['id', 'text', 'embeddings'])
+        empty_df = pd.DataFrame(columns=EMBEDDING_TABLE_COLUMNS)
         return EmbeddingTable(empty_df)
 
 

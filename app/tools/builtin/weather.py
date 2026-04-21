@@ -18,7 +18,6 @@ from app.utils.logger import logger
 ACCUWEATHER_BASE_URL = "http://dataservice.accuweather.com"
 
 SERVER_NAME = "Weather Agent"
-SERVER_INSTRUCTIONS = "A weather assistant that retrieves weather forecasts and current conditions."
 
 class Var:
     """Variable keys for the Weather tool."""
@@ -29,7 +28,10 @@ TOOL_CONFIG: ToolConfig = {
     "name": "weather",
     "display_name": "Weather",
     "default_model_group": "low",
-    "visible": False,
+    "visible": True,
+    "llm_parameters": {
+        "tool_instructions": "A weather assistant that retrieves weather forecasts and current conditions.",
+    },
     "required_config": {
         Var.API_KEY: {
             "description": "AccuWeather API Key",

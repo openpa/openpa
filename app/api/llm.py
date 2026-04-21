@@ -2,14 +2,21 @@
 
 import json
 
+import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from app.config import load_all_provider_catalogs, load_provider_catalog
+from app.config.provider_auth import normalize_provider_auth_methods
 from app.storage.dynamic_config_storage import DynamicConfigStorage
 from app.lib.llm.factory import SUPPORTED_LLM_PROVIDERS
 from app.utils.logger import logger
+
+# GitHub Copilot device code flow constants (from OpenClaw)
+_GH_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+_GH_DEVICE_CODE_URL = "https://github.com/login/device/code"
+_GH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 
 
 def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
@@ -26,12 +33,69 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
             requires_key = provider_info.get("requires_api_key", False)
             requires_sa = provider_info.get("requires_service_account", False)
-            config_fields = provider_info.get("config_fields", {})
+            legacy_config_fields = provider_info.get("config_fields", {})
 
-            # Build config_fields status and current_values
+            # Normalize auth methods (handles both new and legacy formats)
+            auth_methods = normalize_provider_auth_methods(provider_info)
+
+            # Read which auth method is active
+            active_auth_method = config_storage.get(
+                "llm_config", f"{name}.auth_method", profile=profile,
+            )
+            # Default to the first method marked is_default, or the first entry
+            if not active_auth_method:
+                for am in auth_methods:
+                    if am.get("is_default"):
+                        active_auth_method = am["id"]
+                        break
+                if not active_auth_method and auth_methods:
+                    active_auth_method = auth_methods[0]["id"]
+
+            # Annotate each auth method's fields with configured status
+            auth_methods_response = []
+            for am in auth_methods:
+                fields_response = {}
+                for field_key, field_spec in am.get("fields", {}).items():
+                    full_key = f"{name}.{field_key}"
+                    val = config_storage.get("llm_config", full_key, profile=profile)
+                    fields_response[field_key] = {
+                        "description": field_spec.get("description", ""),
+                        "type": field_spec.get("type", "string"),
+                        "secret": field_spec.get("secret", False),
+                        "required": field_spec.get("required", True),
+                        "default": field_spec.get("default"),
+                        "configured": bool(val),
+                    }
+                am_entry = {
+                    "id": am["id"],
+                    "label": am.get("label", am["id"]),
+                    "hint": am.get("hint", ""),
+                    "kind": am.get("kind", "api_key"),
+                    "is_default": am.get("is_default", False),
+                    "fields": fields_response,
+                }
+                if am.get("instructions"):
+                    am_entry["instructions"] = am["instructions"]
+                auth_methods_response.append(am_entry)
+
+            # Determine overall configured status based on active auth method
+            configured = False
+            for am in auth_methods_response:
+                if am["id"] == active_auth_method:
+                    if am["kind"] == "none":
+                        configured = True
+                    else:
+                        configured = all(
+                            f_spec["configured"]
+                            for f_spec in am["fields"].values()
+                            if f_spec["required"]
+                        )
+                    break
+
+            # Build legacy config_fields and current_values for backward compat
             config_fields_status = {}
             current_values = {}
-            for field_key, field_spec in config_fields.items():
+            for field_key, field_spec in legacy_config_fields.items():
                 full_key = f"{name}.{field_key}"
                 val = config_storage.get("llm_config", full_key, profile=profile)
                 config_fields_status[field_key] = {
@@ -45,24 +109,6 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
                 if val and not field_spec.get("secret", False):
                     current_values[field_key] = val
 
-            # Determine configured status
-            configured = True
-            if config_fields:
-                configured = all(
-                    bool(config_storage.get("llm_config", f"{name}.{fk}", profile=profile))
-                    for fk, fs in config_fields.items()
-                    if fs.get("required", True)
-                )
-            elif requires_key:
-                api_key = config_storage.get("llm_config", f"{name}.api_key", profile=profile)
-                if not api_key:
-                    from app.config.settings import BaseConfig
-                    api_key = BaseConfig.get_provider_api_key(name, profile=profile)
-                configured = bool(api_key)
-            elif requires_sa:
-                sa = config_storage.get("llm_config", f"{name}.service_account", profile=profile)
-                configured = bool(sa)
-
             provider_entry = {
                 "name": name,
                 "display_name": provider_info.get("display_name", name),
@@ -70,6 +116,8 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
                 "requires_service_account": requires_sa,
                 "configured": configured,
                 "model_count": len(catalog.get("models", [])),
+                "auth_methods": auth_methods_response,
+                "active_auth_method": active_auth_method,
             }
             if config_fields_status:
                 provider_entry["config_fields"] = config_fields_status
@@ -96,7 +144,7 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         })
 
     async def handle_update_provider(request: Request) -> JSONResponse:
-        """Update provider configuration (API key, etc.)."""
+        """Update provider configuration (API key, auth method, etc.)."""
         profile = getattr(request.user, "username", "admin")
         provider_name = request.path_params["name"]
 
@@ -111,19 +159,50 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-        # Resolve secret flags from config_fields metadata
+        # Build a combined secret-field lookup from auth_methods and legacy config_fields
         catalog = load_provider_catalog(provider_name)
-        config_fields = catalog.get("provider", {}).get("config_fields", {}) if catalog else {}
+        provider_info = catalog.get("provider", {}) if catalog else {}
+        secret_fields: set[str] = set()
+        for am in normalize_provider_auth_methods(provider_info):
+            for fk, fs in am.get("fields", {}).items():
+                if fs.get("secret", False):
+                    secret_fields.add(fk)
+        # Legacy config_fields
+        for fk, fs in provider_info.get("config_fields", {}).items():
+            if fs.get("secret", False):
+                secret_fields.add(fk)
 
         # Save each config key
         for key, value in body.items():
             full_key = f"{provider_name}.{key}"
-            field_spec = config_fields.get(key, {})
-            is_secret = field_spec.get("secret", False) or "api_key" in key or "service_account" in key
+            is_secret = (
+                key in secret_fields
+                or "api_key" in key
+                or "service_account" in key
+                or "token" in key
+            )
+            # auth_method itself is not secret
+            if key == "auth_method":
+                is_secret = False
             str_value = value if isinstance(value, str) else json.dumps(value)
             config_storage.set("llm_config", full_key, str_value, is_secret=is_secret, profile=profile)
 
         return JSONResponse({"success": True})
+
+    async def handle_delete_provider(request: Request) -> JSONResponse:
+        """Remove all stored configuration for a provider."""
+        profile = getattr(request.user, "username", "admin")
+        provider_name = request.path_params["name"]
+
+        if provider_name not in SUPPORTED_LLM_PROVIDERS:
+            return JSONResponse(
+                {"error": f"Unknown provider: {provider_name}"},
+                status_code=404,
+            )
+
+        deleted = config_storage.delete_by_prefix("llm_config", f"{provider_name}.", profile=profile)
+        logger.info(f"Deleted {deleted} config key(s) for provider '{provider_name}' (profile={profile})")
+        return JSONResponse({"success": True, "deleted_keys": deleted})
 
     async def handle_get_model_groups(request: Request) -> JSONResponse:
         """Get current model group assignments (high/low) and their reasoning_effort."""
@@ -188,10 +267,92 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
         return JSONResponse({"success": True})
 
+    async def handle_device_code_start(request: Request) -> JSONResponse:
+        """Start a GitHub device code flow for Copilot auth."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    _GH_DEVICE_CODE_URL,
+                    data={"client_id": _GH_CLIENT_ID, "scope": "read:user"},
+                    headers={"Accept": "application/json"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return JSONResponse({
+                "verification_uri": data.get("verification_uri", "https://github.com/login/device"),
+                "user_code": data.get("user_code", ""),
+                "device_code": data.get("device_code", ""),
+                "expires_in": data.get("expires_in", 900),
+                "interval": data.get("interval", 5),
+            })
+        except Exception as e:
+            logger.error(f"Device code start failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=502)
+
+    async def handle_device_code_poll(request: Request) -> JSONResponse:
+        """Poll GitHub for a device code access token, then store it.
+
+        When the request is unauthenticated (setup wizard, before any profile
+        exists), the token is returned to the caller instead of being persisted:
+        the ``llm_config`` table has a FK on ``profiles.name``, so a direct
+        write would fail until the wizard's ``completeSetup`` call creates the
+        profile. The wizard bundles the returned token into that same call.
+        """
+        is_authenticated = bool(getattr(request.user, "is_authenticated", False))
+        profile = getattr(request.user, "username", "admin")
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        device_code = body.get("device_code", "")
+        if not device_code:
+            return JSONResponse({"error": "device_code is required"}, status_code=400)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    _GH_ACCESS_TOKEN_URL,
+                    data={
+                        "client_id": _GH_CLIENT_ID,
+                        "device_code": device_code,
+                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    },
+                    headers={"Accept": "application/json"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            error = data.get("error")
+            if error == "authorization_pending":
+                return JSONResponse({"status": "pending"})
+            if error == "slow_down":
+                return JSONResponse({"status": "pending", "slow_down": True})
+            if error == "expired_token":
+                return JSONResponse({"status": "expired"})
+            if error:
+                return JSONResponse({"status": "error", "error": error})
+
+            access_token = data.get("access_token", "")
+            if access_token:
+                if is_authenticated:
+                    config_storage.set("llm_config", "github-copilot.api_key", access_token, is_secret=True, profile=profile)
+                    config_storage.set("llm_config", "github-copilot.auth_method", "device_code", profile=profile)
+                    return JSONResponse({"status": "complete"})
+                return JSONResponse({"status": "complete", "access_token": access_token})
+
+            return JSONResponse({"status": "error", "error": "No access token in response"})
+        except Exception as e:
+            logger.error(f"Device code poll failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=502)
+
     return [
         Route("/api/llm/providers", handle_list_providers, methods=["GET"]),
         Route("/api/llm/providers/{name}/models", handle_get_provider_models, methods=["GET"]),
         Route("/api/llm/providers/{name}", handle_update_provider, methods=["PUT"]),
+        Route("/api/llm/providers/{name}/config", handle_delete_provider, methods=["DELETE"]),
         Route("/api/llm/model-groups", handle_get_model_groups, methods=["GET"]),
         Route("/api/llm/model-groups", handle_update_model_groups, methods=["PUT"]),
+        Route("/api/llm/auth/device-code/start", handle_device_code_start, methods=["POST"]),
+        Route("/api/llm/auth/device-code/poll", handle_device_code_poll, methods=["POST"]),
     ]

@@ -53,6 +53,20 @@ class EmbeddingTable:
         return self._df.empty
 
 
+class ToolEmbeddingRecord(TypedDict):
+    """Metadata-bearing input row for tool-card embeddings.
+
+    Flows from ``_collect_tool_data`` through ``build_table_embeddings`` into
+    the Qdrant payload so retrieval can filter by ``tool_type`` / ``tool_id`` /
+    ``enabled`` without joining back to the registry.
+    """
+    text: str
+    tool_id: str
+    name: str
+    tool_type: str
+    enabled: bool
+
+
 class MCPServerConfig(TypedDict):
     """Configuration for an MCP server, persisted in storage."""
     url: str
@@ -148,6 +162,22 @@ class OAuthConfig(TypedDict, total=False):
     extra_authorize_params: dict[str, str]
 
 
+class LLMParameters(TypedDict, total=False):
+    """Default LLM-related parameters a built-in tool ships with.
+
+    User-level overrides are persisted per-profile in the ``llm`` and ``meta``
+    scopes of ``tool_configs``; values here are code defaults surfaced to the
+    UI as placeholders and used as fallbacks at tool registration / execution.
+    """
+    tool_instructions: str
+    description: str
+    system_prompt: str
+    llm_provider: str
+    llm_model: str
+    reasoning_effort: str
+    full_reasoning: bool
+
+
 class ToolConfig(TypedDict, total=False):
     """Static configuration exported as ``TOOL_CONFIG`` by each built-in tool module."""
     name: Required[str]
@@ -157,6 +187,7 @@ class ToolConfig(TypedDict, total=False):
     required_config: dict[str, RequiredConfigField]
     oauth: OAuthConfig
     arguments: dict[str, Any]
+    llm_parameters: LLMParameters
 
 
 class ChatCompletionStreamResponseType(TypedDict):

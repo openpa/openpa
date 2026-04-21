@@ -45,6 +45,7 @@ from app.utils.logger import logger
 BUILTIN_AGENT_SYSTEM_PROMPT = (
     "You are an AI Agent returning results from tool calls. "
     "Use the available tools to answer the user's query. "
+    "Don't answer any questions or provide explanations. "
     "Always call the appropriate tool(s) to get the data needed to answer."
 )
 
@@ -65,7 +66,7 @@ class BuiltInToolAdapter:
         description: Optional[str] = None,
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        server_instructions: Optional[str] = None,
+        tool_instructions: Optional[str] = None,
         prepare_tools: Optional[Callable[[str, List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
         full_reasoning: bool = False,
     ):
@@ -77,7 +78,7 @@ class BuiltInToolAdapter:
         self._name = name or ""
         self._context_storage: Dict[str, str] = {}
         self._system_prompt = system_prompt
-        self._server_instructions = server_instructions or ""
+        self._server_instructions = tool_instructions or ""
         self._prepare_tools = prepare_tools
         self._full_reasoning = full_reasoning
 

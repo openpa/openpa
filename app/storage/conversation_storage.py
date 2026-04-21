@@ -64,6 +64,17 @@ class ConversationStorage:
                         tables_to_create.append(table)
             await conn.run_sync(Base.metadata.create_all, tables=tables_to_create)
 
+            # Additive migrations for columns added after the initial schema.
+            # SQLite doesn't support IF NOT EXISTS on ADD COLUMN, so we catch
+            # the duplicate-column error from repeated boots.
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE profiles ADD COLUMN skill_mode VARCHAR(16) "
+                    "NOT NULL DEFAULT 'manual'"
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+
         self._initialized = True
         logger.info(f"ConversationStorage initialized with database: {self.db_path}")
 
@@ -120,6 +131,27 @@ class ConversationStorage:
                 select(func.count()).select_from(ProfileModel).where(ProfileModel.name == name)
             )
             return result.scalar() > 0
+
+    async def get_skill_mode(self, name: str) -> str:
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(ProfileModel.skill_mode).where(ProfileModel.name == name)
+            )
+            mode = result.scalar_one_or_none()
+            return mode or "manual"
+
+    async def set_skill_mode(self, name: str, mode: str) -> bool:
+        if mode not in ("manual", "automatic"):
+            raise ValueError(f"Invalid skill_mode: {mode!r}")
+        await self._ensure_initialized()
+        async with self.async_session_maker.begin() as session:
+            result = await session.execute(
+                update(ProfileModel)
+                .where(ProfileModel.name == name)
+                .values(skill_mode=mode, updated_at=time.time() * 1000)
+            )
+            return result.rowcount > 0
 
     # ── Conversation CRUD ──
 
@@ -313,6 +345,7 @@ class ConversationStorage:
             "name": profile.name,
             "created_at": profile.created_at,
             "updated_at": profile.updated_at,
+            "skill_mode": getattr(profile, "skill_mode", "manual") or "manual",
         }
 
     @staticmethod

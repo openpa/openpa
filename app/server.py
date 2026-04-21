@@ -13,7 +13,6 @@ Startup sequence:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import jwt
 import uvicorn
@@ -74,9 +73,11 @@ from app.tools.mcp import (
     build_mcp_stub,
     build_stdio_mcp_tool,
 )
-from app.tools.skills import scan_skills
-from app.tools.skills.tool import SkillTool
-from app.tools.skills.watcher import SkillsWatcher
+from app.skills import (
+    initialize_profile_skills,
+    profile_skills_dir,
+    stop_all_watchers,
+)
 from app.utils.logger import logger
 
 DEFAULT_HOST = BaseConfig.HOST
@@ -358,6 +359,19 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # 3. Intrinsic tools
     register_intrinsic_tools(registry)
 
+    # 3b. Vector store (optional — graceful fallback if Qdrant unavailable).
+    #     Created early so built-in tools (e.g. gg_places) can reuse cached
+    #     embeddings on restart instead of regenerating via gRPC.
+    vector_store = None
+    try:
+        from app.vectorstores import VectorStore
+        from app.vectorstores.qdrant import QdrantClient as QdrantVectorClient
+        qdrant_vc = QdrantVectorClient(size=0)
+        vector_store = VectorStore(client=qdrant_vc)
+        logger.info("Qdrant vector store connected")
+    except Exception as e:
+        logger.warning(f"Qdrant unavailable, embeddings will not be persisted: {e}")
+
     # 4. Model groups + built-in tools
     model_group_mgr = ModelGroupManager(config_storage)
 
@@ -388,6 +402,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             llm_factory=_builtin_llm_factory,
             setup_profile="admin",
             config_storage=config_storage,
+            vector_store=vector_store,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Built-in tool registration failed: {e}")
@@ -409,16 +424,34 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # 5. Hydrate persisted A2A / MCP tools
     await _hydrate_persisted_tools(registry=registry, model_group_mgr=model_group_mgr)
 
-    # 6. Skills
-    skills_dir = Path(BaseConfig.OPENPA_WORKING_DIR) / "skills"
-    skills_watcher = None
-    if skills_dir.is_dir():
-        skills = scan_skills(skills_dir)
-        if skills:
-            await registry.sync_skills(skills, skill_factory=lambda info: SkillTool(info))
-            logger.info(f"Synced {len(skills)} skill(s) from disk")
-    else:
-        logger.info(f"Skills directory not found: {skills_dir}")
+    # 6. Skills -- per-profile sync
+    #    Each profile owns its own skills directory at
+    #    ``<OPENPA_WORKING_DIR>/<profile>/skills``. Built-ins from
+    #    ``app/skills/builtin/`` are re-copied on every boot so accidental
+    #    deletions are repaired. A SkillsWatcher is started per profile.
+    known_profiles = [
+        row["name"] for row in await conversation_storage.list_profiles()
+        if not row["name"].startswith("__")
+    ]
+    # Drop any legacy skill rows whose source is not under any profile's
+    # skills dir (pre-redesign installs had a single global ``skills/``).
+    try:
+        removed = registry.purge_legacy_skill_rows(
+            str(profile_skills_dir(p)) for p in known_profiles
+        )
+        if removed:
+            logger.info(f"Purged {removed} legacy skill row(s)")
+    except Exception:  # noqa: BLE001
+        logger.exception("Legacy skill-row purge failed")
+
+    loop = asyncio.get_running_loop()
+    for profile_name in known_profiles:
+        try:
+            await initialize_profile_skills(profile_name, registry, loop=loop)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                f"Skill init failed for profile '{profile_name}'"
+            )
 
     # 7. High-group LLM (admin) + OpenPAAgent
     runner = None
@@ -434,25 +467,21 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         runner=runner,
         model_group_mgr=model_group_mgr,
         config_storage=config_storage,
+        vector_store=vector_store,
+        conversation_storage=conversation_storage,
     )
 
-    if skills_dir.is_dir():
-        loop = asyncio.get_event_loop()
-
-        def _on_skills_change(new_skills):
-            future = asyncio.run_coroutine_threadsafe(
-                registry.sync_skills(
-                    new_skills, skill_factory=lambda info: SkillTool(info),
-                ),
-                loop,
+    # 7b. Eager embedding sync: step 6's skill init fired _fire_change with
+    #     a None callback (OpenPAAgent didn't exist yet), and an externally
+    #     deleted Qdrant collection would otherwise stay empty until the
+    #     first request. Build each profile's table now.
+    for profile_name in known_profiles:
+        try:
+            openpa_agent.update_embeddings(profile_name)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                f"Eager embedding sync failed for profile '{profile_name}'"
             )
-            try:
-                future.result(timeout=30)
-            except Exception:  # noqa: BLE001
-                logger.exception("Skills sync failed")
-
-        skills_watcher = SkillsWatcher(skills_dir, on_change=_on_skills_change)
-        skills_watcher.start()
 
     # 8. Agent card
     skill = AgentSkill(
@@ -529,12 +558,14 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                 logger.exception(
                     f"OAuth refresh failed for built-in tool '{tool.name}'"
                 )
-        if skills_dir.is_dir():
-            skills = scan_skills(skills_dir)
-            if skills:
-                await registry.sync_skills(
-                    skills, skill_factory=lambda info: SkillTool(info),
-                )
+        try:
+            await initialize_profile_skills(
+                profile, registry, loop=asyncio.get_running_loop(),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                f"Post-setup skill init failed for profile '{profile}'"
+            )
         openpa_agent.update_embeddings()
         logger.info("Post-setup: built-in tools rebound and skills synced")
 
@@ -570,6 +601,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         config_storage=config_storage,
         on_first_setup=on_first_setup,
         connect_persisted_tool=_connect_persisted_tool,
+        drop_profile_embeddings=openpa_agent.drop_profile_embeddings,
     ))
 
     middleware_stack = [
@@ -588,7 +620,17 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     from app.middleware import A2AAuthGuard
     middleware_stack.append(Middleware(A2AAuthGuard))
 
-    app = Starlette(routes=routes, middleware=middleware_stack)
+    async def _on_shutdown() -> None:
+        try:
+            stop_all_watchers()
+        except Exception:  # noqa: BLE001
+            logger.exception("Error stopping skill watchers during shutdown")
+
+    app = Starlette(
+        routes=routes,
+        middleware=middleware_stack,
+        on_shutdown=[_on_shutdown],
+    )
     config = uvicorn.Config(app, host=host, port=port)
     server = uvicorn.Server(config)
     await server.serve()
