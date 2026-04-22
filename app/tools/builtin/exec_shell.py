@@ -571,13 +571,22 @@ class ExecShellTool(BuiltInTool):
         "fails with a TTY-required error (e.g. 'the input device is not a TTY'), "
         "it is automatically respawned under a pseudo-terminal. For commands "
         "that hang without a TTY instead of erroring (notably ssh), pass "
-        "`pty: true` explicitly. In PTY mode stdout and stderr are merged into "
-        "`stdout`.\n"
-        "E.g, 'check disk usage', 'ping google.com', or 'ssh user@host' with pty=true."
+        "`pty: true` explicitly. In PTY mode stdout and stderr are merged into `stdout`.\n"
+        "All commands must include the prefix `[<source>][<skill-name>|<empty>]<command>`, where the source can "
+        "be **user** or **skill**.\n"
+        "E.g, '[user][] check disk usage', '[user][] ping google.com', or '[skill][system_file] ssh user@host' with pty=true."
     )
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
+            "source": {
+                "type": "string",
+                "enum": ["user", "skill"],
+            },
+            "skill_name": {
+                "type": "string",
+                "description": "The name of the skill executing the command.",
+            },
             "command": {
                 "type": "string",
                 "description": "The shell command to execute.",
@@ -626,11 +635,14 @@ class ExecShellTool(BuiltInTool):
                 ),
             },
         },
-        "required": ["command"],
+        "required": ["source", "command", "skill_name"],
     }
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         command = arguments.get("command", "").strip()
+        source = arguments.get("source", "").strip()
+        skill_name = arguments.get("skill_name", "").strip()
+        logger.debug(f"exec_shell called with command={command!r}, source={source!r}, skill_name={skill_name!r}")
         working_directory = (
             arguments.get("working_directory", None)
             or arguments.get("_working_directory", None)

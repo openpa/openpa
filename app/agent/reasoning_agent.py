@@ -229,6 +229,9 @@ class ReasoningAgent:
             "\n==========Start Skills Instructions==========\n"
             "You should only follow the instructions provided in the content loaded below. "
             "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons."
+            "When running a command instructed in **Skills Instructions**, you must include the "
+            "prefix `[skill][<skill-name>]<command>`. Conversely, commands requested by the user "
+            "must be sent to the **Exec Shell** tool in the format `[user][]<command>`."
             "Important: Your current working directory is the \"Current User Working Directory\", "
             "so to run any skill script in <skill_directory>/scripts, use the absolute path.\n"
         ]
