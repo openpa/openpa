@@ -16,9 +16,11 @@ from app.tools.builtin.exec_shell import (
 class _FakeStdin:
     def __init__(self):
         self.buffer = bytearray()
+        self.writes: list[bytes] = []
 
     def write(self, data: bytes) -> None:
         self.buffer.extend(data)
+        self.writes.append(bytes(data))
 
     async def drain(self) -> None:
         return None
@@ -131,6 +133,34 @@ def test_neither_input_text_nor_keys_is_validation_error(registered_process):
     result = _run(tool.run({"process_id": process_id}))
 
     assert result.structured_content.get("error") == "Invalid parameters"
+
+
+def test_keys_are_written_one_at_a_time(registered_process):
+    process_id, proc = registered_process
+    tool = ExecShellInputTool()
+
+    _run(tool.run({
+        "process_id": process_id,
+        "keys": ["down", "down", "enter"],
+    }))
+
+    assert proc.stdin.writes == [
+        _KEY_NAME_TO_BYTES["down"].encode("utf-8"),
+        _KEY_NAME_TO_BYTES["down"].encode("utf-8"),
+        _KEY_NAME_TO_BYTES["enter"].encode("utf-8"),
+    ]
+
+
+def test_input_text_is_written_as_single_call(registered_process):
+    process_id, proc = registered_process
+    tool = ExecShellInputTool()
+
+    _run(tool.run({
+        "process_id": process_id,
+        "input_text": "hello",
+    }))
+
+    assert proc.stdin.writes == [b"hello\n"]
 
 
 def test_empty_keys_array_is_validation_error(registered_process):

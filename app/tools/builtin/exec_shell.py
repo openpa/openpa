@@ -961,6 +961,11 @@ _KEY_NAME_TO_BYTES: Dict[str, str] = {
     "ctrl+c": "\x03",
 }
 
+# Inter-keystroke delay for `keys` mode. Some TUIs (menu selectors, npm init,
+# ConPTY apps) drop keys when they arrive back-to-back; a short human-scale
+# pause lets each one be processed before the next arrives.
+_KEYSTROKE_DELAY_SEC = 0.03
+
 
 class ExecShellInputTool(BuiltInTool):
     name: str = "exec_shell_input"
@@ -969,9 +974,7 @@ class ExecShellInputTool(BuiltInTool):
         "process_id. Writes to the process's stdin; use exec shell output to "
         "read the response.\n"
         "Two input modes — supply exactly one:\n"
-        "  1) input_text — plain text or raw bytes. line_ending ('\\n' default, "
-        "or '\\r', '\\r\\n', 'none') is appended. Use line_ending='none' to send "
-        "raw control sequences (e.g. '\\x1b[B\\x1b[B\\r' for down-down-enter).\n"
+        "  1) input_text — plain text or raw bytes"
         "  2) keys — array of symbolic key names, batched in one call. "
         "Valid names: up, down, left, right, enter, tab, space, escape, "
         "backspace, ctrl+c. Implies line_ending='none'.\n"
@@ -979,7 +982,7 @@ class ExecShellInputTool(BuiltInTool):
         '{"process_id":"708e9873","keys":["down","down","down","enter"]} — to '
         "cut reasoning steps. Re-read output between bursts to confirm cursor "
         "position on long menus.\n"
-        'Text example: {"process_id":"708e9873","input_text":"my input","line_ending":"\\r\\n"}\n'
+        'Text example: {"process_id":"708e9873","input_text":"my input"}\n'
         "Required: process_id, and one of (input_text, keys)"
     )
     parameters: Dict[str, Any] = {
@@ -1065,7 +1068,7 @@ class ExecShellInputTool(BuiltInTool):
                         ),
                     }
                 )
-            payload = "".join(_KEY_NAME_TO_BYTES[k] for k in keys)
+            payload = None
         else:
             if line_ending == "none":
                 payload = input_text
@@ -1101,8 +1104,16 @@ class ExecShellInputTool(BuiltInTool):
             )
 
         try:
-            process.stdin.write(payload.encode("utf-8"))
-            await process.stdin.drain()
+            if keys is not None:
+                key_bytes = [_KEY_NAME_TO_BYTES[k].encode("utf-8") for k in keys]
+                for i, chunk in enumerate(key_bytes):
+                    process.stdin.write(chunk)
+                    await process.stdin.drain()
+                    if i < len(key_bytes) - 1:
+                        await asyncio.sleep(_KEYSTROKE_DELAY_SEC)
+            else:
+                process.stdin.write(payload.encode("utf-8"))
+                await process.stdin.drain()
         except Exception as e:
             return BuiltInToolResult(
                 structured_content={
