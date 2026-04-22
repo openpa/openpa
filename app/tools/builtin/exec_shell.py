@@ -10,7 +10,7 @@ observing its runtime behaviour:
 
 Long-running processes are tracked in ``_process_registry``; their post-
 classification stdout/stderr is streamed to incrementally numbered ``.log``
-files under ``<working_dir>/tools/builtin/exec_shell/stdout/<process_id>/``.
+files under ``<user_working_dir>/tools/builtin/exec_shell/stdout/<process_id>/``.
 """
 
 import asyncio
@@ -46,6 +46,30 @@ def _resolve_os(selected: Optional[str]) -> str:
     if not selected or selected == "Auto-Detect":
         return platform.system()
     return selected
+
+
+def _lookup_skill_source(skill_id: str, profile: Optional[str]) -> Optional[str]:
+    """Return the ``source`` directory of a skill row, or None on any miss.
+
+    DB errors are logged and swallowed so shell execution never breaks on a
+    DB issue — the caller falls back to the existing directory chain.
+    """
+    if not skill_id or not profile:
+        return None
+    try:
+        from app.storage.tool_storage import get_tool_storage
+        row = get_tool_storage().get_tool(skill_id)
+    except Exception as exc:
+        logger.error(f"_lookup_skill_source({skill_id!r}, {profile!r}): {exc}")
+        return None
+    if not row:
+        return None
+    if row.get("tool_type") != "skill":
+        return None
+    if row.get("owner_profile") != profile:
+        return None
+    source = row.get("source")
+    return source if source else None
 
 
 def _shell_for(system: str) -> tuple[str, str]:
@@ -591,9 +615,9 @@ class ExecShellTool(BuiltInTool):
                 "type": "string",
                 "description": "The shell command to execute.",
             },
-            "working_directory": {
+            "current_shell_directory": {
                 "type": "string",
-                "description": "The working directory to run the command in. Defaults to OPENPA_WORKING_DIR.",
+                "description": "The current working directory for the shell command",
             },
             "timeout": {
                 "type": "integer",
@@ -641,18 +665,25 @@ class ExecShellTool(BuiltInTool):
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         command = arguments.get("command", "").strip()
         source = arguments.get("source", "").strip()
-        skill_name = arguments.get("skill_name", "").strip()
-        logger.debug(f"exec_shell called with command={command!r}, source={source!r}, skill_name={skill_name!r}")
-        working_directory = (
-            arguments.get("working_directory", None)
-            or arguments.get("_working_directory", None)
+        skill_id = arguments.get("skill_name", "").strip()
+        logger.debug(f"exec_shell called with command={command!r}, source={source!r}, skill_name={skill_id!r}")
+        user_working_directory = (
+            arguments.get("_working_directory", None)
             or BaseConfig.OPENPA_WORKING_DIR
         )
+        shell_working_directory = arguments.get("current_shell_directory", None)
+        if not shell_working_directory and source == "skill" and skill_id:
+            shell_working_directory = _lookup_skill_source(
+                skill_id, arguments.get("_profile"),
+            )
+        shell_working_directory = shell_working_directory or user_working_directory
+        logger.debug(f"Determined shell working directory: {shell_working_directory!r}")
+        logger.debug(f"User working directory: {user_working_directory!r}")
         timeout = arguments.get("timeout", 120)
         silence_timeout = arguments.get("silence_timeout", _DEFAULT_SILENCE_TIMEOUT)
         pty_arg = arguments.get("pty")
-        cols = int(arguments.get("cols") or 80)
-        rows = int(arguments.get("rows") or 24)
+        cols = int(arguments.get("cols") or 100)
+        rows = int(arguments.get("rows") or 50)
         system = _resolve_os(arguments.get("os"))
         shell, shell_flag = _shell_for(system)
         variables = arguments.get("_variables") or {}
@@ -667,13 +698,13 @@ class ExecShellTool(BuiltInTool):
                 }
             )
 
-        if working_directory:
-            os.makedirs(working_directory, exist_ok=True)
-            if not os.path.isdir(working_directory):
+        if shell_working_directory:
+            os.makedirs(shell_working_directory, exist_ok=True)
+            if not os.path.isdir(shell_working_directory):
                 return BuiltInToolResult(
                     structured_content={
                         "error": "Invalid working directory",
-                        "message": f"Directory does not exist: {working_directory}",
+                        "message": f"Directory does not exist: {shell_working_directory}",
                     }
                 )
 
@@ -684,8 +715,8 @@ class ExecShellTool(BuiltInTool):
 
         async def _spawn(pty_mode: bool):
             if pty_mode:
-                return await _spawn_command_pty(command, working_directory, cols, rows, system)
-            return await _spawn_command(command, working_directory, system, shell, shell_flag)
+                return await _spawn_command_pty(command, shell_working_directory, cols, rows, system)
+            return await _spawn_command(command, shell_working_directory, system, shell, shell_flag)
 
         logger.debug(
             f"exec_shell: running '{command}' on {system} with shell {shell} "
@@ -828,9 +859,10 @@ class ExecShellTool(BuiltInTool):
             # --- LONG_RUNNING: keep subprocess alive, start log writer ---
             process_id = _uuid.uuid4().hex[:8]
             log_dir = os.path.join(
-                working_directory, "tools", "builtin", "exec_shell",
+                user_working_directory, "tools", "builtin", "exec_shell",
                 "stdout", process_id,
             )
+            logger.debug(f"exec_shell: creating log directory {log_dir!r} for process {process_id}")
             os.makedirs(log_dir, exist_ok=True)
 
             _write_state(log_dir, {
@@ -857,7 +889,7 @@ class ExecShellTool(BuiltInTool):
             _process_registry[process_id] = ProcessInfo(
                 process=proc,
                 created_at=time.monotonic(),
-                working_dir=working_directory,
+                working_dir=shell_working_directory,
                 command=command,
                 log_dir=log_dir,
                 log_writer_state=writer_state,
@@ -874,20 +906,21 @@ class ExecShellTool(BuiltInTool):
             return BuiltInToolResult(
                 structured_content={
                     "process_id": process_id,
+                    "skill_id": skill_id if source == "skill" else None,
                     "stdout": result.get("stdout", ""),
                     "stderr": result.get("stderr", ""),
                     "status": "running",
                     "category": "long_running",
                     "waiting_for_input": result.get("waiting_for_input", False),
                     "command": command,
-                    "working_directory": working_directory,
+                    "working_directory": shell_working_directory,
                     "os": system,
                     "shell": shell,
                     **({"pty": True, "stderr_merged_into_stdout": True} if use_pty else {}),
                     "message": (
                         f"Long-running process started with id '{process_id}'. "
                         "Use exec shell stdout to read output, exec shell input "
-                        "to send input, or exec_shell_stop to terminate."
+                        "to send input, or exec shell stop to terminate."
                     ),
                 }
             )
@@ -915,27 +948,39 @@ class ExecShellTool(BuiltInTool):
             )
 
 
+_KEY_NAME_TO_BYTES: Dict[str, str] = {
+    "up": "\x1b[A",
+    "down": "\x1b[B",
+    "right": "\x1b[C",
+    "left": "\x1b[D",
+    "enter": "\r",
+    "tab": "\t",
+    "space": " ",
+    "escape": "\x1b",
+    "backspace": "\x7f",
+    "ctrl+c": "\x03",
+}
+
+
 class ExecShellInputTool(BuiltInTool):
     name: str = "exec_shell_input"
     description: str = (
         "Send input to a running process. Use this after exec_shell returns a "
-        "process_id. Writes the input text to the process's stdin. "
-        "Use exec shell output to read the response.\n"
-        'E.g., Send input to process "708e9873": {"process_id":"708e9873","input_text":"my input"}\n'
-        "Check exec_shell_output's `input_mode` before sending input:\n"
-        "- `input_mode: \"text\"` — send a typed string with the default "
-        "line_ending (Enter is appended automatically).\n"
-        "- `input_mode: \"selection\"` — the process is showing a menu and "
-        "expects arrow keys / Tab / Space / Enter. Send raw key codes with "
-        "line_ending=\"none\" so no newline is appended: "
-        "\"\\x1b[A\" up, \"\\x1b[B\" down, \"\\x1b[C\" right, \"\\x1b[D\" "
-        "left, \"\\t\" tab, \" \" space-to-toggle, \"\\r\" enter-to-confirm, "
-        "\"\\x1b\" escape-to-cancel. One key per call.\n"
-        "- `input_mode: \"unknown\"` — fall back to text; if that's rejected, "
-        "try arrow keys.\n"
-        "Other control characters also use line_ending=\"none\" "
-        "(e.g. \"\\x03\" Ctrl+C, \"\\x04\" Ctrl+D).\n"
-        "Required: process_id, input_text"
+        "process_id. Writes to the process's stdin; use exec shell output to "
+        "read the response.\n"
+        "Two input modes — supply exactly one:\n"
+        "  1) input_text — plain text or raw bytes. line_ending ('\\n' default, "
+        "or '\\r', '\\r\\n', 'none') is appended. Use line_ending='none' to send "
+        "raw control sequences (e.g. '\\x1b[B\\x1b[B\\r' for down-down-enter).\n"
+        "  2) keys — array of symbolic key names, batched in one call. "
+        "Valid names: up, down, left, right, enter, tab, space, escape, "
+        "backspace, ctrl+c. Implies line_ending='none'.\n"
+        "For selection menus you can batch navigation in one call — e.g. "
+        '{"process_id":"708e9873","keys":["down","down","down","enter"]} — to '
+        "cut reasoning steps. Re-read output between bursts to confirm cursor "
+        "position on long menus.\n"
+        'Text example: {"process_id":"708e9873","input_text":"my input","line_ending":"\\r\\n"}\n'
+        "Required: process_id, and one of (input_text, keys)"
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -947,7 +992,21 @@ class ExecShellInputTool(BuiltInTool):
             "input_text": {
                 "type": "string",
                 "description": (
-                    "The text to send to the process's stdin."
+                    "The text or raw bytes to send to the process's stdin. "
+                    "Mutually exclusive with 'keys'."
+                ),
+            },
+            "keys": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": list(_KEY_NAME_TO_BYTES.keys()),
+                },
+                "description": (
+                    "Ordered list of symbolic key names to send in one call "
+                    "(e.g. ['down','down','enter']). Expanded to escape codes "
+                    "server-side; implies line_ending='none'. Mutually "
+                    "exclusive with 'input_text'."
                 ),
             },
             "line_ending": {
@@ -955,16 +1014,18 @@ class ExecShellInputTool(BuiltInTool):
                 "enum": ["\n", "\r", "\r\n", "none"],
                 "description": (
                     "Line terminator appended to input_text. 'none' sends the "
-                    "raw bytes (useful for control characters). Default: '\\n'."
+                    "raw bytes (useful for control characters). Default: '\\n'. "
+                    "Ignored when 'keys' is provided."
                 ),
             },
         },
-        "required": ["process_id", "input_text"],
+        "required": ["process_id"],
     }
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         process_id = arguments.get("process_id", "").strip()
-        input_text = arguments.get("input_text", "")
+        input_text = arguments.get("input_text")
+        keys = arguments.get("keys")
         line_ending = arguments.get("line_ending", "\n")
 
         if not process_id:
@@ -974,6 +1035,42 @@ class ExecShellInputTool(BuiltInTool):
                     "message": "The 'process_id' parameter is required.",
                 }
             )
+
+        if (input_text is None) == (keys is None):
+            return BuiltInToolResult(
+                structured_content={
+                    "error": "Invalid parameters",
+                    "message": (
+                        "Provide exactly one of 'input_text' or 'keys'."
+                    ),
+                }
+            )
+
+        if keys is not None:
+            if not isinstance(keys, list) or not keys:
+                return BuiltInToolResult(
+                    structured_content={
+                        "error": "Invalid parameters",
+                        "message": "'keys' must be a non-empty array.",
+                    }
+                )
+            unknown = [k for k in keys if k not in _KEY_NAME_TO_BYTES]
+            if unknown:
+                return BuiltInToolResult(
+                    structured_content={
+                        "error": "Invalid parameters",
+                        "message": (
+                            f"Unknown key name(s): {unknown}. Valid: "
+                            f"{sorted(_KEY_NAME_TO_BYTES.keys())}."
+                        ),
+                    }
+                )
+            payload = "".join(_KEY_NAME_TO_BYTES[k] for k in keys)
+        else:
+            if line_ending == "none":
+                payload = input_text
+            else:
+                payload = input_text + line_ending
 
         info = _process_registry.get(process_id)
         if not info:
@@ -1004,10 +1101,6 @@ class ExecShellInputTool(BuiltInTool):
             )
 
         try:
-            if line_ending == "none":
-                payload = input_text
-            else:
-                payload = input_text + line_ending
             process.stdin.write(payload.encode("utf-8"))
             await process.stdin.drain()
         except Exception as e:
@@ -1029,6 +1122,63 @@ class ExecShellInputTool(BuiltInTool):
                 ),
             }
         )
+
+
+def _build_output_instruction(
+    *,
+    completed: bool,
+    return_code: Optional[int],
+    input_mode: Optional[str],
+    is_pty: bool,
+    truncated: bool,
+) -> str:
+    """Deterministic next-step guidance for an ExecShellOutputTool result."""
+    if truncated:
+        return (
+            "Output exceeds the configured token threshold. Confirm with the "
+            "user before retrieving the full output, or set LARGE_OUTPUT_MODE="
+            "'automatic' / raise LARGE_OUTPUT_TOKEN_THRESHOLD."
+        )
+    if completed:
+        rc_text = f" (return_code={return_code})" if return_code is not None else ""
+        return (
+            f"The process has exited{rc_text}. No further input can be sent. "
+            "Start a new command with exec_shell."
+        )
+    if input_mode == "text":
+        return (
+            "Process is waiting for text input. Call exec shell input with "
+            "your text; the default line_ending ('\\n') works."
+        )
+    if input_mode == "selection":
+        base = (
+            "Process is showing a selection menu. Call exec shell input with "
+            "either a symbolic `keys` array (preferred) or raw escape codes "
+            "in `input_text` with `line_ending='none'`. You can batch multiple "
+            "keystrokes in one call to reduce round-trips — e.g. "
+            "`keys: ['down','down','down','enter']`, or equivalently "
+            "`input_text: '\\x1b[B\\x1b[B\\x1b[B\\r'` with `line_ending='none'`. "
+            "Valid key names: up, down, left, right, enter, tab, space, "
+            "escape, backspace, ctrl+c. For long menus, re-read output "
+            "between bursts to confirm the cursor position before confirming."
+        )
+        if not is_pty:
+            base += (
+                " Note: arrow keys are unreliable without a PTY — restart the "
+                "command with pty=true if keys are ignored."
+            )
+        return base
+    if input_mode == "unknown":
+        return (
+            "Process is running but the input mode is unclear. If input is "
+            "expected, try plain text with exec shell input or special keys "
+            "for selection menus otherwise use the sleep tool and call exec "
+            "shell output again."
+        )
+    return (
+        "Process is still running. Use the sleep tool and call "
+        "exec shell output again to read more output."
+    )
 
 
 class ExecShellOutputTool(BuiltInTool):
@@ -1062,6 +1212,7 @@ class ExecShellOutputTool(BuiltInTool):
                 structured_content={
                     "error": "Missing parameter",
                     "message": "The 'process_id' parameter is required.",
+                    "instruction": "Provide the 'process_id' returned by exec_shell.",
                 }
             )
 
@@ -1074,18 +1225,30 @@ class ExecShellOutputTool(BuiltInTool):
                         f"No process with id '{process_id}'. "
                         "It may have been cleaned up."
                     ),
+                    "instruction": (
+                        "The process no longer exists. Start a new command "
+                        "with exec_shell."
+                    ),
                 }
             )
 
         if not info.log_dir or not os.path.isdir(info.log_dir):
+            completed_no_log = info.process.returncode is not None
             return BuiltInToolResult(
                 structured_content={
                     "process_id": process_id,
                     "stdout": "",
-                    "completed": info.process.returncode is not None,
+                    "completed": completed_no_log,
                     "return_code": info.process.returncode,
                     "command": info.command,
                     "message": "No log output available yet.",
+                    "instruction": _build_output_instruction(
+                        completed=completed_no_log,
+                        return_code=info.process.returncode,
+                        input_mode=None,
+                        is_pty=info.is_pty,
+                        truncated=False,
+                    ),
                 }
             )
 
@@ -1183,6 +1346,13 @@ class ExecShellOutputTool(BuiltInTool):
             structured["input_mode"] = mode_info["input_mode"]
             structured["input_mode_confidence"] = mode_info["confidence"]
             structured["input_signals"] = mode_info["signals"]
+        structured["instruction"] = _build_output_instruction(
+            completed=completed,
+            return_code=exit_code,
+            input_mode=mode_info["input_mode"] if mode_info is not None else None,
+            is_pty=info.is_pty,
+            truncated=truncated,
+        )
         return BuiltInToolResult(structured_content=structured)
 
 

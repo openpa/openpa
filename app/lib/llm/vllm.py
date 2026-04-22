@@ -4,7 +4,7 @@ import asyncio
 from tiktoken import encoding_for_model
 
 import openai
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from app.constants import ChatCompletionTypeEnum
 from app.constants.status import Status
@@ -21,7 +21,7 @@ from .base import LLMProvider
 
 class VllmLLMProvider(LLMProvider):
     def __init__(self, api_key: str, model_name: str, default_reasoning_effort: Optional[str] = None):
-        self.openai = OpenAI(api_key=api_key, base_url="http://localhost:8000/v1")
+        self.openai = AsyncOpenAI(api_key=api_key, base_url="http://localhost:8000/v1")
         self.model_name = model_name
         self.default_reasoning_effort = default_reasoning_effort
         self.encoder = encoding_for_model("gpt-4o")  # Fallback
@@ -75,9 +75,9 @@ class VllmLLMProvider(LLMProvider):
                 if parallel_tool_calls is not None:
                     params["parallel_tool_calls"] = parallel_tool_calls
 
-                response = self.openai.chat.completions.create(**params)
+                response = await self.openai.chat.completions.create(**params)
 
-                for chunk in response:
+                async for chunk in response:
                     if len(chunk.choices) > 0 and chunk.choices[0].delta:
                         if chunk.choices[0].delta.content:
                             content_total += chunk.choices[0].delta.content
@@ -186,7 +186,7 @@ class VllmLLMProvider(LLMProvider):
                 if parallel_tool_calls is not None:
                     params["parallel_tool_calls"] = parallel_tool_calls
 
-                response = self.openai.chat.completions.create(**params)
+                response = await self.openai.chat.completions.create(**params)
 
                 if response.choices[0].message.content:
                     response_format_type = getattr(

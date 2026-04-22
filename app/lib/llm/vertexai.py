@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from tiktoken import encoding_for_model
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -40,7 +40,7 @@ class VertexAILLMProvider(LLMProvider):
         self.base_url = f"https://{api_host}/v1/projects/{project_id}/locations/{location}/endpoints/openapi/"
 
         self._refresh_access_token()
-        self.openai = OpenAI(api_key=self._access_token, base_url=self.base_url)
+        self.openai = AsyncOpenAI(api_key=self._access_token, base_url=self.base_url)
         self.encoder = encoding_for_model("gpt-4o")
 
     def _refresh_access_token(self):
@@ -105,9 +105,9 @@ class VertexAILLMProvider(LLMProvider):
                 if parallel_tool_calls is not None:
                     params["parallel_tool_calls"] = parallel_tool_calls
 
-                response = self.openai.chat.completions.create(**params)
+                response = await self.openai.chat.completions.create(**params)
 
-                for chunk in response:
+                async for chunk in response:
                     if len(chunk.choices) > 0 and chunk.choices[0].delta:
                         if chunk.choices[0].delta.content:
                             content_total += chunk.choices[0].delta.content
@@ -218,7 +218,7 @@ class VertexAILLMProvider(LLMProvider):
                 if parallel_tool_calls is not None:
                     params["parallel_tool_calls"] = parallel_tool_calls
 
-                response = self.openai.chat.completions.create(**params)
+                response = await self.openai.chat.completions.create(**params)
 
                 if response.choices[0].message.content:
                     response_format_type = getattr(

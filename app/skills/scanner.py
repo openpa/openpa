@@ -57,10 +57,9 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not isinstance(data, dict):
         return {}, text
 
-    # Rebuild frontmatter with only name and description for the agent prompt.
+    # Rebuild frontmatter with only description for the agent prompt; the
+    # skill name is surfaced separately in the skill section header.
     clean_fm: dict[str, str] = {}
-    if "name" in data:
-        clean_fm["name"] = data["name"]
     if "description" in data:
         clean_fm["description"] = data["description"]
     body = stripped[end_idx + 3:]  # text after closing ---

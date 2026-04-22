@@ -64,8 +64,10 @@ class TerminalState:
 _PRIVATE_MODE_RE = re.compile(r"\x1b\[\?([\d;]+)([hl])")
 
 # Cursor-up / previous-line / clear-line sequences that mark a redraw loop.
+# Accepts both erase-in-line (K) and erase-in-display (J) — Clack/@clack
+# repaints with `\x1b[nA\x1b[J` rather than per-line `\x1b[K`.
 _CURSOR_UP_RE = re.compile(r"\x1b\[\d*[AF]")
-_CLEAR_LINE_RE = re.compile(r"\x1b\[[012]?K")
+_CLEAR_LINE_RE = re.compile(r"\x1b\[[012]?[JK]")
 
 # Strip-all-ANSI (CSI + OSC). Conservative — keeps printable glyphs intact.
 _ANSI_STRIP_RE = re.compile(
@@ -76,11 +78,15 @@ _ANSI_STRIP_RE = re.compile(
 )
 
 # Pointer glyph at (possibly indented) start of a line. Includes:
-#   ❯ › ▸ ▶ ● ◉ ⦿ →    (unicode)
-#   >                   (ASCII fallback inquirer uses on dumb terminals)
-#   [x] [X] [*] [ ]     (multi-select checkbox)
+#   ❯ › ▸ ▶ ● ○ ◉ ◯ ⦿ → ◻ ◼   (unicode — filled/empty radio + multi-select)
+#   >                          (ASCII fallback inquirer uses on dumb terminals)
+#   [x] [X] [*] [ ]            (multi-select checkbox)
+# An optional gutter (`│ ┃ ║ ◆ ◇`) may sit between the leading indent and the
+# glyph — Clack/@clack/prompts and gum render selections as `│  ● item`.
 _POINTER_LINE_RE = re.compile(
-    r"(?m)^[ \t]{0,8}(?:[❯›▸▶●◉⦿→]|>|\[[ xX\*]\])\s+\S"
+    r"(?m)^[ \t]{0,8}"
+    r"(?:[│┃║◆◇][ \t]{0,8})?"
+    r"(?:[❯›▸▶●○◉◯⦿→◻◼]|>|\[[ xX\*]\])\s+\S"
 )
 
 # Reverse-video segment with actual content inside: ESC[7m … ESC[(0|27)m.
@@ -99,6 +105,11 @@ _HINT_TEXT_RE = re.compile(
 _TEXT_PROMPT_TAIL_RE = re.compile(
     r"(?:[:?>$›❯])\s*\Z"
 )
+
+# Clack active-prompt header: a line starting with `◆` (active) or `◇`
+# (complete) followed by the prompt question.  @clack/prompts and every
+# CLI built on it (create-astro, sv, openclaw, shadcn-ui, …) emit this.
+_CLACK_HEADER_RE = re.compile(r"(?m)^[ \t]{0,8}[◆◇][ \t]+\S")
 
 
 # Thresholds — centralised so they're easy to tune after dogfooding.
@@ -210,6 +221,9 @@ def detect_input_mode(
     if state.last_chunk_hint or _HINT_TEXT_RE.search(stripped_tail):
         score += 3
         signals.append("key_hint_text")
+    if _CLACK_HEADER_RE.search(stripped_tail):
+        score += 2
+        signals.append("clack_prompt_header")
 
     # --- Text signals ----------------------------------------------------
     if state.cursor_visible and _TEXT_PROMPT_TAIL_RE.search(stripped_tail.rstrip()):

@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict, Optional
 
 import httpx
-from openai import OpenAI
+from openai import AsyncOpenAI
 from tiktoken import encoding_for_model
 
 from .openai import OpenAILLMProvider
@@ -87,7 +87,7 @@ class GitHubCopilotLLMProvider(OpenAILLMProvider):
             "base_url": "https://api.githubcopilot.com",
             "default_headers": _COPILOT_HEADERS,
         }
-        self.openai = OpenAI(**kwargs)
+        self.openai = AsyncOpenAI(**kwargs)
         self.model_name = model_name
         self.default_reasoning_effort = default_reasoning_effort
         self.encoder = encoding_for_model("gpt-4o")  # Fallback

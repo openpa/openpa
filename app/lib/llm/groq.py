@@ -3,7 +3,7 @@ import json
 import asyncio
 from tiktoken import encoding_for_model
 
-from groq import Groq as OpenAI
+from groq import AsyncGroq as OpenAI
 
 from app.constants import ChatCompletionTypeEnum
 from app.constants.status import Status
@@ -75,9 +75,9 @@ class GroqLLMProvider(LLMProvider):
                 if parallel_tool_calls is not None:
                     params["parallel_tool_calls"] = parallel_tool_calls
 
-                response = self.openai.chat.completions.create(**params)
+                response = await self.openai.chat.completions.create(**params)
 
-                for chunk in response:
+                async for chunk in response:
                     if len(chunk.choices) > 0 and chunk.choices[0].delta:
                         if chunk.choices[0].delta.content:
                             content_total += chunk.choices[0].delta.content
@@ -187,7 +187,7 @@ class GroqLLMProvider(LLMProvider):
                 if parallel_tool_calls is not None:
                     params["parallel_tool_calls"] = parallel_tool_calls
 
-                response = self.openai.chat.completions.create(**params)
+                response = await self.openai.chat.completions.create(**params)
 
                 if response.choices[0].message.content:
                     response_format_type = getattr(

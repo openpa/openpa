@@ -155,6 +155,8 @@ class ReasoningAgent:
         self.registry = registry
         self.profile = profile
         self.reasoning = reasoning
+        self.current_skills_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills")
+        self.current_user_working_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile),
 
         # Snapshot the tool list available to this profile for this run.
         # When ``allowed_skill_ids`` is provided (automatic skill mode), skills
@@ -232,8 +234,6 @@ class ReasoningAgent:
             "When running a command instructed in **Skills Instructions**, you must include the "
             "prefix `[skill][<skill-name>]<command>`. Conversely, commands requested by the user "
             "must be sent to the **Exec Shell** tool in the format `[user][]<command>`."
-            "Important: Your current working directory is the \"Current User Working Directory\", "
-            "so to run any skill script in <skill_directory>/scripts, use the absolute path.\n"
         ]
         # If any loaded skill declares environment variables, remind the agent
         # to source the per-skill .env file before running any script -- exec_shell
@@ -259,7 +259,7 @@ class ReasoningAgent:
         for tool_id, content in self._loaded_skill_sections.items():
             tool = self._tools_by_id.get(tool_id)
             display_name = tool.name if tool else tool_id
-            parts.append(f"\n----- Skill: {display_name} -----\n{content}\n-------------------------\n")
+            parts.append(f"\n----- Skill: {tool_id} -----\n\nPlease use this name `{tool_id}` to provide <skill-name> for **Exec Shell** tool\n{content}\n-------------------------\n")
         parts.append("==========End Skills Instructions==========\n")
         return "".join(parts)
 
@@ -273,8 +273,8 @@ class ReasoningAgent:
             current_time=f"{datetime.now().isoformat()}",
             current_os=platform.system(),
             current_working_directory=BaseConfig.OPENPA_WORKING_DIR,
-            current_skills_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills"),
-            current_user_working_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile),
+            current_skills_directory=self.current_skills_directory,
+            current_user_working_directory=self.current_user_working_directory,
             tools=self._build_tools_block(),
             loaded_skills=self._build_loaded_skills_block(),
             tool_names=", ".join(self._active_action_names()),

@@ -148,12 +148,12 @@ class AnthropicLLMProvider(LLMProvider):
         default_reasoning_effort: Optional[str] = None,
     ):
         if bearer_token:
-            self.client = anthropic.Anthropic(
+            self.client = anthropic.AsyncAnthropic(
                 api_key="placeholder",
                 default_headers={"Authorization": f"Bearer {bearer_token}"},
             )
         elif api_key:
-            self.client = anthropic.Anthropic(api_key=api_key)
+            self.client = anthropic.AsyncAnthropic(api_key=api_key)
         else:
             raise ValueError("Either api_key or bearer_token must be provided")
 
@@ -228,8 +228,8 @@ class AnthropicLLMProvider(LLMProvider):
                             "name": tool_choice["function"].get("name", ""),
                         }
 
-                with self.client.messages.stream(**params) as stream:
-                    for event in stream:
+                async with self.client.messages.stream(**params) as stream:
+                    async for event in stream:
                         if event.type == "message_start":
                             if hasattr(event, "message") and event.message.usage:
                                 input_tokens = event.message.usage.input_tokens
@@ -365,7 +365,7 @@ class AnthropicLLMProvider(LLMProvider):
                             "name": tool_choice["function"].get("name", ""),
                         }
 
-                response = self.client.messages.create(**params)
+                response = await self.client.messages.create(**params)
 
                 # Process text content
                 text_content = ""
