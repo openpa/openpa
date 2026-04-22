@@ -868,6 +868,7 @@ class ExecShellTool(BuiltInTool):
                     "category": "long_running",
                     "waiting_for_input": result.get("waiting_for_input", False),
                     "command": command,
+                    "working_directory": working_directory,
                     "os": system,
                     "shell": shell,
                     **({"pty": True, "stderr_merged_into_stdout": True} if use_pty else {}),
