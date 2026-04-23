@@ -67,6 +67,7 @@ from app.tools.builtin import (
     refresh_builtin_tool_oauth,
     register_builtin_tools,
 )
+from app.tools.builtin.exec_shell import cleanup_stdout_on_startup
 from app.tools.intrinsic import register_intrinsic_tools
 from app.tools.mcp import (
     build_http_mcp_tool,
@@ -344,6 +345,9 @@ async def connect_persisted_tool(
 
 
 async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
+    # 0. Purge stale exec_shell stdout directories from previous runs.
+    cleanup_stdout_on_startup()
+
     # 1. Storage
     config_storage = get_dynamic_config_storage()
     set_dynamic_config_storage(config_storage)

@@ -15,6 +15,7 @@ files under ``<user_working_dir>/tools/builtin/exec_shell/stdout/<process_id>/``
 
 import asyncio
 import contextlib
+import glob
 import json
 import os
 import platform
@@ -579,6 +580,36 @@ async def cancel_processes_by_task(task_id: str) -> int:
                 f"cancel_processes_by_task: failed to kill process {pid}"
             )
     return killed
+
+
+def cleanup_stdout_on_startup() -> int:
+    """Remove every ``<process_id>`` directory under any profile's
+    ``tools/builtin/exec_shell/stdout/`` tree.
+
+    Long-running subprocesses don't survive a server restart, so the log
+    directories they leave behind are orphaned — clear them on startup.
+    Returns the number of directories removed.
+    """
+    base = BaseConfig.OPENPA_WORKING_DIR
+    if not base or not os.path.isdir(base):
+        return 0
+    pattern = os.path.join(
+        base, "*", "tools", "builtin", "exec_shell", "stdout", "*",
+    )
+    removed = 0
+    for path in glob.glob(pattern):
+        if not os.path.isdir(path):
+            continue
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+        except Exception as exc:
+            logger.error(f"cleanup_stdout_on_startup: failed to remove {path}: {exc}")
+    if removed:
+        logger.info(
+            f"cleanup_stdout_on_startup: removed {removed} stale process stdout dir(s)"
+        )
+    return removed
 
 
 async def _cleanup_stale_processes() -> int:
