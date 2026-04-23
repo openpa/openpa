@@ -51,6 +51,7 @@ from app.lib.embedding import GrpcEmbeddings
 from app.lib.llm.factory import create_llm_provider
 from app.lib.llm.model_groups import ModelGroupManager
 from app.storage import (
+    get_autostart_storage,
     get_conversation_storage,
     get_dynamic_config_storage,
     get_tool_storage,
@@ -68,6 +69,7 @@ from app.tools.builtin import (
     register_builtin_tools,
 )
 from app.tools.builtin.exec_shell import cleanup_stdout_on_startup
+from app.tools.builtin.exec_shell_autostart import run_autostart_on_boot
 from app.tools.intrinsic import register_intrinsic_tools
 from app.tools.mcp import (
     build_http_mcp_tool,
@@ -486,6 +488,13 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             logger.exception(
                 f"Eager embedding sync failed for profile '{profile_name}'"
             )
+
+    # 7c. Autostart long-running processes registered to "start with OpenPA".
+    #     Fire-and-forget — individual spawns must not block server startup.
+    try:
+        asyncio.create_task(run_autostart_on_boot(get_autostart_storage()))
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to schedule autostart run on boot")
 
     # 8. Agent card
     skill = AgentSkill(

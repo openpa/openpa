@@ -143,6 +143,9 @@ class ProcessInfo:
     # to scope list + WS access to the authenticated user's own processes.
     # Populated from ``arguments["_profile"]`` at registration time.
     profile: Optional[str] = None
+    # Autostart registration id, set when the process was spawned (either at
+    # server boot or via manual retry) from a row in ``autostart_processes``.
+    autostart_id: Optional[str] = None
 
 
 _process_registry: Dict[str, ProcessInfo] = {}
@@ -718,15 +721,23 @@ def list_processes(profile: str) -> List[Dict[str, Any]]:
     The fields returned power the Process Manager list UI.  ``expire_time``
     is converted from ``time.monotonic()`` deltas to a wall-clock ISO
     timestamp because the UI has no access to the backend's monotonic clock.
+
+    Autostart registrations that are not currently running (e.g. their
+    spawn failed on boot) are merged in as synthetic rows with status
+    ``failed_to_autostart`` so the UI can surface a warning and a manual
+    re-run control.
     """
     now_wall = time.time()
     now_mono = time.monotonic()
     result: List[Dict[str, Any]] = []
+    live_autostart_ids: set[str] = set()
     for pid, info in list(_process_registry.items()):
         if profile and info.profile and info.profile != profile:
             continue
         status, exit_code = process_status(info)
         expire_at_wall = now_wall + max(0.0, info.expire_time - now_mono)
+        if info.autostart_id:
+            live_autostart_ids.add(info.autostart_id)
         result.append({
             "process_id": pid,
             "command": info.command,
@@ -737,7 +748,36 @@ def list_processes(profile: str) -> List[Dict[str, Any]]:
             "created_at": info.created_at,
             "expire_at": expire_at_wall,
             "is_pty": info.is_pty,
+            "autostart_id": info.autostart_id,
+            "last_error": None,
         })
+
+    # Merge autostart registrations not currently represented in the
+    # registry.  Imported lazily to avoid a circular import at module load.
+    try:
+        from app.storage import get_autostart_storage
+        autostart_rows = get_autostart_storage().list(profile) if profile else []
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"list_processes: autostart fetch failed: {exc}")
+        autostart_rows = []
+
+    for row in autostart_rows:
+        if row["id"] in live_autostart_ids:
+            continue
+        result.append({
+            "process_id": f"autostart:{row['id']}",
+            "command": row["command"],
+            "working_dir": row["working_dir"],
+            "log_dir": "",
+            "status": "failed_to_autostart",
+            "exit_code": None,
+            "created_at": row["created_at"],
+            "expire_at": 0.0,
+            "is_pty": row["is_pty"],
+            "autostart_id": row["id"],
+            "last_error": row["last_error"],
+        })
+
     # Newest first — matches user expectation for a process list.
     result.sort(key=lambda row: row["created_at"], reverse=True)
     return result

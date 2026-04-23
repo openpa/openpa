@@ -9,7 +9,7 @@ from sqlalchemy.orm import class_mapper
 from a2a.server.models import Base
 
 from app.storage.models import (
-    AuthTokenModel, ConversationModel, LLMConfigModel,
+    AuthTokenModel, AutostartProcessModel, ConversationModel, LLMConfigModel,
     MessageModel, ProfileModel, ProfileToolModel, ServerConfigModel,
     ToolConfigModel, ToolModel,
 )
@@ -57,6 +57,7 @@ class ConversationStorage:
                 ServerConfigModel, LLMConfigModel,
                 ToolModel,
                 ProfileToolModel, ToolConfigModel, AuthTokenModel,
+                AutostartProcessModel,
             ]:
                 mapper = class_mapper(model_class)
                 for table in mapper.tables:

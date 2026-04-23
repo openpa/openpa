@@ -23,6 +23,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.config.settings import BaseConfig
+from app.storage import get_autostart_storage
 from app.tools.builtin.exec_shell import (
     list_processes,
     process_status,
@@ -33,6 +34,7 @@ from app.tools.builtin.exec_shell import (
     write_stdin_to_process,
     _process_registry,
 )
+from app.tools.builtin.exec_shell_autostart import spawn_from_autostart
 from app.utils.logger import logger
 
 
@@ -291,6 +293,101 @@ def get_process_routes() -> list:
         finally:
             await unsubscribe(pid, queue)
 
+    async def handle_autostart_list(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        return JSONResponse({"autostart": get_autostart_storage().list(profile)})
+
+    async def handle_autostart_create(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        pid = (body.get("process_id") or "").strip()
+        force = bool(body.get("force") or False)
+        if not pid:
+            return JSONResponse(
+                {"error": "Missing parameter", "message": "process_id is required"},
+                status_code=400,
+            )
+
+        info = _process_registry.get(pid)
+        if info is None:
+            return JSONResponse({"error": "Process not found"}, status_code=404)
+        if profile and info.profile and info.profile != profile:
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        storage = get_autostart_storage()
+        duplicate = storage.find_duplicate(profile, info.command)
+        if duplicate and not force:
+            return JSONResponse(
+                {
+                    "error": "duplicate",
+                    "message": "A registration with the same command already exists.",
+                    "existing": duplicate,
+                },
+                status_code=409,
+            )
+
+        row = storage.insert(
+            profile=profile,
+            command=info.command,
+            working_dir=info.working_dir,
+            is_pty=info.is_pty,
+        )
+        # Link the live process to the new registration so the UI sees the
+        # star filled without waiting for the next boot.
+        info.autostart_id = row["id"]
+        return JSONResponse(row)
+
+    async def handle_autostart_delete(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        autostart_id = request.path_params["id"]
+        storage = get_autostart_storage()
+        existing = storage.get(autostart_id)
+        if existing is None:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        if profile and existing.get("profile") and existing["profile"] != profile:
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+        storage.delete(autostart_id, profile)
+        # If there's a live process linked to this registration, unlink it so
+        # the star clears on the next refresh.  The process keeps running.
+        for info in _process_registry.values():
+            if info.autostart_id == autostart_id:
+                info.autostart_id = None
+        return JSONResponse({"ok": True})
+
+    async def handle_autostart_run(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        autostart_id = request.path_params["id"]
+        storage = get_autostart_storage()
+        row = storage.get(autostart_id)
+        if row is None:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        if profile and row.get("profile") and row["profile"] != profile:
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+        process_id, error = await spawn_from_autostart(row)
+        if error:
+            storage.set_error(autostart_id, error)
+            return JSONResponse(
+                {"error": "spawn_failed", "message": error}, status_code=400,
+            )
+        storage.clear_error(autostart_id)
+        return JSONResponse({"process_id": process_id})
+
     return [
         Route("/api/processes", handle_list, methods=["GET"]),
         Route("/api/processes/{pid}", handle_get, methods=["GET"]),
@@ -298,4 +395,14 @@ def get_process_routes() -> list:
         Route("/api/processes/{pid}/stdin", handle_stdin, methods=["POST"]),
         Route("/api/processes/{pid}/resize", handle_resize, methods=["POST"]),
         WebSocketRoute("/api/processes/{pid}/ws", handle_ws),
+        Route("/api/autostart-processes", handle_autostart_list, methods=["GET"]),
+        Route("/api/autostart-processes", handle_autostart_create, methods=["POST"]),
+        Route(
+            "/api/autostart-processes/{id}",
+            handle_autostart_delete, methods=["DELETE"],
+        ),
+        Route(
+            "/api/autostart-processes/{id}/run",
+            handle_autostart_run, methods=["POST"],
+        ),
     ]

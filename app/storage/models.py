@@ -171,3 +171,17 @@ class LLMConfigModel(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
     is_secret: Mapped[bool] = mapped_column(Integer, default=False)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class AutostartProcessModel(Base):
+    """Long-running processes registered to (re)start with the OpenPA server."""
+    __tablename__ = "autostart_processes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    profile: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    command: Mapped[str] = mapped_column(Text, nullable=False)
+    working_dir: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    is_pty: Mapped[bool] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_attempted_at: Mapped[float | None] = mapped_column(Float, nullable=True)
