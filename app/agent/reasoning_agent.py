@@ -376,7 +376,7 @@ class ReasoningAgent:
         # appended (and re-invoked skills are filtered out of the Tools block).
         self.instruction = self._build_instruction()
 
-        logger.info(f"=== Instruction ===\n{self.instruction}")
+        # logger.info(f"=== Instruction ===\n{self.instruction}")
         # logger.info(f"=== Reasoning Step ===\n{input_section}")
 
         # Action enum is the set of tool_ids, minus skills already folded into

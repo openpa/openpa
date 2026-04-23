@@ -1006,7 +1006,9 @@ class ExecShellInputTool(BuiltInTool):
         "process_id. Writes to the process's stdin; use exec shell output to "
         "read the response.\n"
         "Two input modes — supply exactly one:\n"
-        "  1) input_text — plain text or raw bytes (don't need append \\n, it will be added automatically).\n"
+        "  1) input_text — plain text or raw bytes. You don't need to append "
+        "a line terminator; the right one is added automatically ('\\r' on "
+        "Windows PTY processes, '\\n' elsewhere).\n"
         "  2) keys — array of symbolic key names, batched in one call.\n"
         "Valid names: up, down, left, right, enter, tab, space, escape, "
         "backspace, ctrl+c. Implies line_ending='none'.\n"
@@ -1048,8 +1050,11 @@ class ExecShellInputTool(BuiltInTool):
                 "type": "string",
                 "enum": ["\n", "\r", "\r\n", "none"],
                 "description": (
-                    "Line terminator appended to input_text. 'none' sends the "
-                    "raw bytes (useful for control characters). Default: '\\n'. "
+                    "Line terminator appended to input_text. Default is "
+                    "OS/mode-aware: '\\r' for Windows PTY processes (ConPTY "
+                    "treats '\\r' as Enter and ignores '\\n'), '\\n' otherwise. "
+                    "Use 'none' to send raw bytes (useful for control "
+                    "characters). Explicit values are never coerced. "
                     "Ignored when 'keys' is provided."
                 ),
             },
@@ -1061,9 +1066,7 @@ class ExecShellInputTool(BuiltInTool):
         process_id = arguments.get("process_id", "").strip()
         input_text = arguments.get("input_text")
         keys = arguments.get("keys")
-        line_ending = arguments.get("line_ending", "\n")
-        # print line_ending as repr for debugging, even print the raw value to logs in case of invisible chars
-        logger.debug(f"exec_shell_input called with process_id={process_id!r}, input_text={input_text!r}, keys={keys!r}, line_ending={line_ending!r} (raw: {line_ending})")
+        line_ending = arguments.get("line_ending")
 
         if not process_id:
             return BuiltInToolResult(
@@ -1082,6 +1085,34 @@ class ExecShellInputTool(BuiltInTool):
                     ),
                 }
             )
+
+        info = _process_registry.get(process_id)
+        if not info:
+            return BuiltInToolResult(
+                structured_content={
+                    "error": "Process not found",
+                    "message": (
+                        f"No running process with id '{process_id}'. "
+                        "It may have exited or been cleaned up."
+                    ),
+                }
+            )
+
+        # Windows ConPTY treats \r (not \n) as Enter; apps reading stdin via
+        # a PTY on Windows won't unblock until they see \r.  Pick the default
+        # accordingly so callers who don't specify line_ending Just Work.
+        # Explicit values (including "\n") are respected as-is.
+        if line_ending is None:
+            if info.is_pty and platform.system() == "Windows":
+                line_ending = "\r"
+            else:
+                line_ending = "\n"
+
+        logger.debug(
+            f"exec_shell_input called with process_id={process_id!r}, "
+            f"input_text={input_text!r}, keys={keys!r}, "
+            f"line_ending={line_ending!r} (is_pty={info.is_pty})"
+        )
 
         if keys is not None:
             if not isinstance(keys, list) or not keys:
@@ -1109,18 +1140,6 @@ class ExecShellInputTool(BuiltInTool):
             else:
                 payload = input_text + line_ending
 
-        info = _process_registry.get(process_id)
-        if not info:
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Process not found",
-                    "message": (
-                        f"No running process with id '{process_id}'. "
-                        "It may have exited or been cleaned up."
-                    ),
-                }
-            )
-
         process = info.process
 
         if process.returncode is not None:
@@ -1146,7 +1165,12 @@ class ExecShellInputTool(BuiltInTool):
                     if i < len(key_bytes) - 1:
                         await asyncio.sleep(_KEYSTROKE_DELAY_SEC)
             else:
-                process.stdin.write(payload.encode("utf-8"))
+                payload_bytes = payload.encode("utf-8")
+                logger.debug(
+                    f"exec_shell_input({process_id}): writing "
+                    f"{payload_bytes!r} to stdin"
+                )
+                process.stdin.write(payload_bytes)
                 await process.stdin.drain()
         except Exception as e:
             return BuiltInToolResult(
@@ -1191,9 +1215,10 @@ def _build_output_instruction(
             "Start a new command with exec_shell."
         )
     if input_mode == "text":
+        default_ending = "\\r" if (is_pty and platform.system() == "Windows") else "\\n"
         return (
             "Process is waiting for text input. Call exec shell input with "
-            "your text; the default line_ending ('\\n') works."
+            f"your text; the default line_ending ('{default_ending}') works."
         )
     if input_mode == "selection":
         base = (
