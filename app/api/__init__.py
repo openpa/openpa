@@ -6,6 +6,7 @@ from app.api.conversations import get_conversation_routes
 from app.api.files import get_file_routes
 from app.api.llm import get_llm_routes
 from app.api.oauth2 import get_oauth2_routes
+from app.api.processes import get_process_routes
 from app.api.profiles import get_profile_routes
 from app.api.tokens import get_token_routes
 from app.api.tools import get_tool_routes
@@ -61,4 +62,5 @@ def get_api_routes(
         registry, config_storage=config_storage,
         connect_persisted_tool=connect_persisted_tool,
     ))
+    routes.extend(get_process_routes())
     return routes

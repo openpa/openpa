@@ -14,6 +14,7 @@ files under ``<user_working_dir>/tools/builtin/exec_shell/stdout/<process_id>/``
 """
 
 import asyncio
+import collections
 import contextlib
 import glob
 import json
@@ -23,7 +24,7 @@ import shutil
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from app.config.settings import BaseConfig
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
@@ -85,6 +86,10 @@ def _shell_for(system: str) -> tuple[str, str]:
 # Process registry & log writer state
 # ---------------------------------------------------------------------------
 
+_RING_BUFFER_DEFAULT_MAX_BYTES = 256 * 1024
+_SUBSCRIBER_QUEUE_MAXSIZE = 256
+
+
 @dataclass
 class LogWriterState:
     """State for the background stdout log-writer task."""
@@ -106,6 +111,16 @@ class LogWriterState:
     # + last-chunk transient signals).  Updated by the writer on every
     # stdout chunk and read by ExecShellOutputTool to classify input mode.
     terminal_state: TerminalState = field(default_factory=TerminalState)
+    # UI side-channel: recent output chunks for late-joining WebSocket
+    # subscribers ("snapshot") and live fan-out queues for active ones.
+    # Populated alongside file writes inside rotate_lock so the snapshot
+    # and the live stream can never disagree.  Tuples are (stream, chunk).
+    ring_buffer: "collections.deque[Tuple[str, str]]" = field(
+        default_factory=collections.deque,
+    )
+    ring_buffer_bytes: int = 0
+    ring_buffer_max: int = _RING_BUFFER_DEFAULT_MAX_BYTES
+    subscribers: Set["asyncio.Queue[Dict[str, Any]]"] = field(default_factory=set)
 
 
 @dataclass
@@ -124,6 +139,10 @@ class ProcessInfo:
     # via ``cancel_processes_by_task``. Populated from the executor's ContextVar
     # at registration time.
     task_id: Optional[str] = None
+    # Profile that spawned the process.  Used by the Process Manager API/UI
+    # to scope list + WS access to the authenticated user's own processes.
+    # Populated from ``arguments["_profile"]`` at registration time.
+    profile: Optional[str] = None
 
 
 _process_registry: Dict[str, ProcessInfo] = {}
@@ -180,6 +199,12 @@ class Var:
     LARGE_OUTPUT_TOKEN_THRESHOLD = "LARGE_OUTPUT_TOKEN_THRESHOLD"
     LOG_SILENCE_THRESHOLD = "LOG_SILENCE_THRESHOLD"
     CLEANUP_TTL_HOURS = "CLEANUP_TTL_HOURS"
+    # UI-only defaults used by the Process Manager terminal view.  The
+    # agent's per-invocation ``cols`` / ``rows`` arguments on ExecShellTool
+    # are untouched; these only seed the xterm.js instance when the user
+    # hasn't specified a size.
+    TERMINAL_DEFAULT_COLS = "TERMINAL_DEFAULT_COLS"
+    TERMINAL_DEFAULT_ROWS = "TERMINAL_DEFAULT_ROWS"
 
 
 TOOL_CONFIG: ToolConfig = {
@@ -223,6 +248,24 @@ TOOL_CONFIG: ToolConfig = {
             ),
             "type": "number",
             "default": 3,
+        },
+        Var.TERMINAL_DEFAULT_COLS: {
+            "description": (
+                "Default terminal width (columns) used by the Process "
+                "Manager terminal view when a user opens a process's stdout "
+                "stream without specifying a size.  Default: 80."
+            ),
+            "type": "number",
+            "default": 80,
+        },
+        Var.TERMINAL_DEFAULT_ROWS: {
+            "description": (
+                "Default terminal height (rows) used by the Process "
+                "Manager terminal view when a user opens a process's stdout "
+                "stream without specifying a size.  Default: 24."
+            ),
+            "type": "number",
+            "default": 24,
         },
         Var.CLEANUP_TTL_HOURS: {
             "description": (
@@ -503,6 +546,13 @@ async def _log_writer_loop(
                             update_terminal_state(state.terminal_state, chunk)
                             state.current_file.write(chunk)
                     state.current_file.flush()
+                    # Side-channel fan-out for the Process Manager UI.  Runs
+                    # inside rotate_lock so the snapshot handed to a new
+                    # subscriber (also under the lock) and the live chunks
+                    # it starts seeing afterwards can never disagree.  Uses
+                    # put_nowait so a stuck WebSocket cannot block the log
+                    # writer; overflowed queues are evicted next cycle.
+                    _broadcast_chunks(state, chunks)
     except asyncio.CancelledError:
         pass
     except Exception as exc:
@@ -550,6 +600,406 @@ async def _log_writer_loop(
 @contextlib.asynccontextmanager
 async def _noop_async_cm():
     yield
+
+
+# ---------------------------------------------------------------------------
+# Process Manager side-channel helpers
+#
+# These helpers expose the existing process registry and log-writer state to
+# the Process Manager REST/WebSocket API.  The agent-facing tools
+# (ExecShellInputTool / OutputTool / StopTool) continue to operate exactly
+# as before — the file-based log flow is untouched.  The pub/sub layer is
+# strictly additive: writers broadcast to subscribers inside the existing
+# rotate_lock critical section using put_nowait (never awaits), and
+# subscribe/unsubscribe take the same lock so a new subscriber's snapshot
+# plus its live stream are handed over atomically.
+# ---------------------------------------------------------------------------
+
+
+def _broadcast_chunks(
+    state: LogWriterState,
+    chunks: List[Tuple[str, str]],
+) -> None:
+    """Fan chunks into ring buffer + subscriber queues.
+
+    Must be called while holding ``state.rotate_lock``.  Never awaits: uses
+    ``put_nowait`` on each subscriber and evicts any queue whose capacity is
+    exhausted (one stuck UI tab must not stall the log writer).
+    """
+    if not chunks:
+        return
+    for stream_name, chunk in chunks:
+        state.ring_buffer.append((stream_name, chunk))
+        state.ring_buffer_bytes += len(chunk)
+    # Trim oldest chunks until within budget.
+    while state.ring_buffer_bytes > state.ring_buffer_max and state.ring_buffer:
+        _stream, dropped = state.ring_buffer.popleft()
+        state.ring_buffer_bytes -= len(dropped)
+
+    if not state.subscribers:
+        return
+    evicted: List["asyncio.Queue[Dict[str, Any]]"] = []
+    for stream_name, chunk in chunks:
+        message = {"type": stream_name, "data": chunk}
+        for queue in state.subscribers:
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                if queue not in evicted:
+                    evicted.append(queue)
+    for queue in evicted:
+        state.subscribers.discard(queue)
+        try:
+            queue.put_nowait({"type": "overflow"})
+        except asyncio.QueueFull:
+            pass
+
+
+async def subscribe(
+    process_id: str,
+) -> Tuple["asyncio.Queue[Dict[str, Any]]", List[Tuple[str, str]]]:
+    """Register a new WebSocket subscriber and atomically hand over the
+    current ring-buffer snapshot.
+
+    Raises ``KeyError`` if ``process_id`` is unknown or has no writer state
+    (e.g. the process exited and its log writer finalised before the caller
+    connected — callers should handle this by showing an "already finished"
+    view and falling back to REST).
+    """
+    info = _process_registry.get(process_id)
+    if info is None or info.log_writer_state is None:
+        raise KeyError(process_id)
+    state = info.log_writer_state
+    queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue(
+        maxsize=_SUBSCRIBER_QUEUE_MAXSIZE,
+    )
+    async with state.rotate_lock:
+        snapshot = list(state.ring_buffer)
+        state.subscribers.add(queue)
+    return queue, snapshot
+
+
+async def unsubscribe(
+    process_id: str,
+    queue: "asyncio.Queue[Dict[str, Any]]",
+) -> None:
+    """Remove a subscriber.  Tolerates unknown pids (process may have been
+    cleaned up while the WebSocket was draining)."""
+    info = _process_registry.get(process_id)
+    if info is None or info.log_writer_state is None:
+        return
+    state = info.log_writer_state
+    async with state.rotate_lock:
+        state.subscribers.discard(queue)
+
+
+def process_status(info: ProcessInfo) -> Tuple[str, Optional[int]]:
+    """Return ``(status, exit_code)`` for a registry entry.
+
+    Registry is authoritative.  ``state.json`` is only consulted to recover
+    an exit code when the log writer reaped it before the registry entry
+    was evicted.
+    """
+    rc = info.process.returncode
+    if rc is not None:
+        return "exited", rc
+    try:
+        state_data = _read_state(info.log_dir) if info.log_dir else None
+    except Exception:
+        state_data = None
+    if state_data and state_data.get("status") == "completed":
+        return "exited", state_data.get("return_code")
+    return "running", None
+
+
+def list_processes(profile: str) -> List[Dict[str, Any]]:
+    """Snapshot the registry filtered to the authenticated profile.
+
+    The fields returned power the Process Manager list UI.  ``expire_time``
+    is converted from ``time.monotonic()`` deltas to a wall-clock ISO
+    timestamp because the UI has no access to the backend's monotonic clock.
+    """
+    now_wall = time.time()
+    now_mono = time.monotonic()
+    result: List[Dict[str, Any]] = []
+    for pid, info in list(_process_registry.items()):
+        if profile and info.profile and info.profile != profile:
+            continue
+        status, exit_code = process_status(info)
+        expire_at_wall = now_wall + max(0.0, info.expire_time - now_mono)
+        result.append({
+            "process_id": pid,
+            "command": info.command,
+            "working_dir": info.working_dir,
+            "log_dir": info.log_dir,
+            "status": status,
+            "exit_code": exit_code,
+            "created_at": info.created_at,
+            "expire_at": expire_at_wall,
+            "is_pty": info.is_pty,
+        })
+    # Newest first — matches user expectation for a process list.
+    result.sort(key=lambda row: row["created_at"], reverse=True)
+    return result
+
+
+def _require_process(process_id: str, profile: str) -> ProcessInfo:
+    """Look up a process by id and verify profile ownership.
+
+    Raises ``KeyError`` for unknown pids and ``PermissionError`` for
+    cross-profile access.  Callers in the API layer translate these to 404
+    / 403 (or WebSocket close 1008).
+    """
+    info = _process_registry.get(process_id)
+    if info is None:
+        raise KeyError(process_id)
+    if profile and info.profile and info.profile != profile:
+        raise PermissionError(process_id)
+    return info
+
+
+async def write_stdin_to_process(
+    process_id: str,
+    *,
+    profile: str,
+    input_text: Optional[str] = None,
+    keys: Optional[List[str]] = None,
+    line_ending: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Send stdin to a long-running process.
+
+    Shared between the agent-facing ``ExecShellInputTool`` and the Process
+    Manager API (REST + WS).  Returns a structured dict suitable for the
+    tool result or a JSON response; errors are surfaced under an ``error``
+    key rather than raised, so the agent's contract (always returns a
+    structured result, never a 500) is preserved.
+    """
+    if not process_id:
+        return {
+            "error": "Missing parameter",
+            "message": "The 'process_id' parameter is required.",
+        }
+
+    if (input_text is None) == (keys is None):
+        return {
+            "error": "Invalid parameters",
+            "message": "Provide exactly one of 'input_text' or 'keys'.",
+        }
+
+    try:
+        info = _require_process(process_id, profile)
+    except KeyError:
+        return {
+            "error": "Process not found",
+            "message": (
+                f"No running process with id '{process_id}'. "
+                "It may have exited or been cleaned up."
+            ),
+        }
+    except PermissionError:
+        return {
+            "error": "Forbidden",
+            "message": (
+                f"Process '{process_id}' belongs to a different profile."
+            ),
+        }
+
+    if line_ending is None:
+        if info.is_pty and platform.system() == "Windows":
+            line_ending = "\r"
+        else:
+            line_ending = "\n"
+
+    if keys is not None:
+        if not isinstance(keys, list) or not keys:
+            return {
+                "error": "Invalid parameters",
+                "message": "'keys' must be a non-empty array.",
+            }
+        unknown = [k for k in keys if k not in _KEY_NAME_TO_BYTES]
+        if unknown:
+            return {
+                "error": "Invalid parameters",
+                "message": (
+                    f"Unknown key name(s): {unknown}. Valid: "
+                    f"{sorted(_KEY_NAME_TO_BYTES.keys())}."
+                ),
+            }
+        payload: Optional[str] = None
+    else:
+        if line_ending == "none":
+            payload = input_text or ""
+        else:
+            payload = (input_text or "") + line_ending
+
+    process = info.process
+
+    if process.returncode is not None:
+        return {
+            "error": "Process already exited",
+            "message": (
+                f"Process '{process_id}' has already exited with "
+                f"code {process.returncode}."
+            ),
+            "return_code": process.returncode,
+            "process_id": process_id,
+        }
+
+    try:
+        if keys is not None:
+            key_bytes = [_KEY_NAME_TO_BYTES[k].encode("utf-8") for k in keys]
+            for i, chunk in enumerate(key_bytes):
+                process.stdin.write(chunk)
+                await process.stdin.drain()
+                if i < len(key_bytes) - 1:
+                    await asyncio.sleep(_KEYSTROKE_DELAY_SEC)
+        else:
+            payload_bytes = (payload or "").encode("utf-8")
+            logger.debug(
+                f"write_stdin_to_process({process_id}): writing "
+                f"{payload_bytes!r} to stdin"
+            )
+            process.stdin.write(payload_bytes)
+            await process.stdin.drain()
+    except Exception as exc:
+        return {
+            "error": "Write error",
+            "message": f"Failed to write to process stdin: {exc}",
+            "process_id": process_id,
+        }
+
+    return {
+        "process_id": process_id,
+        "input_sent": True,
+        "command": info.command,
+        "message": "Input sent. Use exec shell stdout to read the response.",
+    }
+
+
+async def resize_pty(process_id: str, cols: int, rows: int, *, profile: str) -> Dict[str, Any]:
+    """Resize the PTY window for a process.  No-op (returns ok=False) for
+    non-PTY processes — the UI still gets a structured response."""
+    try:
+        info = _require_process(process_id, profile)
+    except KeyError:
+        return {"ok": False, "error": "Process not found"}
+    except PermissionError:
+        return {"ok": False, "error": "Forbidden"}
+    if not info.is_pty:
+        return {"ok": False, "error": "Not a PTY process", "is_pty": False}
+    try:
+        info.process.resize(int(cols), int(rows))  # type: ignore[union-attr]
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "cols": int(cols), "rows": int(rows)}
+
+
+async def stop_process(process_id: str, *, profile: str) -> Dict[str, Any]:
+    """Terminate a long-running process and return its final output.
+
+    Shared between the agent-facing ``ExecShellStopTool`` and the Process
+    Manager REST API.  Evicts the registry entry on success.
+    """
+    if not process_id:
+        return {
+            "error": "Missing parameter",
+            "message": "The 'process_id' parameter is required.",
+        }
+
+    # Verify ownership before mutating state.
+    try:
+        info_preview = _require_process(process_id, profile)
+    except KeyError:
+        return {
+            "error": "Process not found",
+            "message": (
+                f"No running process with id '{process_id}'. "
+                "It may have already exited or been cleaned up."
+            ),
+        }
+    except PermissionError:
+        return {
+            "error": "Forbidden",
+            "message": (
+                f"Process '{process_id}' belongs to a different profile."
+            ),
+        }
+
+    info = _process_registry.pop(process_id, None)
+    if info is None:
+        # Race: someone else popped it between the check and now.
+        info = info_preview
+
+    process = info.process
+
+    if info.log_writer_state and info.log_writer_state.task:
+        info.log_writer_state.stopped = True
+        info.log_writer_state.task.cancel()
+        try:
+            await info.log_writer_state.task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    # PTY processes need EOF (^D) before terminate so interactive shells
+    # (ssh, bash -i) exit cleanly instead of being killed mid-session.
+    if info.is_pty and process.returncode is None:
+        try:
+            process.send_eof()  # type: ignore[union-attr]
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2.0)
+        except (asyncio.TimeoutError, Exception):
+            pass
+
+    if process.stdin:
+        try:
+            process.stdin.close()
+        except Exception:
+            pass
+
+    if process.returncode is None:
+        try:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+        except Exception:
+            pass
+
+    if info.is_pty:
+        try:
+            process.close_master()  # type: ignore[union-attr]
+        except Exception:
+            pass
+
+    final_output = ""
+    if info.log_dir and os.path.isdir(info.log_dir):
+        log_files = sorted(
+            [f for f in os.listdir(info.log_dir) if f.endswith(".log")],
+            key=lambda f: int(f.split(".")[0]),
+        )
+        for fname in log_files:
+            try:
+                with open(os.path.join(info.log_dir, fname), "r",
+                          encoding="utf-8") as fh:
+                    final_output += fh.read()
+            except Exception:
+                pass
+        shutil.rmtree(info.log_dir, ignore_errors=True)
+
+    return {
+        "stdout": final_output,
+        "return_code": process.returncode,
+        "stopped": True,
+        "process_id": process_id,
+        "command": info.command,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -950,7 +1400,7 @@ class ExecShellTool(BuiltInTool):
             expire_time = time.monotonic() + (cleanup_ttl_hours * 3600)
             _process_registry[process_id] = ProcessInfo(
                 process=proc,
-                created_at=time.monotonic(),
+                created_at=time.time(),
                 working_dir=shell_working_directory,
                 command=command,
                 log_dir=log_dir,
@@ -959,6 +1409,7 @@ class ExecShellTool(BuiltInTool):
                 is_long_running=True,
                 is_pty=use_pty,
                 task_id=current_task_id_var.get(),
+                profile=arguments.get("_profile") or None,
             )
 
             logger.info(
@@ -1094,134 +1545,23 @@ class ExecShellInputTool(BuiltInTool):
     }
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        # Thin adapter over ``write_stdin_to_process`` — shared with the
+        # Process Manager API so both entry points exercise the same code.
         process_id = arguments.get("process_id", "").strip()
-        input_text = arguments.get("input_text")
-        keys = arguments.get("keys")
-        line_ending = arguments.get("line_ending")
-
-        if not process_id:
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Missing parameter",
-                    "message": "The 'process_id' parameter is required.",
-                }
-            )
-
-        if (input_text is None) == (keys is None):
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Invalid parameters",
-                    "message": (
-                        "Provide exactly one of 'input_text' or 'keys'."
-                    ),
-                }
-            )
-
-        info = _process_registry.get(process_id)
-        if not info:
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Process not found",
-                    "message": (
-                        f"No running process with id '{process_id}'. "
-                        "It may have exited or been cleaned up."
-                    ),
-                }
-            )
-
-        # Windows ConPTY treats \r (not \n) as Enter; apps reading stdin via
-        # a PTY on Windows won't unblock until they see \r.  Pick the default
-        # accordingly so callers who don't specify line_ending Just Work.
-        # Explicit values (including "\n") are respected as-is.
-        if line_ending is None:
-            if info.is_pty and platform.system() == "Windows":
-                line_ending = "\r"
-            else:
-                line_ending = "\n"
-
         logger.debug(
             f"exec_shell_input called with process_id={process_id!r}, "
-            f"input_text={input_text!r}, keys={keys!r}, "
-            f"line_ending={line_ending!r} (is_pty={info.is_pty})"
+            f"input_text={arguments.get('input_text')!r}, "
+            f"keys={arguments.get('keys')!r}, "
+            f"line_ending={arguments.get('line_ending')!r}"
         )
-
-        if keys is not None:
-            if not isinstance(keys, list) or not keys:
-                return BuiltInToolResult(
-                    structured_content={
-                        "error": "Invalid parameters",
-                        "message": "'keys' must be a non-empty array.",
-                    }
-                )
-            unknown = [k for k in keys if k not in _KEY_NAME_TO_BYTES]
-            if unknown:
-                return BuiltInToolResult(
-                    structured_content={
-                        "error": "Invalid parameters",
-                        "message": (
-                            f"Unknown key name(s): {unknown}. Valid: "
-                            f"{sorted(_KEY_NAME_TO_BYTES.keys())}."
-                        ),
-                    }
-                )
-            payload = None
-        else:
-            if line_ending == "none":
-                payload = input_text
-            else:
-                payload = input_text + line_ending
-
-        process = info.process
-
-        if process.returncode is not None:
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Process already exited",
-                    "message": (
-                        f"Process '{process_id}' has already exited with "
-                        f"code {process.returncode}. Use exec shell stdout "
-                        "to read remaining output."
-                    ),
-                    "return_code": process.returncode,
-                    "process_id": process_id,
-                }
-            )
-
-        try:
-            if keys is not None:
-                key_bytes = [_KEY_NAME_TO_BYTES[k].encode("utf-8") for k in keys]
-                for i, chunk in enumerate(key_bytes):
-                    process.stdin.write(chunk)
-                    await process.stdin.drain()
-                    if i < len(key_bytes) - 1:
-                        await asyncio.sleep(_KEYSTROKE_DELAY_SEC)
-            else:
-                payload_bytes = payload.encode("utf-8")
-                logger.debug(
-                    f"exec_shell_input({process_id}): writing "
-                    f"{payload_bytes!r} to stdin"
-                )
-                process.stdin.write(payload_bytes)
-                await process.stdin.drain()
-        except Exception as e:
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Write error",
-                    "message": f"Failed to write to process stdin: {str(e)}",
-                    "process_id": process_id,
-                }
-            )
-
-        return BuiltInToolResult(
-            structured_content={
-                "process_id": process_id,
-                "input_sent": True,
-                "command": info.command,
-                "message": (
-                    "Input sent. Use exec shell stdout to read the response."
-                ),
-            }
+        result = await write_stdin_to_process(
+            process_id,
+            profile=arguments.get("_profile") or "",
+            input_text=arguments.get("input_text"),
+            keys=arguments.get("keys"),
+            line_ending=arguments.get("line_ending"),
         )
+        return BuiltInToolResult(structured_content=result)
 
 
 def _build_output_instruction(
@@ -1477,100 +1817,13 @@ class ExecShellStopTool(BuiltInTool):
     }
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
-        process_id = arguments.get("process_id", "").strip()
-
-        if not process_id:
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Missing parameter",
-                    "message": "The 'process_id' parameter is required.",
-                }
-            )
-
-        info = _process_registry.pop(process_id, None)
-        if not info:
-            return BuiltInToolResult(
-                structured_content={
-                    "error": "Process not found",
-                    "message": (
-                        f"No running process with id '{process_id}'. "
-                        "It may have already exited or been cleaned up."
-                    ),
-                }
-            )
-
-        process = info.process
-
-        if info.log_writer_state and info.log_writer_state.task:
-            info.log_writer_state.stopped = True
-            info.log_writer_state.task.cancel()
-            try:
-                await info.log_writer_state.task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-        # PTY processes need EOF (^D) before terminate so interactive shells
-        # (ssh, bash -i) exit cleanly instead of being killed mid-session.
-        if info.is_pty and process.returncode is None:
-            try:
-                process.send_eof()  # type: ignore[union-attr]
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
-
-        if process.stdin:
-            try:
-                process.stdin.close()
-            except Exception:
-                pass
-
-        if process.returncode is None:
-            try:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        pass
-            except Exception:
-                pass
-
-        if info.is_pty:
-            try:
-                process.close_master()  # type: ignore[union-attr]
-            except Exception:
-                pass
-
-        final_output = ""
-        if info.log_dir and os.path.isdir(info.log_dir):
-            log_files = sorted(
-                [f for f in os.listdir(info.log_dir) if f.endswith(".log")],
-                key=lambda f: int(f.split(".")[0]),
-            )
-            for fname in log_files:
-                try:
-                    with open(os.path.join(info.log_dir, fname), "r",
-                              encoding="utf-8") as fh:
-                        final_output += fh.read()
-                except Exception:
-                    pass
-            shutil.rmtree(info.log_dir, ignore_errors=True)
-
-        return BuiltInToolResult(
-            structured_content={
-                "stdout": final_output,
-                "return_code": process.returncode,
-                "stopped": True,
-                "process_id": process_id,
-                "command": info.command,
-            }
+        # Thin adapter over ``stop_process`` — shared with the Process
+        # Manager REST API.
+        result = await stop_process(
+            arguments.get("process_id", "").strip(),
+            profile=arguments.get("_profile") or "",
         )
+        return BuiltInToolResult(structured_content=result)
 
 
 def get_tools(config: dict) -> list[BuiltInTool]:
