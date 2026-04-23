@@ -602,6 +602,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         on_first_setup=on_first_setup,
         connect_persisted_tool=_connect_persisted_tool,
         drop_profile_embeddings=openpa_agent.drop_profile_embeddings,
+        agent_executor=agent_executor,
     ))
 
     middleware_stack = [

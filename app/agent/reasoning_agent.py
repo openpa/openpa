@@ -230,10 +230,10 @@ class ReasoningAgent:
         parts = [
             "\n==========Start Skills Instructions==========\n"
             "You should only follow the instructions provided in the content loaded below. "
-            "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons."
-            "When running a command instructed in **Skills Instructions**, you must include the "
-            "prefix `[skill][<skill-name>]<command>`. Conversely, commands requested by the user "
-            "must be sent to the **Exec Shell** tool in the format `[user][]<command>`."
+            "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons.\n"
+            "[VERY IMPORTANT] When running a command instructed in **Skills Instructions**, you must detect "
+            "<skill-name> and include the prefix `[skill][<skill-name>][<command>`. Conversely, commands "
+            "requested by the user must be sent to the **Exec Shell** tool in the format `[user][][<command>]`."
         ]
         # If any loaded skill declares environment variables, remind the agent
         # to source the per-skill .env file before running any script -- exec_shell
@@ -376,7 +376,7 @@ class ReasoningAgent:
         # appended (and re-invoked skills are filtered out of the Tools block).
         self.instruction = self._build_instruction()
 
-        # logger.info(f"=== Instruction ===\n{self.instruction}")
+        logger.info(f"=== Instruction ===\n{self.instruction}")
         # logger.info(f"=== Reasoning Step ===\n{input_section}")
 
         # Action enum is the set of tool_ids, minus skills already folded into

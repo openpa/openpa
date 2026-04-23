@@ -21,6 +21,7 @@ def get_api_routes(
     on_first_setup=None,
     connect_persisted_tool=None,
     drop_profile_embeddings=None,
+    agent_executor=None,
 ) -> list[Route]:
     """Collect all API routes.
 
@@ -47,7 +48,9 @@ def get_api_routes(
     routes.extend(get_token_routes())
     routes.extend(get_file_routes())
     if conversation_storage:
-        routes.extend(get_conversation_routes(conversation_storage))
+        routes.extend(get_conversation_routes(
+            conversation_storage, agent_executor=agent_executor,
+        ))
     if config_storage:
         routes.extend(get_config_routes(
             config_storage, conversation_storage,

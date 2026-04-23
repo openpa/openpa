@@ -40,7 +40,7 @@ logger.add(
     log_file_path,
     level="DEBUG",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-    rotation="10 MB",
+    rotation="1 MB",
     retention="10 days",
     enqueue=True,
 )

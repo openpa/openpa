@@ -6,7 +6,10 @@ from app.storage.conversation_storage import ConversationStorage
 from app.utils import logger
 
 
-def get_conversation_routes(conversation_storage: ConversationStorage) -> list[Route]:
+def get_conversation_routes(
+    conversation_storage: ConversationStorage,
+    agent_executor=None,
+) -> list[Route]:
 
     async def handle_list_conversations(request: Request) -> JSONResponse:
         """List conversations for a profile.
@@ -105,6 +108,14 @@ def get_conversation_routes(conversation_storage: ConversationStorage) -> list[R
             return await handle_delete_conversation(request)
         return JSONResponse({"error": "Method not allowed"}, status_code=405)
 
+    async def handle_cancel_task(request: Request) -> JSONResponse:
+        """Cancel an in-flight agent task. Idempotent."""
+        task_id = request.path_params["task_id"]
+        cancelled = False
+        if agent_executor is not None:
+            cancelled = agent_executor.cancel_by_task_id(task_id)
+        return JSONResponse({"cancelled": cancelled})
+
     return [
         Route(
             "/api/conversations",
@@ -120,5 +131,10 @@ def get_conversation_routes(conversation_storage: ConversationStorage) -> list[R
             "/api/conversations/{conversation_id}/messages",
             endpoint=handle_get_messages,
             methods=["GET"],
+        ),
+        Route(
+            "/api/tasks/{task_id}/cancel",
+            endpoint=handle_cancel_task,
+            methods=["POST"],
         ),
     ]

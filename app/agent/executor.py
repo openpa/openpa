@@ -31,6 +31,7 @@ from app.storage.conversation_storage import ConversationStorage
 from app.utils import logger, build_table_embeddings, find_similar_items
 from app.utils.common import convert_db_messages_to_history, convert_task_history_to_messages
 from app.utils.context_storage import get_context
+from app.utils.task_context import current_task_id_var
 
 
 class OpenPAAgentExecutor(AgentExecutor):
@@ -38,7 +39,7 @@ class OpenPAAgentExecutor(AgentExecutor):
 
     def __init__(self, openpa_agent: OpenPAAgent, conversation_storage: ConversationStorage | None = None):
         logger.debug("Initializing OpenPAAgentExecutor...")
-        self._active_sessions: set[str] = set()
+        self._running_tasks: dict[str, asyncio.Task] = {}
         self.openpa_agent: OpenPAAgent | None = openpa_agent
         self.conversation_storage = conversation_storage
 
@@ -124,6 +125,14 @@ class OpenPAAgentExecutor(AgentExecutor):
 
         # Extract reasoning preference from request metadata (default: True)
         reasoning = context.metadata.get("reasoning", True)
+
+        # Register this asyncio task so the cancel API can target it, and
+        # publish the task id to the ContextVar so downstream code (notably
+        # exec_shell's process registry) can tag spawned subprocesses for
+        # later targeted termination.
+        task_key = task.id
+        self._running_tasks[task_key] = asyncio.current_task()
+        ctx_token = current_task_id_var.set(task_key)
 
         try:
             async for chunk in self.openpa_agent.run(query, history_messages, context_id, profile=profile, reasoning=reasoning):
@@ -229,9 +238,32 @@ class OpenPAAgentExecutor(AgentExecutor):
                     # presence of this field is the signal to summarize reasoning.
                     if chunk["type"] == ChatCompletionTypeEnum.DONE and chunk.get("input_section"):
                         reasoning_input_section = chunk["input_section"]
+        except asyncio.CancelledError:
+            logger.info(f"Task {task_key} cancelled by user")
+            from app.tools.builtin.exec_shell import cancel_processes_by_task
+            killed = await cancel_processes_by_task(task_key)
+            if killed:
+                logger.info(
+                    f"Killed {killed} subprocess(es) for cancelled task {task_key}"
+                )
+            try:
+                await updater.update_status(
+                    TaskState.canceled,
+                    message=new_agent_text_message("Stopped by user."),
+                    final=True,
+                )
+            except Exception:
+                logger.exception("Failed to send canceled status")
+            current_task_id_var.reset(ctx_token)
+            self._running_tasks.pop(task_key, None)
+            return
         except ServerError:
+            current_task_id_var.reset(ctx_token)
+            self._running_tasks.pop(task_key, None)
             raise
         except Exception as e:
+            current_task_id_var.reset(ctx_token)
+            self._running_tasks.pop(task_key, None)
             logger.error(f"Error during agent execution: {e}")
             await updater.update_status(
                 TaskState.failed,
@@ -363,6 +395,9 @@ class OpenPAAgentExecutor(AgentExecutor):
             except Exception as e:
                 logger.error(f"Failed to persist conversation messages: {e}")
 
+        current_task_id_var.reset(ctx_token)
+        self._running_tasks.pop(task_key, None)
+
     async def _summarize_reasoning(self, input_section: str, profile: str) -> str:
         logger.info("input_section for reasoning summary: " + input_section)
         """Produce a Markdown TL;DR of a completed ReAct trace via the low model group."""
@@ -392,21 +427,23 @@ class OpenPAAgentExecutor(AgentExecutor):
         return "".join(collected).strip()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue):
-        """Cancel the execution for the given context.
-
-        Currently logs the cancellation attempt as the underlying ADK runner
-        doesn't support direct cancellation of ongoing tasks.
-        """
-        session_id = context.context_id
-        if session_id in self._active_sessions:
-            logger.info(
-                f"Cancellation requested for active weather session: {session_id}"
-            )
-            # TODO: Implement proper cancellation when ADK supports it
-            self._active_sessions.discard(session_id)
-        else:
-            logger.debug(
-                f"Cancellation requested for inactive weather session: {session_id}"
-            )
-
+        """A2A-protocol cancel hook: cancel the running asyncio task for ``task_id``."""
+        task_id = context.task_id
+        if task_id and self.cancel_by_task_id(task_id):
+            logger.info(f"A2A cancel: cancelled task {task_id}")
+            return
+        logger.info(f"A2A cancel: no active task for {task_id!r}")
         raise ServerError(error=UnsupportedOperationError())
+
+    def cancel_by_task_id(self, task_id: str) -> bool:
+        """Cancel the running asyncio task for ``task_id``.
+
+        Returns True if a live task was found and cancellation was requested,
+        False otherwise. Idempotent: safe to call when the task has already
+        completed or never existed.
+        """
+        running = self._running_tasks.get(task_id)
+        if running is None or running.done():
+            return False
+        running.cancel()
+        return True

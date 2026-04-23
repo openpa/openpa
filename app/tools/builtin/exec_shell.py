@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Union
 from app.config.settings import BaseConfig
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig
+from app.utils.task_context import current_task_id_var
 from app.tools.builtin.exec_shell_classifier import detect_tui_sequences
 from app.tools.builtin.exec_shell_input_mode import (
     TerminalState,
@@ -118,6 +119,10 @@ class ProcessInfo:
     expire_time: float = 0.0
     is_long_running: bool = False
     is_pty: bool = False
+    # The agent task that spawned this process, used for targeted cancellation
+    # via ``cancel_processes_by_task``. Populated from the executor's ContextVar
+    # at registration time.
+    task_id: Optional[str] = None
 
 
 _process_registry: Dict[str, ProcessInfo] = {}
@@ -550,6 +555,32 @@ async def _noop_async_cm():
 # Cleanup
 # ---------------------------------------------------------------------------
 
+async def cancel_processes_by_task(task_id: str) -> int:
+    """Kill all subprocesses tagged with ``task_id``. Returns the count killed."""
+    if not task_id:
+        return 0
+    killed = 0
+    for pid, info in list(_process_registry.items()):
+        if info.task_id != task_id:
+            continue
+        try:
+            if info.log_writer_state and info.log_writer_state.task:
+                info.log_writer_state.stopped = True
+                info.log_writer_state.task.cancel()
+            if info.process.returncode is None:
+                info.process.kill()
+            killed += 1
+            logger.info(
+                f"cancel_processes_by_task: killed process {pid} "
+                f"({info.command!r}) for task {task_id}"
+            )
+        except Exception:
+            logger.exception(
+                f"cancel_processes_by_task: failed to kill process {pid}"
+            )
+    return killed
+
+
 async def _cleanup_stale_processes() -> int:
     """Kill and remove processes whose ``expire_time`` has passed."""
     now = time.monotonic()
@@ -596,9 +627,9 @@ class ExecShellTool(BuiltInTool):
         "it is automatically respawned under a pseudo-terminal. For commands "
         "that hang without a TTY instead of erroring (notably ssh), pass "
         "`pty: true` explicitly. In PTY mode stdout and stderr are merged into `stdout`.\n"
-        "All commands must include the prefix `[<source>][<skill-name>|<empty>]<command>`, where the source can "
+        "All commands must include the prefix [<source>][<skill-name>|<empty>][<command>], where the source can "
         "be **user** or **skill**.\n"
-        "E.g, '[user][] check disk usage', '[user][] ping google.com', or '[skill][system_file] ssh user@host' with pty=true."
+        "E.g, '[user][][check disk usage]', '[user][][ping google.com]', or '[skill][system_file][ssh user@host]' with pty=true."
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -617,7 +648,7 @@ class ExecShellTool(BuiltInTool):
             },
             "current_shell_directory": {
                 "type": "string",
-                "description": "The current working directory for the shell command",
+                "description": "If user wants to specify the current working directory for the shell command, they can provide it here. If not provided, it will default to empty",
             },
             "timeout": {
                 "type": "integer",
@@ -896,6 +927,7 @@ class ExecShellTool(BuiltInTool):
                 expire_time=expire_time,
                 is_long_running=True,
                 is_pty=use_pty,
+                task_id=current_task_id_var.get(),
             )
 
             logger.info(
@@ -974,8 +1006,8 @@ class ExecShellInputTool(BuiltInTool):
         "process_id. Writes to the process's stdin; use exec shell output to "
         "read the response.\n"
         "Two input modes — supply exactly one:\n"
-        "  1) input_text — plain text or raw bytes"
-        "  2) keys — array of symbolic key names, batched in one call. "
+        "  1) input_text — plain text or raw bytes (don't need append \\n, it will be added automatically).\n"
+        "  2) keys — array of symbolic key names, batched in one call.\n"
         "Valid names: up, down, left, right, enter, tab, space, escape, "
         "backspace, ctrl+c. Implies line_ending='none'.\n"
         "For selection menus you can batch navigation in one call — e.g. "
@@ -1030,6 +1062,8 @@ class ExecShellInputTool(BuiltInTool):
         input_text = arguments.get("input_text")
         keys = arguments.get("keys")
         line_ending = arguments.get("line_ending", "\n")
+        # print line_ending as repr for debugging, even print the raw value to logs in case of invisible chars
+        logger.debug(f"exec_shell_input called with process_id={process_id!r}, input_text={input_text!r}, keys={keys!r}, line_ending={line_ending!r} (raw: {line_ending})")
 
         if not process_id:
             return BuiltInToolResult(
