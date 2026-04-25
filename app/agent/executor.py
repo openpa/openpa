@@ -206,6 +206,49 @@ class OpenPAAgentExecutor(AgentExecutor):
                                 last_chunk=True,
                             )
 
+                    # Emit a "terminal" artifact for every long-running process
+                    # spawned by exec_shell in this observation. The DataPart
+                    # built by the builtin adapter carries {tool_name: structured_content};
+                    # we scan each structured_content for category == "long_running".
+                    emitted_terminal_pids: set[str] = set()
+                    for obs_part in observation_parts:
+                        root = getattr(obs_part, "root", obs_part)
+                        if not isinstance(root, DataPart):
+                            continue
+                        data = root.data or {}
+                        # Two shapes to support: the adapter wraps results under
+                        # the tool name, but some code paths may pass the bare
+                        # structured_content through.
+                        candidates: list[dict] = []
+                        for value in data.values() if isinstance(data, dict) else []:
+                            if isinstance(value, dict):
+                                candidates.append(value)
+                        if isinstance(data, dict):
+                            candidates.append(data)
+                        for payload in candidates:
+                            pid = payload.get("process_id")
+                            if (
+                                payload.get("category") == "long_running"
+                                and isinstance(pid, str)
+                                and pid not in emitted_terminal_pids
+                            ):
+                                emitted_terminal_pids.add(pid)
+                                cmd = str(payload.get("command", "") or "")
+                                short = cmd if len(cmd) <= 36 else cmd[:36].rstrip() + " …"
+                                terminal_payload = {
+                                    "process_id": pid,
+                                    "command": cmd,
+                                    "command_short": short,
+                                    "working_directory": payload.get("working_directory", ""),
+                                    "pty": bool(payload.get("pty", False)),
+                                }
+                                await updater.add_artifact(
+                                    [Part(root=DataPart(data=terminal_payload, kind="data", metadata=None))],
+                                    name="terminal",
+                                    append=False,
+                                    last_chunk=True,
+                                )
+
                     # Attach observation parts to the latest thinking step for storage
                     if collected_thinking_steps:
                         for step in reversed(collected_thinking_steps):

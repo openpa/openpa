@@ -1433,6 +1433,27 @@ class ExecShellTool(BuiltInTool):
                 silence_threshold=log_silence_threshold,
                 terminal_state=terminal_state,
             )
+
+            # Seed the ring buffer with the output captured during classification.
+            # Those bytes were consumed from the process streams before the log
+            # writer task existed, so without this step the WebSocket snapshot
+            # for a late-joining subscriber (including the Terminal panel chip
+            # flow) would miss everything printed before the long-running
+            # classification fired — e.g. a prompt like "Please enter your name:".
+            # No subscribers exist yet, so _broadcast_chunks just populates
+            # ring_buffer; no lock needed (the writer task hasn't started).
+            initial_chunks: List[Tuple[str, str]] = []
+            initial_stdout = result.get("stdout") or ""
+            if initial_stdout:
+                if use_pty:
+                    update_terminal_state(writer_state.terminal_state, initial_stdout)
+                initial_chunks.append(("stdout", initial_stdout))
+            initial_stderr = result.get("stderr") or ""
+            if initial_stderr and not use_pty:
+                initial_chunks.append(("stderr", initial_stderr))
+            if initial_chunks:
+                _broadcast_chunks(writer_state, initial_chunks)
+
             writer_state.task = asyncio.create_task(
                 _log_writer_loop(proc, writer_state)
             )
