@@ -496,6 +496,19 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     except Exception:  # noqa: BLE001
         logger.exception("Failed to schedule autostart run on boot")
 
+    # 7d. Skill event manager: arm watchdogs for every persisted subscription.
+    try:
+        from app.events import get_event_manager
+        from app.events import runner as event_runner
+
+        event_runner.set_globals(
+            openpa_agent=openpa_agent,
+            conversation_storage=conversation_storage,
+        )
+        get_event_manager().start(loop)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to start skill event manager")
+
     # 8. Agent card
     skill = AgentSkill(
         id=BaseConfig.AGENT_ID,
@@ -646,5 +659,21 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         on_shutdown=[_on_shutdown],
     )
     config = uvicorn.Config(app, host=host, port=port)
-    server = uvicorn.Server(config)
+
+    import os
+
+    class _ForceQuitServer(uvicorn.Server):
+        _sigint_count = 0
+
+        def handle_exit(self, sig, frame):
+            type(self)._sigint_count += 1
+            if type(self)._sigint_count >= 2:
+                os._exit(130)
+            print(
+                "\nShutting down... press Ctrl+C again to force quit.",
+                flush=True,
+            )
+            super().handle_exit(sig, frame)
+
+    server = _ForceQuitServer(config)
     await server.serve()

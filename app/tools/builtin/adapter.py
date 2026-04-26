@@ -285,6 +285,10 @@ class BuiltInToolAdapter:
                 # state (e.g. browser keeps a separate Chrome profile per OpenPA profile).
                 tool_args["_profile"] = profile
 
+                # Reasoning-agent context_id (== conversation.context_id), so a
+                # tool can resolve the calling conversation when needed.
+                tool_args["_context_id"] = context_id
+
                 # Inject arguments from metadata (e.g., latitude/longitude)
                 if metadata and "arguments" in metadata:
                     meta_arguments = metadata["arguments"]

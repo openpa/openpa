@@ -185,3 +185,30 @@ class AutostartProcessModel(Base):
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_attempted_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class SkillEventSubscriptionModel(Base):
+    """Conversation-scoped subscription to a skill's filesystem event.
+
+    A row says: when ``<skill_dir>/events/<event_type>/<id>.md`` appears for
+    the skill named ``skill_name``, run ``action`` (a natural-language
+    instruction) in ``conversation_id`` with the file content appended.
+    """
+    __tablename__ = "skill_event_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    profile: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    skill_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "skill_name", "event_type",
+            name="uq_skill_event_subs",
+        ),
+    )

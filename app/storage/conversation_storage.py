@@ -11,7 +11,7 @@ from a2a.server.models import Base
 from app.storage.models import (
     AuthTokenModel, AutostartProcessModel, ConversationModel, LLMConfigModel,
     MessageModel, ProfileModel, ProfileToolModel, ServerConfigModel,
-    ToolConfigModel, ToolModel,
+    SkillEventSubscriptionModel, ToolConfigModel, ToolModel,
 )
 from app.utils.logger import logger
 
@@ -58,6 +58,7 @@ class ConversationStorage:
                 ToolModel,
                 ProfileToolModel, ToolConfigModel, AuthTokenModel,
                 AutostartProcessModel,
+                SkillEventSubscriptionModel,
             ]:
                 mapper = class_mapper(model_class)
                 for table in mapper.tables:

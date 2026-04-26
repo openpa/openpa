@@ -375,6 +375,7 @@ async def _spawn_unix_pty(
         env["TERM"] = "xterm-256color"
         env["COLUMNS"] = str(cols)
         env["LINES"] = str(rows)
+        env["PYTHONIOENCODING"] = "utf-8"
 
         proc = await asyncio.create_subprocess_exec(
             shell, *flags, command,
@@ -411,6 +412,7 @@ async def _spawn_windows_pty(
     env["TERM"] = "xterm-256color"
     env["COLUMNS"] = str(cols)
     env["LINES"] = str(rows)
+    env["PYTHONIOENCODING"] = "utf-8"
     argv = [shell, *flags, command]
 
     def _spawn():

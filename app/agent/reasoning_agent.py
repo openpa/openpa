@@ -214,9 +214,16 @@ class ReasoningAgent:
     # ── prompt building ───────────────────────────────────────────────
 
     def _build_tools_block(self) -> str:
+        # ``register_skill_event`` is only meaningful in iterations where at
+        # least one skill with ``metadata.events`` has already been folded
+        # into "Start Skills Instructions". Hide it from the Tools section
+        # (and the action enum, see _active_action_names) by default.
+        skill_events_available = self._has_loaded_skill_with_events()
         sections = []
         for tool in self._tools:
             if tool.tool_id in self._loaded_skill_ids:
+                continue
+            if tool.tool_id == "register_skill_event" and not skill_events_available:
                 continue
             args = self._load_arguments(tool.tool_id) if tool.tool_type in (
                 ToolType.A2A, ToolType.MCP, ToolType.BUILTIN,
@@ -233,7 +240,7 @@ class ReasoningAgent:
             "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons.\n"
             "[VERY IMPORTANT] When running a command instructed in **Skills Instructions**, you must detect "
             "<skill-name> and include the prefix `[skill][<skill-name>][<command>`. Conversely, commands "
-            "requested by the user must be sent to the **Exec Shell** tool in the format `[user][][<command>]`."
+            "requested by the user must be sent to the **Exec Shell** tool in the format `[user][][<command>]`.\n"
         ]
         # If any loaded skill declares environment variables, remind the agent
         # to source the per-skill .env file before running any script -- exec_shell
@@ -264,7 +271,79 @@ class ReasoningAgent:
         return "".join(parts)
 
     def _active_action_names(self) -> List[str]:
-        return [name for name in self._action_names if name not in self._loaded_skill_ids]
+        names = [name for name in self._action_names if name not in self._loaded_skill_ids]
+        # ``register_skill_event`` is only useful once a skill that declares
+        # ``metadata.events`` has been folded into the system prompt. Hide
+        # it from the action enum otherwise so the LLM doesn't try to call
+        # it without an event-bearing skill loaded.
+        if "register_skill_event" in names and not self._has_loaded_skill_with_events():
+            names = [n for n in names if n != "register_skill_event"]
+        return names
+
+    def _has_loaded_skill_with_events(self) -> bool:
+        for tool_id in self._loaded_skill_ids:
+            tool = self._tools_by_id.get(tool_id)
+            info = getattr(tool, "info", None) if tool is not None else None
+            metadata = getattr(info, "metadata", None) if info is not None else None
+            if not isinstance(metadata, dict):
+                continue
+            events = metadata.get("events") or {}
+            if isinstance(events, dict) and events.get("event_type"):
+                return True
+        return False
+
+    def _render_events_hint(self, tool: object) -> str:
+        """Build the trailing hint that nudges the LLM toward register_skill_event.
+
+        Returns an empty string when the loaded skill declares no events.
+        """
+        info = getattr(tool, "info", None)
+        metadata = getattr(info, "metadata", None) if info is not None else None
+        if not isinstance(metadata, dict):
+            return ""
+        events = metadata.get("events") or {}
+        if not isinstance(events, dict):
+            return ""
+        items = events.get("event_type") or []
+        if not isinstance(items, list) or not items:
+            return ""
+        # Use the canonical tool_id (e.g. ``admin__email_cli``) — that's the
+        # same identifier the LLM already sees as this skill's Action label,
+        # and the only key that resolves the ``tools`` table row directly.
+        skill_name = getattr(tool, "tool_id", None) \
+            or getattr(info, "name", None) \
+            or getattr(tool, "name", "")
+        bullets: List[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not name:
+                continue
+            desc = item.get("description") or ""
+            bullets.append(f"- {name}: {desc}" if desc else f"- {name}")
+        if not bullets:
+            return ""
+        names_csv = ", ".join(
+            i["name"] for i in items if isinstance(i, dict) and i.get("name")
+        )
+        return (
+            "## Available events for this skill\n"
+            + "\n".join(bullets)
+            + "\n\n"
+            "If the user wants something to happen automatically whenever one of "
+            "these events fires, call the `register_skill_event` tool with:\n"
+            f"- skill_name: \"{skill_name}\" (use this exact identifier — it "
+            "is the same value you would pass as Action when invoking the "
+            "skill).\n"
+            f"- trigger: one of [{names_csv}] — this fully captures the WHEN.\n"
+            "- action: only WHAT to do, written as a short imperative (e.g. "
+            "\"Summarize the email content\"). DO NOT include the trigger "
+            "condition — phrasings like \"when a new email arrives\", \"on "
+            "new email\", \"whenever ...\" are forbidden, because the trigger "
+            "field already conveys that. The event file's content is "
+            "appended to the action automatically when the event fires."
+        )
 
     def _build_instruction(self) -> str:
         persona = read_persona_file(self.profile)
@@ -360,13 +439,15 @@ class ReasoningAgent:
             )
             self.steps.append(f"Thought: Maximum steps reached\nFinal_Answer: {final_answer}\n")
             self._trim_steps()
-            yield {
+            done_chunk: Dict[str, Any] = {
                 "type": ChatCompletionTypeEnum.DONE,
                 "data": final_answer,
-                "input_section": template_input.format(steps="\n".join(self.steps)),
                 "input_tokens": self._total_input_tokens,
                 "output_tokens": self._total_output_tokens,
             }
+            if self.current_step_count > 1:
+                done_chunk["input_section"] = template_input.format(steps="\n".join(self.steps))
+            yield done_chunk
             return
 
         self.current_step_count += 1
@@ -686,13 +767,18 @@ class ReasoningAgent:
             self._loaded_skill_sections.clear()
             if self.context_id:
                 self._clear_context(self.context_id)
-            yield {
+            done_chunk: Dict[str, Any] = {
                 "type": ChatCompletionTypeEnum.DONE,
                 "data": observation_text,
-                "input_section": template_input.format(steps="\n".join(self.steps)),
                 "input_tokens": self._total_input_tokens,
                 "output_tokens": self._total_output_tokens,
             }
+            # Only attach input_section when the turn was multi-step — its
+            # presence is the signal to callers that the trace is worth
+            # summarizing.
+            if self.current_step_count > 1:
+                done_chunk["input_section"] = template_input.format(steps="\n".join(self.steps))
+            yield done_chunk
             return
 
         if behavior is ToolBehavior.CLARIFY:
@@ -746,6 +832,9 @@ class ReasoningAgent:
             tree_text = generate_dir_tree(dir_path)
             if tree_text:
                 skill_text = f"Skill Directory Structure:\n```\n{tree_text}\n```\n\n{skill_text}"
+            events_hint = self._render_events_hint(tool)
+            if events_hint:
+                skill_text = f"{skill_text}\n\n{events_hint}"
             self._loaded_skill_sections[tool.tool_id] = skill_text
             self._loaded_skill_ids.add(tool.tool_id)
             # The full SKILL.md content is shown to the user in the frontend's

@@ -23,6 +23,7 @@ from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 
 from app.agent.agent import OpenPAAgent
+from app.agent.summary import summarize_reasoning
 from app.config.settings import BaseConfig
 from app.constants import ChatCompletionTypeEnum
 from app.lib.llm import (LLMProvider, GroqLLMProvider)
@@ -35,7 +36,16 @@ from app.utils.task_context import current_task_id_var
 
 
 class OpenPAAgentExecutor(AgentExecutor):
-    """An AgentExecutor that runs the OpenPAAgent."""
+    """An AgentExecutor that runs the OpenPAAgent.
+
+    This implements the A2A protocol surface used by external A2A clients
+    (other agents calling us). The OpenPA web frontend does NOT go through
+    this path anymore -- it POSTs to ``/api/conversations/{id}/messages``
+    and subscribes to ``/api/conversations/{id}/stream`` so streams survive
+    navigation and fan out to multiple tabs. Both paths share the same
+    cancellation registry: see ``cancel_by_task_id`` and the unified
+    ``app.agent.stream_runner.cancel_run``.
+    """
 
     def __init__(self, openpa_agent: OpenPAAgent, conversation_storage: ConversationStorage | None = None):
         logger.debug("Initializing OpenPAAgentExecutor...")
@@ -277,8 +287,9 @@ class OpenPAAgentExecutor(AgentExecutor):
                     # Capture token usage from the final chunk
                     total_input_tokens = chunk.get("input_tokens") or 0
                     total_output_tokens = chunk.get("output_tokens") or 0
-                    # Only DONE from the Final Answer Tool carries input_section;
-                    # presence of this field is the signal to summarize reasoning.
+                    # DONE carries input_section only when the turn was
+                    # multi-step (i.e. worth summarizing); presence of this
+                    # field is the signal to invoke the summarizer.
                     if chunk["type"] == ChatCompletionTypeEnum.DONE and chunk.get("input_section"):
                         reasoning_input_section = chunk["input_section"]
         except asyncio.CancelledError:
@@ -326,7 +337,7 @@ class OpenPAAgentExecutor(AgentExecutor):
             last_chunk=True,
         )
 
-        # Summarize the reasoning chain when the turn ended via Final Answer Tool.
+        # Summarize the reasoning chain when the turn was multi-step.
         # Uses the low model group; failures must not break the user-visible answer.
         summary_text: str | None = None
         if reasoning_input_section:
@@ -341,8 +352,8 @@ class OpenPAAgentExecutor(AgentExecutor):
                     append=False,
                     last_chunk=True,
                 )
-                summary_text = await self._summarize_reasoning(
-                    reasoning_input_section, profile,
+                summary_text = await summarize_reasoning(
+                    self.openpa_agent, reasoning_input_section, profile,
                 )
                 if summary_text:
                     await updater.add_artifact(
@@ -440,34 +451,6 @@ class OpenPAAgentExecutor(AgentExecutor):
 
         current_task_id_var.reset(ctx_token)
         self._running_tasks.pop(task_key, None)
-
-    async def _summarize_reasoning(self, input_section: str, profile: str) -> str:
-        logger.info("input_section for reasoning summary: " + input_section)
-        """Produce a Markdown TL;DR of a completed ReAct trace via the low model group."""
-        if not self.openpa_agent:
-            return ""
-        llm = self.openpa_agent.low_group_llm(profile)
-        messages = [
-            {"role": "system", "content": (
-                "You summarize an agent's ReAct reasoning trace for AI-assisted agent introspection and debugging. "
-                "Output concise GitHub-flavored Markdown. Describe what the agent considered, which tools it used, "
-                "and what it concluded (even including the technical details like process IDs, file paths, API calls, etc). "
-                "Do not invent facts beyond the trace."
-            )},
-            {"role": "user", "content": input_section},
-        ]
-        collected: list[str] = []
-        async for resp in llm.chat_completion(
-            messages=cast(Any, messages),
-            temperature=0.3,
-            max_tokens=1024,
-            retry=2,
-        ):
-            if resp.get("type") == ChatCompletionTypeEnum.CONTENT:
-                data = resp.get("data")
-                if data:
-                    collected.append(data)
-        return "".join(collected).strip()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue):
         """A2A-protocol cancel hook: cancel the running asyncio task for ``task_id``."""

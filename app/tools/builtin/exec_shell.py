@@ -297,6 +297,8 @@ async def _spawn_command(
     command: str, working_dir: str, system: str, shell: str, shell_flag: str,
 ) -> asyncio.subprocess.Process:
     """Spawn a command as a standalone subprocess with piped stdin/stdout/stderr."""
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
     if system == "Windows":
         proc = await asyncio.create_subprocess_exec(
             shell, "-NoLogo", "-NoProfile", shell_flag, command,
@@ -304,6 +306,7 @@ async def _spawn_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir,
+            env=env,
         )
     else:
         proc = await asyncio.create_subprocess_exec(
@@ -312,6 +315,7 @@ async def _spawn_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir,
+            env=env,
         )
     return proc
 
