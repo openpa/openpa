@@ -47,6 +47,14 @@ class NotificationsStreamBus:
         """
         with self._lock:
             subs = list(self._subs.get(profile, ()))
+        try:
+            from app.utils.logger import logger
+            logger.info(
+                f"[debug:notif-bus] publish profile={profile} kind={entry.get('kind')} "
+                f"conversation_id={entry.get('conversation_id')} subscribers={len(subs)}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
         for queue, loop in subs:
             loop.call_soon_threadsafe(queue.put_nowait, entry)
 

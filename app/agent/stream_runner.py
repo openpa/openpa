@@ -191,6 +191,27 @@ async def run_agent_to_bus(
                 f"stream_runner: failed to back-fill context_id for {conversation_id}"
             )
 
+    # Skill-event runs have no client-side POST, so the frontend never sets
+    # the 'streaming' tracker that opens the per-conversation SSE. Push a
+    # started notification on the global notifications stream so the sidebar
+    # can lazily open that SSE and light up the streaming-dot.
+    if publish_notification:
+        try:
+            logger.info(
+                f"[debug:started] pushing started notification "
+                f"profile={profile} conversation_id={conversation_id} title={title!r}"
+            )
+            entry = get_event_notifications().push(
+                profile=profile,
+                conversation_id=conversation_id,
+                conversation_title=title,
+                message_preview="",
+                kind="started",
+            )
+            logger.info(f"[debug:started] pushed entry id={entry.get('id')} kind={entry.get('kind')}")
+        except Exception:  # noqa: BLE001
+            logger.exception("stream_runner: failed to push started notification")
+
     final_text_parts: List[str] = []
     collected_thinking_steps: List[dict] = []
     collected_file_parts: List[Part] = []
