@@ -8,7 +8,7 @@ via :func:`register_intrinsic_tools`. They are not persisted in the
 from app.tools.intrinsic.base import IntrinsicTool
 from app.tools.intrinsic.casual_chat import CasualChatTool
 from app.tools.intrinsic.final_answer import FinalAnswerTool
-from app.tools.intrinsic.user_notification import UserNotificationTool
+# from app.tools.intrinsic.user_notification import UserNotificationTool
 from app.tools.registry import ToolRegistry
 
 
@@ -16,12 +16,12 @@ __all__ = [
     "IntrinsicTool",
     "CasualChatTool",
     "FinalAnswerTool",
-    "UserNotificationTool",
+    # "UserNotificationTool",
     "register_intrinsic_tools",
 ]
 
 
 def register_intrinsic_tools(registry: ToolRegistry) -> None:
     """Register all built-in intrinsic tools with the registry."""
-    for tool_cls in (CasualChatTool, FinalAnswerTool, UserNotificationTool):
+    for tool_cls in (CasualChatTool, FinalAnswerTool):
         registry.register_intrinsic(tool_cls())

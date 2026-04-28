@@ -30,7 +30,8 @@ from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 from a2a.types import Part, TextPart
 
 from app.agent.context_store import ReasoningContextStore
-from app.config.settings import BaseConfig
+from app.agent.skill_classifier import classify_skill_request
+from app.config.settings import BaseConfig, get_user_working_directory
 from app.constants import MAX_TOKENS_FOR_HISTORY, MAX_TOKENS_PER_MESSAGE, ChatCompletionTypeEnum
 from app.lib.exception import AgentException
 from app.lib.llm.base import LLMProvider
@@ -43,11 +44,11 @@ from app.tools import (
     ToolThinkingEvent,
     ToolType,
 )
-from app.tools.intrinsic import UserNotificationTool
 from app.tools.ids import slugify
 from app.skills.scanner import generate_dir_tree
 from app.types import ReasoningStreamResponseType
 from app.utils.common import limit_messages, truncate_messages
+from app.utils.context_storage import set_context
 from app.utils.logger import logger
 from app.utils.persona import read_persona_file
 
@@ -63,10 +64,10 @@ You will have these tools to support you. Your task is to respond to user comman
 Please carefully consider the user's needs and construct a thoughtful plan to address them in the most intelligent way possible. You have access to the following tools below; only use the necessary tools in the reasoning steps.
 You must be cautious and think carefully about which tool to use and whether to use it at all.
 Reasoning steps should avoid repeating previous reasoning to prevent redundant information and conserve resources. If you have sufficient information, proceed to the next step. Please detect if the Thought content across the steps is repeating itself. If it is, immediately modify the Thought content to avoid entering a loop.
+When a user request targets a skill, just call the skill's tool with the user's request as **Action_Input** — the system decides whether to load the skill for immediate execution or register a recurring event subscription.
 
 Current time: {current_time}
 Current OS: {current_os}
-Current Working Directory: `{current_working_directory}`
 Current User Working Directory: `{current_user_working_directory}`
 Current Skills Directory: `{current_skills_directory}`
 
@@ -87,9 +88,6 @@ Begin!
 {steps}
 Thought:
 '''
-
-
-_USER_NOTIFICATION_SLUG = slugify(UserNotificationTool.TOOL_NAME)
 
 
 class StepData:
@@ -121,19 +119,45 @@ def _format_arguments_section(arguments: dict) -> str:
     return lines
 
 
+def _format_events_section(metadata: Optional[dict]) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    events = metadata.get("events") or {}
+    if not isinstance(events, dict):
+        return ""
+    items = events.get("event_type") or []
+    if not isinstance(items, list):
+        return ""
+    bullets: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name:
+            continue
+        desc = item.get("description") or ""
+        bullets.append(f"    *   {name}: {desc}" if desc else f"    *   {name}")
+    if not bullets:
+        return ""
+    return "*   Events:\n" + "\n".join(bullets) + "\n"
+
+
 def _format_tool_for_prompt(tool, arguments: dict) -> str:
-    """Render one tool block (id, description, default args, sub-skills)."""
+    """Render one tool block (id, description, default args, sub-tools, events)."""
     text = f"[{tool.tool_id}]: {tool.description}\n"
     text += _format_arguments_section(arguments)
-    skills = tool.skills
-    if skills:
-        text += "*   Skills:\n"
-        for skill in skills:
+    tools = tool.skills
+    if tools:
+        text += "*   Sub-Tools:\n"
+        for skill in tools:
             examples_str = ", ".join([f"'{ex}'" for ex in skill.examples]) if skill.examples else ""
             text += f"    *   {skill.description}"
             if examples_str:
                 text += f", examples: {examples_str}"
             text += "\n"
+    info = getattr(tool, "info", None)
+    metadata = getattr(info, "metadata", None) if info is not None else None
+    text += _format_events_section(metadata)
     return text
 
 
@@ -146,8 +170,8 @@ class ReasoningAgent:
         registry: ToolRegistry,
         profile: str,
         context_id: Optional[str] = None,
-        max_steps: int = 40,
-        steps_length: int = 80,
+        max_steps: int = 5,
+        steps_length: int = 10,
         reasoning: bool = True,
         allowed_skill_ids: Optional[set[str]] = None,
     ):
@@ -155,8 +179,8 @@ class ReasoningAgent:
         self.registry = registry
         self.profile = profile
         self.reasoning = reasoning
-        self.current_skills_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills")
-        self.current_user_working_directory=os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile),
+        self.current_skills_directory = os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills")
+        self.current_user_working_directory = get_user_working_directory()
 
         # Snapshot the tool list available to this profile for this run.
         # When ``allowed_skill_ids`` is provided (automatic skill mode), skills
@@ -236,11 +260,8 @@ class ReasoningAgent:
             return ""
         parts = [
             "\n==========Start Skills Instructions==========\n"
-            "You should only follow the instructions provided in the content loaded below. "
-            "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons.\n"
-            "[VERY IMPORTANT] When running a command instructed in **Skills Instructions**, you must detect "
-            "<skill-name> and include the prefix `[skill][<skill-name>][<command>`. Conversely, commands "
-            "requested by the user must be sent to the **Exec Shell** tool in the format `[user][][<command>]`.\n"
+            "You should only follow the instructions provided in the content loaded below.\n"
+            "Do not use the **System File** tool to read the directory structure of `<skill_directory>` for security reasons."
         ]
         # If any loaded skill declares environment variables, remind the agent
         # to source the per-skill .env file before running any script -- exec_shell
@@ -598,6 +619,68 @@ class ReasoningAgent:
             "output_tokens": self._total_output_tokens,
         }
 
+    # ── tool-stream helper ────────────────────────────────────────────
+
+    def _skill_has_events(self, tool) -> bool:
+        """True if ``tool`` is a SKILL whose SKILL.md declares metadata.events."""
+        info = getattr(tool, "info", None)
+        metadata = getattr(info, "metadata", None) if info is not None else None
+        if not isinstance(metadata, dict):
+            return False
+        events = metadata.get("events") or {}
+        if not isinstance(events, dict):
+            return False
+        items = events.get("event_type") or []
+        return isinstance(items, list) and any(
+            isinstance(i, dict) and i.get("name") for i in items
+        )
+
+    async def _run_builtin_tool_events(
+        self,
+        tool,
+        *,
+        query: str,
+        arguments: Dict[str, Any],
+        variables: Dict[str, str],
+        llm_params: Dict[str, Any],
+    ) -> AsyncGenerator[Tuple[str, Any], None]:
+        """Drive ``tool.execute(...)`` and yield tagged events.
+
+        Yields tuples ``(kind, payload)`` where ``kind`` is:
+        - ``"status"``: a STATUS_UPDATE chunk for the caller to forward
+        - ``"result"``: the final :class:`ToolResultEvent`
+        - ``"error"``: the final :class:`ToolErrorEvent`
+        """
+        err: Optional[ToolErrorEvent] = None
+        try:
+            async for event in tool.execute(
+                query=query,
+                context_id=self.context_id,
+                profile=self.profile,
+                arguments=arguments,
+                variables=variables,
+                llm_params=llm_params,
+            ):
+                if isinstance(event, ToolThinkingEvent):
+                    continue  # the dispatcher emits its own thinking artifact
+                if isinstance(event, ToolStatusEvent):
+                    yield (
+                        "status",
+                        {"type": ChatCompletionTypeEnum.STATUS_UPDATE, "data": event.raw},
+                    )
+                    continue
+                if isinstance(event, ToolResultEvent):
+                    yield ("result", event)
+                    continue
+                if isinstance(event, ToolErrorEvent):
+                    err = event
+                    break
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"Tool '{tool.tool_id}' raised during execute()")
+            err = ToolErrorEvent(message=str(e))
+        if err is not None:
+            yield ("error", err)
+
     # ── polymorphic dispatch ──────────────────────────────────────────
 
     async def _dispatch(
@@ -673,38 +756,28 @@ class ReasoningAgent:
         if tool.tool_type is not ToolType.INTRINSIC:
             yield {"type": ChatCompletionTypeEnum.THINKING_ARTIFACT, "data": thinking_payload}
             
-        # Drive the tool's event stream
+        # Drive the tool's event stream via the shared helper.
+        if tool.tool_type is not ToolType.SKILL and tool.tool_type is not ToolType.INTRINSIC:
+            tool_action_input = f"{step.action_input} (How would you think about this scenario in order to execute it: {step.thought})"
+        else:
+            tool_action_input = action_input
+        logger.info(f"Tool action input '{tool.tool_id}': {tool_action_input}")
+
         result_event: Optional[ToolResultEvent] = None
         error_event: Optional[ToolErrorEvent] = None
-        try:
-            if tool.tool_type is not ToolType.SKILL and tool.tool_type is not ToolType.INTRINSIC:
-                tool_action_input = f"{step.action_input} (How would you think about this scenario in order to execute it: {step.thought})"
-            else:
-                tool_action_input = action_input
-            
-            logger.info(f"Tool action input '{tool.tool_id}': {tool_action_input}")
-            async for event in tool.execute(
-                query=tool_action_input,
-                context_id=self.context_id,
-                profile=self.profile,
-                arguments=arguments,
-                variables=variables,
-                llm_params=llm_params,
-            ):
-                if isinstance(event, ToolThinkingEvent):
-                    continue  # already emitted thinking artifact above
-                if isinstance(event, ToolStatusEvent):
-                    yield {"type": ChatCompletionTypeEnum.STATUS_UPDATE, "data": event.raw}
-                    continue
-                if isinstance(event, ToolResultEvent):
-                    result_event = event
-                    continue
-                if isinstance(event, ToolErrorEvent):
-                    error_event = event
-                    break
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"Tool '{tool.tool_id}' raised during execute()")
-            error_event = ToolErrorEvent(message=str(e))
+        async for kind, ev_payload in self._run_builtin_tool_events(
+            tool,
+            query=tool_action_input,
+            arguments=arguments,
+            variables=variables,
+            llm_params=llm_params,
+        ):
+            if kind == "status":
+                yield ev_payload
+            elif kind == "result":
+                result_event = ev_payload
+            elif kind == "error":
+                error_event = ev_payload
 
         if error_event is not None:
             if error_event.auth_required:
@@ -823,12 +896,67 @@ class ReasoningAgent:
         # OBSERVE (default for a2a/mcp/builtin/skill)
         logger.info(f"=== {tool.tool_id} (OBSERVE) ===")
         if tool.tool_type is ToolType.SKILL:
+            # A SKILL action carries one of two intents:
+            #   1. "load"  — run the skill now → fold SKILL.md into the prompt
+            #   2. "event" — register a recurring trigger → call register_skill_event
+            # Classify before deciding what to do with the SKILL.md content
+            # the tool just produced.
+            dir_path = tool.info.dir_path  # type: ignore[attr-defined]
+            skill_source = str(dir_path)
+            raw_user_input = (step.action_input or step.thought or "").strip()
+            has_events = self._skill_has_events(tool)
+
+            if has_events and raw_user_input:
+                try:
+                    routing = await classify_skill_request(
+                        action_input=raw_user_input,
+                        skill_id=tool.tool_id,
+                        skill_name=tool.name,
+                        source=skill_source,
+                        llm=self.llm,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        f"skill_classifier raised: {exc}. Defaulting to 'load'."
+                    )
+                    routing = {
+                        "skill_id": tool.tool_id,
+                        "skill_name": tool.name,
+                        "source": skill_source,
+                        "response_type": "load",
+                        "instruction": (
+                            f"You should only follow the instructions provided "
+                            f"in the content loaded in {tool.tool_id} skill."
+                        ),
+                    }
+            else:
+                routing = {
+                    "skill_id": tool.tool_id,
+                    "skill_name": tool.name,
+                    "source": skill_source,
+                    "response_type": "load",
+                    "instruction": (
+                        f"You should only follow the instructions provided in "
+                        f"the content loaded in {tool.tool_id} skill."
+                    ),
+                }
+
+            if routing.get("response_type") == "event":
+                async for r in self._handle_skill_event_route(
+                    skill_tool=tool,
+                    skill_step=step,
+                    routing=routing,
+                    user_input=raw_user_input,
+                ):
+                    yield r
+                return
+
+            # ── "load" path (today's behavior) ──────────────────────────
             # Skill content is treated as instruction: append SKILL.md to the
             # system prompt (rebuilt at the top of the next _loop iteration)
             # and remove the skill from the Tools block / Action enum so it
             # cannot be re-invoked and appended again.
             skill_text = getattr(tool.info, "full_content", "") or observation_text or ""  # type: ignore[attr-defined]
-            dir_path = tool.info.dir_path  # type: ignore[attr-defined]
             tree_text = generate_dir_tree(dir_path)
             if tree_text:
                 skill_text = f"Skill Directory Structure:\n```\n{tree_text}\n```\n\n{skill_text}"
@@ -837,6 +965,11 @@ class ReasoningAgent:
                 skill_text = f"{skill_text}\n\n{events_hint}"
             self._loaded_skill_sections[tool.tool_id] = skill_text
             self._loaded_skill_ids.add(tool.tool_id)
+            # Pin exec_shell's working directory to the loaded skill's dir so
+            # subsequent shell commands run inside the skill folder without
+            # the LLM having to re-supply current_shell_directory.
+            if self.context_id:
+                set_context(self.context_id, "current_shell_directory", str(dir_path))
             # The full SKILL.md content is shown to the user in the frontend's
             # Thinking Process via RESULT_ARTIFACT, but the recorded step in
             # self.steps only carries a short pointer — the actual content
@@ -878,6 +1011,165 @@ class ReasoningAgent:
                 yield r
             return
         async for r in self._loop(step):
+            yield r
+
+    # ── skill→event routing ──────────────────────────────────────────
+
+    async def _handle_skill_event_route(
+        self,
+        *,
+        skill_tool,
+        skill_step: StepData,
+        routing: Dict[str, Any],
+        user_input: str,
+    ) -> AsyncGenerator[ReasoningStreamResponseType, None]:
+        """Drive the "event" branch: record the skill step as routed-to-event,
+        then auto-invoke ``register_skill_event`` with the skill pinned via
+        injected arguments. Both invocations are recorded as steps in the trace.
+        """
+        skill_id = skill_tool.tool_id
+        skill_source = routing.get("source") or str(skill_tool.info.dir_path)  # type: ignore[attr-defined]
+        instruction = (routing.get("instruction") or "").strip()
+
+        # 1. Record the skill step with a routing observation. The skill itself
+        #    is NOT folded into the system prompt, so ``_loaded_skill_*`` stays
+        #    empty and the skill remains in the Tools/Action enum.
+        routing_obs = (
+            f"[Routed to event subscription: skill={skill_id}, "
+            f"response_type=event] {instruction}"
+        ).strip()
+        skill_step.action_input = user_input
+        skill_step.observation = [Part(root=TextPart(text=routing_obs))]
+        skill_step.observation_text = routing_obs
+        yield {
+            "type": ChatCompletionTypeEnum.RESULT_ARTIFACT,
+            "data": {"Observation": skill_step.observation},
+        }
+        self._record_step_full(skill_step, routing_obs)
+        if self.context_id:
+            self._save_context(self.context_id)
+
+        # 2. Look up register_skill_event. If unavailable, surface that as the
+        #    second step's observation and continue the loop so the LLM can
+        #    explain to the user.
+        rse_tool = self._tools_by_id.get("register_skill_event")
+        rse_step = StepData(
+            thought=skill_step.thought_in_next or "Routing: event subscription",
+            action="register_skill_event",
+            action_input=user_input,
+            thought_in_next=skill_step.thought_in_next,
+        )
+
+        if rse_tool is None:
+            err_obs = (
+                "register_skill_event tool is not available in this profile. "
+                "Cannot register an event subscription."
+            )
+            rse_step.observation = [Part(root=TextPart(text=err_obs))]
+            rse_step.observation_text = err_obs
+            yield {
+                "type": ChatCompletionTypeEnum.RESULT_ARTIFACT,
+                "data": {"Observation": rse_step.observation},
+            }
+            self._record_step_full(rse_step, err_obs)
+            if self.context_id:
+                self._save_context(self.context_id)
+            if not self.reasoning:
+                async for r in self._finalize_without_reasoning(rse_step, err_obs):
+                    yield r
+                return
+            async for r in self._loop(rse_step):
+                yield r
+            return
+
+        # 3. Refresh child LLM and emit a thinking artifact for the auto call.
+        if rse_tool.tool_type in (ToolType.BUILTIN, ToolType.MCP):
+            rse_tool.refresh_llm(self.profile)
+        yield {
+            "type": ChatCompletionTypeEnum.THINKING_ARTIFACT,
+            "data": {
+                "Thought": rse_step.thought,
+                "Action": rse_tool.tool_id,
+                "Action_Input": user_input,
+                "Model_Label": self._model_label_for(rse_tool),
+                "Reasoning_Model_Label": self.llm.model_label,
+            },
+        }
+
+        # 4. Drive register_skill_event with skill identity pinned via injected
+        #    arguments. Existing _profile/_context_id injection happens inside
+        #    the adapter; we add _skill_id and _skill_source so the tool knows
+        #    which skill to subscribe and the prepare_tools callback can build
+        #    the dynamic ``trigger`` enum from SKILL.md.
+        rse_arguments: Dict[str, Any] = {
+            "_skill_id": skill_id,
+            "_skill_source": skill_source,
+        }
+        # Layer in any persisted client arguments for register_skill_event.
+        try:
+            rse_arguments.update(self._load_arguments(rse_tool.tool_id) or {})
+        except Exception:  # noqa: BLE001
+            pass
+        rse_variables = self._load_variables(rse_tool.tool_id)
+        rse_llm_params = self._load_llm_params(rse_tool.tool_id)
+
+        result_event: Optional[ToolResultEvent] = None
+        error_event: Optional[ToolErrorEvent] = None
+        async for kind, ev_payload in self._run_builtin_tool_events(
+            rse_tool,
+            query=user_input,
+            arguments=rse_arguments,
+            variables=rse_variables,
+            llm_params=rse_llm_params,
+        ):
+            if kind == "status":
+                yield ev_payload
+            elif kind == "result":
+                result_event = ev_payload
+            elif kind == "error":
+                error_event = ev_payload
+
+        # 5. Record the register_skill_event step. On error, surface it; do not
+        #    fall back to the load path — that would silently invert the user's
+        #    intent.
+        if error_event is not None:
+            obs_text = error_event.message or "register_skill_event failed."
+            rse_step.observation = [Part(root=TextPart(text=obs_text))]
+            rse_step.observation_text = obs_text
+            yield {
+                "type": ChatCompletionTypeEnum.RESULT_ARTIFACT,
+                "data": {"Observation": rse_step.observation},
+            }
+            self._record_step_full(rse_step, obs_text)
+        elif result_event is not None:
+            if result_event.token_usage:
+                self._total_input_tokens += result_event.token_usage.get("input_tokens", 0) or 0
+                self._total_output_tokens += result_event.token_usage.get("output_tokens", 0) or 0
+            obs_text = result_event.observation_text or ""
+            obs_parts = result_event.observation_parts
+            rse_step.observation = obs_parts
+            rse_step.observation_text = obs_text
+            yield {
+                "type": ChatCompletionTypeEnum.RESULT_ARTIFACT,
+                "data": {"Observation": obs_parts},
+            }
+            self._record_step_full(rse_step, obs_text)
+        else:
+            obs_text = "register_skill_event returned no result."
+            rse_step.observation = [Part(root=TextPart(text=obs_text))]
+            rse_step.observation_text = obs_text
+            self._record_step_full(rse_step, obs_text)
+
+        if self.context_id:
+            self._save_context(self.context_id)
+
+        if not self.reasoning:
+            async for r in self._finalize_without_reasoning(
+                rse_step, rse_step.observation_text or "",
+            ):
+                yield r
+            return
+        async for r in self._loop(rse_step):
             yield r
 
     # ── single-step finalization (reasoning disabled) ──────────────────
@@ -969,14 +1261,7 @@ class ReasoningAgent:
     def _record_action_step(self, step: StepData, response_text: str) -> None:
         step_text = f"Action: {step.action}\nAction_Input: {response_text}\n"
         if step.thought_in_next:
-            if step.action == _USER_NOTIFICATION_SLUG:
-                step_text += (
-                    f"Thought_In_Next: I have already notified the user. In the next "
-                    f"reasoning step, I will not use the '{step.action}' but will use "
-                    f"other tools instead.\n"
-                )
-            else:
-                step_text += f"Thought_In_Next: {step.thought_in_next}\n"
+            step_text += f"Thought_In_Next: {step.thought_in_next}\n"
         self.steps.append(step_text)
         self._trim_steps()
 

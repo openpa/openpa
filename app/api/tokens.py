@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app.config.settings import BaseConfig
+from app.config.settings import BaseConfig, get_user_working_directory
 
 
 async def generate_token(request: Request) -> JSONResponse:
@@ -73,6 +73,7 @@ async def get_me(request: Request) -> JSONResponse:
             "exp": payload.get("exp"),
             "iat": payload.get("iat"),
             "working_dir": os.path.realpath(BaseConfig.OPENPA_WORKING_DIR).replace(os.sep, "/"),
+            "user_working_dir": os.path.realpath(get_user_working_directory()).replace(os.sep, "/"),
         })
     except jwt.InvalidTokenError:
         return JSONResponse({"error": "Invalid token"}, status_code=401)

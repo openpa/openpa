@@ -35,7 +35,7 @@ from a2a.types import (
 )
 from openai.types.chat import ChatCompletionMessageParam
 
-from app.config.settings import BaseConfig
+from app.config.settings import BaseConfig, get_user_working_directory
 from app.constants import ChatCompletionTypeEnum
 from app.lib.llm.base import LLMProvider
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
@@ -193,10 +193,14 @@ class BuiltInToolAdapter:
                 },
             })
 
-        # Allow per-request tool customization (e.g., semantic type filtering)
+        # Allow per-request tool customization (e.g., semantic type filtering,
+        # dynamic enums sourced from caller-injected arguments).
         if self._prepare_tools:
             try:
-                available_tools = self._prepare_tools(query, available_tools)
+                meta_arguments = (metadata or {}).get("arguments") if metadata else None
+                available_tools = self._prepare_tools(
+                    query, available_tools, arguments=meta_arguments,
+                )
             except Exception as e:
                 logger.warning(f"prepare_tools callback failed for '{self.name}': {e}")
 
@@ -228,6 +232,7 @@ class BuiltInToolAdapter:
             f"reasoning_effort={getattr(self._llm, 'default_reasoning_effort', None)}, "
             f"full_reasoning={self._full_reasoning}"
         )
+        logger.debug(f"Available tools for LLM: {available_tools}")
         try:
             async for response in self._llm.chat_completion(
                 messages=messages,
@@ -276,10 +281,12 @@ class BuiltInToolAdapter:
                 if profile and "profile" in tool_args:
                     tool_args["profile"] = profile
 
-                # Inject profile-scoped working directory for all tools
-                tool_args["_working_directory"] = os.path.join(
-                    BaseConfig.OPENPA_WORKING_DIR, profile
-                )
+                # Inject the User Working Directory (default ~/Documents,
+                # configurable via the setup wizard) as the active path for
+                # all built-in tools. This is intentionally distinct from
+                # OPENPA_WORKING_DIR/<profile>, which is reserved for
+                # OpenPA-internal storage (skills, persona, exec_shell stdout).
+                tool_args["_working_directory"] = get_user_working_directory()
 
                 # Inject the active profile name so tools can scope per-profile
                 # state (e.g. browser keeps a separate Chrome profile per OpenPA profile).

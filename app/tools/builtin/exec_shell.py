@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from app.config.settings import BaseConfig
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig
+from app.utils.context_storage import get_context, set_context
 from app.utils.task_context import current_task_id_var
 from app.tools.builtin.exec_shell_classifier import detect_tui_sequences
 from app.tools.builtin.exec_shell_input_mode import (
@@ -49,30 +50,6 @@ def _resolve_os(selected: Optional[str]) -> str:
     if not selected or selected == "Auto-Detect":
         return platform.system()
     return selected
-
-
-def _lookup_skill_source(skill_id: str, profile: Optional[str]) -> Optional[str]:
-    """Return the ``source`` directory of a skill row, or None on any miss.
-
-    DB errors are logged and swallowed so shell execution never breaks on a
-    DB issue — the caller falls back to the existing directory chain.
-    """
-    if not skill_id or not profile:
-        return None
-    try:
-        from app.storage.tool_storage import get_tool_storage
-        row = get_tool_storage().get_tool(skill_id)
-    except Exception as exc:
-        logger.error(f"_lookup_skill_source({skill_id!r}, {profile!r}): {exc}")
-        return None
-    if not row:
-        return None
-    if row.get("tool_type") != "skill":
-        return None
-    if row.get("owner_profile") != profile:
-        return None
-    source = row.get("source")
-    return source if source else None
 
 
 def _shell_for(system: str) -> tuple[str, str]:
@@ -216,7 +193,7 @@ TOOL_CONFIG: ToolConfig = {
     "default_model_group": "low",
     "llm_parameters": {
         "tool_instructions": (
-            f"Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS."
+            "Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS.\n"
         ),
         "system_prompt": (
             "You are a helpful assistant that can execute shell commands and provide their output.\n"
@@ -598,6 +575,15 @@ async def _log_writer_loop(
             logger.error(f"log_writer_loop({state.process_id}): state.json update failed: {exc}")
 
         state.stopped = True
+        # Tell the Process Manager UI that this row's status flipped to
+        # ``exited`` — registry entry is still present (it is only popped
+        # by stop/cleanup), so the profile lookup is reliable here.
+        try:
+            exited_info = _process_registry.get(state.process_id)
+            if exited_info is not None:
+                publish_process_list_changed(exited_info.profile)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"log_writer_loop publish failed: {exc}")
         logger.debug(
             f"log_writer_loop({state.process_id}): finished, "
             f"exit_code={process.returncode}"
@@ -698,6 +684,24 @@ async def unsubscribe(
     state = info.log_writer_state
     async with state.rotate_lock:
         state.subscribers.discard(queue)
+
+
+def publish_process_list_changed(profile: Optional[str]) -> None:
+    """Push a fresh process-list snapshot to SSE subscribers for ``profile``.
+
+    Called at every state transition that affects ``list_processes``: spawn,
+    exit, stop, expiry, autostart-row mutation. No-op when ``profile`` is
+    falsy (rare; the list is profile-scoped).
+    """
+    if not profile:
+        return
+    try:
+        from app.events.processes_bus import get_processes_stream_bus
+        get_processes_stream_bus().publish(
+            profile, {"processes": list_processes(profile)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"processes bus publish failed: {exc}")
 
 
 def process_status(info: ProcessInfo) -> Tuple[str, Optional[int]]:
@@ -973,6 +977,7 @@ async def stop_process(process_id: str, *, profile: str) -> Dict[str, Any]:
     if info is None:
         # Race: someone else popped it between the check and now.
         info = info_preview
+    stopped_profile = info.profile
 
     process = info.process
 
@@ -1036,6 +1041,8 @@ async def stop_process(process_id: str, *, profile: str) -> Dict[str, Any]:
             except Exception:
                 pass
         shutil.rmtree(info.log_dir, ignore_errors=True)
+
+    publish_process_list_changed(stopped_profile)
 
     return {
         "stdout": final_output,
@@ -1113,10 +1120,12 @@ async def _cleanup_stale_processes() -> int:
         pid for pid, info in _process_registry.items()
         if now >= info.expire_time
     ]
+    affected_profiles: Set[Optional[str]] = set()
     for pid in stale_ids:
         info = _process_registry.pop(pid, None)
         if not info:
             continue
+        affected_profiles.add(info.profile)
         if info.log_writer_state and info.log_writer_state.task:
             info.log_writer_state.stopped = True
             info.log_writer_state.task.cancel()
@@ -1138,6 +1147,8 @@ async def _cleanup_stale_processes() -> int:
         if info.log_dir and os.path.isdir(info.log_dir):
             shutil.rmtree(info.log_dir, ignore_errors=True)
         logger.info(f"Cleaned up expired process {pid} ({info.command!r})")
+    for profile in affected_profiles:
+        publish_process_list_changed(profile)
     return len(stale_ids)
 
 
@@ -1151,29 +1162,17 @@ class ExecShellTool(BuiltInTool):
         "fails with a TTY-required error (e.g. 'the input device is not a TTY'), "
         "it is automatically respawned under a pseudo-terminal. For commands "
         "that hang without a TTY instead of erroring (notably ssh), pass "
-        "`pty: true` explicitly. In PTY mode stdout and stderr are merged into `stdout`.\n"
-        "All commands must include the prefix [<source>][<skill-name>|<empty>][<command>], where the source can "
-        "be **user** or **skill**.\n"
-        "E.g, '[user][][check disk usage]', '[user][][ping google.com]', or '[skill][system_file][ssh user@host]' with pty=true."
+        "`pty: true` explicitly. In PTY mode stdout and stderr are merged into `stdout`."
     )
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
-            "source": {
-                "type": "string",
-                "enum": ["user", "skill"],
-            },
-            "skill_name": {
-                "type": "string",
-                "description": "The name of the skill executing the command.",
-            },
             "command": {
                 "type": "string",
                 "description": "The shell command to execute.",
             },
             "current_shell_directory": {
                 "type": "string",
-                "description": "If user wants to specify the current working directory for the shell command, they can provide it here. If not provided, it will default to empty",
             },
             "timeout": {
                 "type": "integer",
@@ -1215,26 +1214,31 @@ class ExecShellTool(BuiltInTool):
                 ),
             },
         },
-        "required": ["source", "command", "skill_name"],
+        "required": ["command"],
     }
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         command = arguments.get("command", "").strip()
-        source = arguments.get("source", "").strip()
-        skill_id = arguments.get("skill_name", "").strip()
-        logger.debug(f"exec_shell called with command={command!r}, source={source!r}, skill_name={skill_id!r}")
+        context_id = arguments.get("_context_id") or ""
+        logger.debug(f"exec_shell called with command={command!r}")
         user_working_directory = (
             arguments.get("_working_directory", None)
             or BaseConfig.OPENPA_WORKING_DIR
         )
-        shell_working_directory = arguments.get("current_shell_directory", None)
-        if not shell_working_directory and source == "skill" and skill_id:
-            shell_working_directory = _lookup_skill_source(
-                skill_id, arguments.get("_profile"),
-            )
-        shell_working_directory = shell_working_directory or user_working_directory
-        logger.debug(f"Determined shell working directory: {shell_working_directory!r}")
+
+        # current_shell_directory: explicit arg wins and is persisted to the
+        # conversation-scoped store; otherwise fall back to the previously
+        # set sticky value, then to the User Working Directory.
+        current_dir_arg = (arguments.get("current_shell_directory") or "").strip() or None
+        if current_dir_arg and context_id:
+            set_context(context_id, "current_shell_directory", current_dir_arg)
+        shell_working_directory = (
+            current_dir_arg
+            or (get_context(context_id, "current_shell_directory") if context_id else None)
+            or user_working_directory
+        )
         logger.debug(f"User working directory: {user_working_directory!r}")
+        logger.debug(f"Determined shell working directory: {shell_working_directory!r}")
         timeout = arguments.get("timeout", 120)
         silence_timeout = arguments.get("silence_timeout", _DEFAULT_SILENCE_TIMEOUT)
         pty_arg = arguments.get("pty")
@@ -1414,9 +1418,13 @@ class ExecShellTool(BuiltInTool):
 
             # --- LONG_RUNNING: keep subprocess alive, start log writer ---
             process_id = _uuid.uuid4().hex[:8]
+            # Stdout/state files are OpenPA-internal storage and live under
+            # OPENPA_WORKING_DIR/<profile>, NOT under the User Working
+            # Directory (which is a user-facing path like ~/Documents).
+            profile_for_logs = arguments.get("_profile") or "admin"
             log_dir = os.path.join(
-                user_working_directory, "tools", "builtin", "exec_shell",
-                "stdout", process_id,
+                BaseConfig.OPENPA_WORKING_DIR, profile_for_logs,
+                "tools", "builtin", "exec_shell", "stdout", process_id,
             )
             logger.debug(f"exec_shell: creating log directory {log_dir!r} for process {process_id}")
             os.makedirs(log_dir, exist_ok=True)
@@ -1476,6 +1484,7 @@ class ExecShellTool(BuiltInTool):
                 task_id=current_task_id_var.get(),
                 profile=arguments.get("_profile") or None,
             )
+            publish_process_list_changed(arguments.get("_profile") or None)
 
             logger.info(
                 f"exec_shell: long-running process {process_id} started "
@@ -1485,7 +1494,6 @@ class ExecShellTool(BuiltInTool):
             return BuiltInToolResult(
                 structured_content={
                     "process_id": process_id,
-                    "skill_id": skill_id if source == "skill" else None,
                     "stdout": result.get("stdout", ""),
                     "stderr": result.get("stderr", ""),
                     "status": "running",

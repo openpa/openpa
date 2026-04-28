@@ -144,6 +144,19 @@ def get_config_routes(
                 is_secret = key in ("jwt_secret",)
                 config_storage.set("server_config", key, str(value), is_secret=is_secret)
 
+            # Ensure the User Working Directory is recorded with a sensible
+            # default so all built-in tools have a writable active path on
+            # first run, even if the wizard payload didn't include it.
+            user_working_dir = server_config.get("user_working_dir")
+            if not user_working_dir:
+                user_working_dir = os.path.join(os.path.expanduser("~"), "Documents")
+                config_storage.set("server_config", "user_working_dir", user_working_dir)
+            expanded_uwd = os.path.expanduser(user_working_dir) if user_working_dir.startswith("~") else user_working_dir
+            try:
+                os.makedirs(expanded_uwd, exist_ok=True)
+            except OSError as exc:
+                logger.warning(f"Could not create user working directory {expanded_uwd!r}: {exc}")
+
             # Generate JWT secret if not provided
             jwt_secret = config_storage.get("server_config", "jwt_secret")
             if not jwt_secret and not BaseConfig.get_jwt_secret():

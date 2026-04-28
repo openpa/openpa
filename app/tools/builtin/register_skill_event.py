@@ -21,7 +21,7 @@ import yaml
 from app.events.manager import get_event_manager
 from app.storage import get_event_subscription_storage
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
-from app.tools.builtin.exec_shell import _lookup_skill_source
+from app.utils.skill_source import lookup_skill_source
 from app.tools.ids import slugify
 from app.types import ToolConfig
 from app.utils.logger import logger
@@ -55,7 +55,7 @@ def _resolve_skill(skill_name: str, profile: str) -> Optional[tuple[str, str]]:
         if not cand or cand in seen:
             continue
         seen.add(cand)
-        source = _lookup_skill_source(cand, profile)
+        source = lookup_skill_source(cand, profile)
         if source:
             return cand, source
     return None
@@ -73,23 +73,13 @@ TOOL_CONFIG: ToolConfig = {
     "llm_parameters": {
         "tool_instructions": (
             "Subscribe the current conversation to a skill's filesystem event so a "
-            "saved instruction is run automatically whenever the event fires.\n\n"
-            "Call this tool with three string arguments:\n"
-            "- skill_name: the name of an already-loaded skill that declares "
-            "metadata.events (e.g. 'email-cli').\n"
-            "- trigger: one of that skill's declared event names (e.g. "
-            "'new_email'). The 'when' is fully captured by the trigger.\n"
-            "- action: ONLY what to do — a short imperative instruction such "
-            "as 'Summarize the email content'. Do NOT repeat the trigger "
-            "condition (no 'when a new email arrives', 'on new email', "
-            "'whenever ...', etc.). The event file's content will be "
-            "appended to the action automatically."
+            "saved instruction is run automatically whenever the event fires."
         ),
         "system_prompt": (
             "You convert a registration request into a structured tool call. "
-            "Always call register_skill_event with skill_name, trigger, and "
-            "action. The action must contain only the work to perform; never "
-            "restate the trigger condition. Do not produce any other output."
+            "Always call register_skill_event with trigger and action. The "
+            "action must contain only the work to perform; never restate the "
+            "trigger condition. Do not produce any other output."
         ),
     },
 }
@@ -142,43 +132,22 @@ class RegisterSkillEventTool(BuiltInTool):
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
-            "skill_name": {
-                "type": "string",
-                "description": (
-                    "Tool-id of an already-loaded skill that declares "
-                    "metadata.events. Use the exact identifier the parent "
-                    "agent passes in (typically the profile-prefixed form, "
-                    "e.g. 'admin__email_cli'). Do NOT trim or rewrite the "
-                    "prefix."
-                ),
-            },
             "trigger": {
                 "type": "string",
-                "description": (
-                    "One of the event names declared by the skill (e.g., "
-                    "'new_email')."
-                ),
             },
             "action": {
                 "type": "string",
-                "description": (
-                    "Imperative instruction describing ONLY what to do — e.g. "
-                    "'Summarize the email content'. Do not include the "
-                    "trigger condition (no 'when a new email arrives', 'on "
-                    "new email', 'whenever ...'); the trigger field already "
-                    "captures that. The event file's content is appended "
-                    "automatically when the action runs."
-                ),
             },
         },
-        "required": ["skill_name", "trigger", "action"],
+        "required": ["trigger", "action"],
         "additionalProperties": False,
     }
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         profile: Optional[str] = arguments.get("_profile")
         context_id: Optional[str] = arguments.get("_context_id")
-        skill_name: str = (arguments.get("skill_name") or "").strip()
+        skill_id: str = (arguments.get("_skill_id") or "").strip()
+        skill_source: str = (arguments.get("_skill_source") or "").strip()
         trigger: str = (arguments.get("trigger") or "").strip()
         action: str = (arguments.get("action") or "").strip()
 
@@ -186,33 +155,43 @@ class RegisterSkillEventTool(BuiltInTool):
             return _err("Internal error: profile not provided to register_skill_event.")
         if not context_id:
             return _err("Internal error: context_id not provided to register_skill_event.")
-        if not skill_name:
-            return _err("skill_name is required.")
+        if not skill_id:
+            return _err(
+                "Internal error: _skill_id was not injected by the dispatcher. "
+                "register_skill_event is invoked automatically and must be pinned "
+                "to a specific skill."
+            )
+        if not skill_source:
+            # Fall back to looking up the source from storage if the dispatcher
+            # only injected the id — covers edge cases without breaking.
+            looked_up = lookup_skill_source(skill_id, profile)
+            if not looked_up:
+                return _err(
+                    f"Skill '{skill_id}' was not found for profile '{profile}'. "
+                    f"Make sure the skill is installed and enabled."
+                )
+            skill_source = looked_up
         if not trigger:
             return _err("trigger is required.")
         if not action:
             return _err("action is required.")
 
-        resolved = _resolve_skill(skill_name, profile)
-        if resolved is None:
-            return _err(
-                f"Skill '{skill_name}' was not found for profile '{profile}'. "
-                f"Make sure the skill is installed and enabled."
-            )
-        canonical_skill_id, source_dir_str = resolved
+        canonical_skill_id = skill_id
+        source_dir_str = skill_source
         source_dir = Path(source_dir_str)
 
         events = _read_events_metadata(source_dir)
         valid_names = [e["name"] for e in events]
         if not valid_names:
             return _err(
-                f"Skill '{skill_name}' does not declare any events in its "
-                f"metadata.events. Cannot register a trigger."
+                f"Skill '{canonical_skill_id}' does not declare any events in "
+                f"its metadata.events. Cannot register a trigger."
             )
         if trigger not in valid_names:
             return _err(
-                f"trigger '{trigger}' is not declared by skill '{skill_name}'. "
-                f"Valid triggers: {', '.join(valid_names)}."
+                f"trigger '{trigger}' is not declared by skill "
+                f"'{canonical_skill_id}'. Valid triggers: "
+                f"{', '.join(valid_names)}."
             )
 
         # Resolve (or create) the conversation row. On the very first user
@@ -265,6 +244,15 @@ class RegisterSkillEventTool(BuiltInTool):
                 f"Check server logs."
             )
 
+        # Push the new subscription to any open events-page SSE subscribers
+        # so the admin UI lights it up without a manual refresh. Imported
+        # locally to avoid pulling api.events into tool-import time.
+        try:
+            from app.api.events import publish_skill_events_admin_changed
+            publish_skill_events_admin_changed(profile)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"register_skill_event: admin-bus publish failed: {exc}")
+
         confirmation = (
             f"Subscribed this conversation to the '{trigger}' event of skill "
             f"'{canonical_skill_id}'. Whenever a new event arrives in "
@@ -286,3 +274,52 @@ def _err(message: str) -> BuiltInToolResult:
 
 def get_tools(config: dict) -> list[BuiltInTool]:
     return [RegisterSkillEventTool()]
+
+
+def get_prepare_tools():
+    """Return a per-request callback that injects ``trigger``'s dynamic enum.
+
+    The dispatcher pins the target skill via ``_skill_id``/``_skill_source``
+    in ``arguments``. This callback reads SKILL.md from that source dir and
+    populates the ``trigger`` property's ``enum`` + ``description`` so the
+    child LLM can only pick a declared event name.
+    """
+
+    def prepare_tools(query, tools, *, arguments=None):
+        if not arguments:
+            return tools
+        source = (arguments.get("_skill_source") or "").strip() if isinstance(arguments, dict) else ""
+        if not source:
+            return tools
+        try:
+            events = _read_events_metadata(Path(source))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"register_skill_event prepare_tools: failed to read events "
+                f"from {source}: {exc}"
+            )
+            return tools
+        if not events:
+            return tools
+        enum_values = [e["name"] for e in events if e.get("name")]
+        if not enum_values:
+            return tools
+        desc_lines = [
+            f"- {e['name']}: {e.get('description', '')}".rstrip(": ").rstrip()
+            for e in events
+            if e.get("name")
+        ]
+        for tool in tools:
+            fn = tool.get("function") or {}
+            if fn.get("name") != "register_skill_event":
+                continue
+            params = fn.get("parameters") or {}
+            props = params.get("properties") or {}
+            trig = props.get("trigger")
+            if isinstance(trig, dict):
+                trig["enum"] = enum_values
+                trig["description"] = "\n".join(desc_lines)
+            break
+        return tools
+
+    return prepare_tools

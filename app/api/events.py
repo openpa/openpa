@@ -28,11 +28,13 @@ from app.events import (
     get_event_stream_bus,
     get_notifications_stream_bus,
 )
+from app.events.skill_events_admin_bus import get_skill_events_admin_stream_bus
 from app.storage import (
     get_autostart_storage,
     get_conversation_storage,
     get_event_subscription_storage,
 )
+from app.tools.builtin.exec_shell import publish_process_list_changed
 from app.tools.builtin.exec_shell_autostart import spawn_from_autostart
 from app.tools.builtin.register_skill_event import _resolve_skill_source
 from app.utils.logger import logger
@@ -85,6 +87,78 @@ def _listener_command(source_dir: str) -> str:
     return f'uv run "{script}"'
 
 
+def _build_listener_status(profile: str, skill_name: str) -> Optional[Dict[str, Any]]:
+    """Compute the JSON payload returned by ``GET /api/skills/.../listener-status``.
+
+    Returns ``None`` when the skill source can't be resolved (matches the
+    handler's 404 path). Pulled out of ``handle_listener_status`` so the SSE
+    endpoint can rebuild snapshots without going through HTTP.
+    """
+    source_dir = _resolve_skill_source(skill_name, profile)
+    if not source_dir:
+        return None
+    hb = _heartbeat_path(source_dir)
+    last_heartbeat: Optional[float] = None
+    running = False
+    if hb.exists():
+        try:
+            last_heartbeat = hb.stat().st_mtime
+        except OSError:
+            last_heartbeat = None
+    if last_heartbeat is not None:
+        running = (time.time() - last_heartbeat) < _DEFAULT_HEARTBEAT_WINDOW_S
+
+    command = _listener_command(source_dir)
+    autostart_storage = get_autostart_storage()
+    autostart_row = autostart_storage.find_duplicate(profile, command)
+    return {
+        "skill_name": skill_name,
+        "running": running,
+        "last_heartbeat": last_heartbeat,
+        "autostart_id": (autostart_row or {}).get("id"),
+        "command": command,
+    }
+
+
+async def _build_skill_events_admin_snapshot(profile: str) -> Dict[str, Any]:
+    """Bundle subscriptions + per-skill listener statuses for the events page.
+
+    Mirrors the two REST calls the page used to make on every refresh — the
+    SSE stream just hands back the same shape on every push so the client
+    can replace its state in one go.
+    """
+    subscriptions = await _list_subscriptions_for_profile(profile)
+    listeners: Dict[str, Dict[str, Any]] = {}
+    seen: set[str] = set()
+    for sub in subscriptions:
+        name = sub["skill_name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            status = _build_listener_status(profile, name)
+        except Exception:  # noqa: BLE001
+            status = None
+        if status is not None:
+            listeners[name] = status
+    return {"subscriptions": subscriptions, "listeners": listeners}
+
+
+def publish_skill_events_admin_changed(profile: Optional[str]) -> None:
+    """Tell the events-page SSE endpoint to rebuild and push a snapshot.
+
+    The bus carries no payload — building the snapshot needs async DB calls
+    that don't belong in publish callsites. Subscribers wake on the tick and
+    rebuild themselves.
+    """
+    if not profile:
+        return
+    try:
+        get_skill_events_admin_stream_bus().publish(profile, {})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"skill-events admin bus publish failed: {exc}")
+
+
 def get_event_routes() -> list[Route]:
 
     async def handle_list(request: Request) -> JSONResponse:
@@ -116,6 +190,7 @@ def get_event_routes() -> list[Route]:
             )
         except Exception:  # noqa: BLE001
             logger.exception("Failed to release watcher after delete")
+        publish_skill_events_admin_changed(profile)
         return JSONResponse({"ok": True})
 
     async def handle_simulate(request: Request) -> JSONResponse:
@@ -203,34 +278,10 @@ def get_event_routes() -> list[Route]:
             return unauth
         profile = _profile_from_request(request)
         skill_name = request.path_params["skill_name"]
-        source_dir = _resolve_skill_source(skill_name, profile)
-        if not source_dir:
+        status = _build_listener_status(profile, skill_name)
+        if status is None:
             return JSONResponse({"error": "Skill not found"}, status_code=404)
-        hb = _heartbeat_path(source_dir)
-        last_heartbeat: Optional[float] = None
-        running = False
-        if hb.exists():
-            try:
-                last_heartbeat = hb.stat().st_mtime
-            except OSError:
-                last_heartbeat = None
-        if last_heartbeat is not None:
-            running = (time.time() - last_heartbeat) < _DEFAULT_HEARTBEAT_WINDOW_S
-
-        # Find the autostart row for this listener if one exists.
-        command = _listener_command(source_dir)
-        autostart_storage = get_autostart_storage()
-        autostart_row = autostart_storage.find_duplicate(profile, command)
-
-        return JSONResponse(
-            {
-                "skill_name": skill_name,
-                "running": running,
-                "last_heartbeat": last_heartbeat,
-                "autostart_id": (autostart_row or {}).get("id"),
-                "command": command,
-            }
-        )
+        return JSONResponse(status)
 
     async def handle_listener_start(request: Request) -> JSONResponse:
         unauth = _require_auth(request)
@@ -252,13 +303,17 @@ def get_event_routes() -> list[Route]:
                 working_dir=scripts_dir,
                 is_pty=False,
             )
+            publish_process_list_changed(profile)
         process_id, error = await spawn_from_autostart(row)
         if error:
             autostart_storage.set_error(row["id"], error)
+            publish_process_list_changed(profile)
+            publish_skill_events_admin_changed(profile)
             return JSONResponse(
                 {"error": "spawn_failed", "message": error}, status_code=400,
             )
         autostart_storage.clear_error(row["id"])
+        publish_skill_events_admin_changed(profile)
         return JSONResponse(
             {"ok": True, "process_id": process_id, "autostart_id": row["id"]}
         )
@@ -377,8 +432,62 @@ def get_event_routes() -> list[Route]:
             generator(), media_type="text/event-stream", headers=headers,
         )
 
+    async def handle_admin_stream(request: Request) -> Any:
+        """SSE endpoint pushing the live events-page snapshot for the caller's profile.
+
+        On connect, sends a ``snapshot`` frame containing the same payload
+        the page used to GET as two separate REST calls
+        (``/api/skill-events`` + ``/api/skills/{name}/listener-status``),
+        followed by a ``ready`` marker. Subsequent ``snapshot`` frames are
+        emitted whenever a subscription is created or deleted, or a listener
+        is started — anything else (heartbeat-driven liveness flips) is
+        deferred to the next deterministic event.
+        """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+
+        bus = get_skill_events_admin_stream_bus()
+        queue = bus.subscribe(profile)
+
+        async def generator():
+            def _frame(payload: Dict[str, Any]) -> bytes:
+                return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
+
+            try:
+                snapshot = await _build_skill_events_admin_snapshot(profile)
+                yield _frame({"type": "snapshot", "data": snapshot})
+                yield _frame({"type": "ready", "data": {}})
+
+                while True:
+                    if await request.is_disconnected():
+                        return
+                    try:
+                        await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield b": keepalive\n\n"
+                        continue
+                    snapshot = await _build_skill_events_admin_snapshot(profile)
+                    yield _frame({"type": "snapshot", "data": snapshot})
+            finally:
+                bus.unsubscribe(profile, queue)
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        return StreamingResponse(
+            generator(), media_type="text/event-stream", headers=headers,
+        )
+
     return [
         Route("/api/skill-events", handle_list, methods=["GET"]),
+        Route(
+            "/api/skill-events/admin/stream",
+            handle_admin_stream, methods=["GET"],
+        ),
         Route("/api/skill-events/{id}", handle_delete, methods=["DELETE"]),
         Route("/api/skill-events/{id}/simulate", handle_simulate, methods=["POST"]),
         Route("/api/skills/{skill_name}/events", handle_skill_events, methods=["GET"]),

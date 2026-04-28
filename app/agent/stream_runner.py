@@ -176,6 +176,21 @@ async def run_agent_to_bus(
     context_id = (conv or {}).get("context_id") or conversation_id
     title = (conv or {}).get("title") or "Untitled Chat"
 
+    # Back-fill context_id on the conv row when it was created via the web
+    # POST /api/conversations path (which leaves context_id=NULL). Without
+    # this, tools like register_skill_event do get_conversation_by_context
+    # and miss → they spawn a stray "Untitled Chat" sibling instead of
+    # attaching to the active conversation.
+    if conv and not conv.get("context_id"):
+        try:
+            await conversation_storage.update_conversation(
+                conversation_id, context_id=context_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                f"stream_runner: failed to back-fill context_id for {conversation_id}"
+            )
+
     final_text_parts: List[str] = []
     collected_thinking_steps: List[dict] = []
     collected_file_parts: List[Part] = []

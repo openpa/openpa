@@ -60,6 +60,36 @@ def get_dynamic(table: str, key: str, default=None, profile: str | None = None):
     return default
 
 
+DEFAULT_USER_WORKING_DIR = os.path.join(os.path.expanduser("~"), "Documents")
+
+
+def get_user_working_directory() -> str:
+    """Resolve the User Working Directory — the default active path injected
+    into built-in tools as ``_working_directory`` and shown to the LLM as the
+    ``Current User Working Directory``.
+
+    Distinct from ``BaseConfig.OPENPA_WORKING_DIR``, which is reserved for
+    OpenPA-internal paths (skills, PERSONA.md, exec_shell stdout).
+
+    Resolution order:
+      1. ``server_config.user_working_dir`` (set via setup wizard)
+      2. ``~/Documents`` fallback
+
+    The returned directory is created if it does not exist.
+    """
+    raw = get_dynamic("server_config", "user_working_dir", default=None)
+    path = raw if raw else DEFAULT_USER_WORKING_DIR
+    if path.startswith("~"):
+        path = os.path.expanduser(path)
+    path = os.path.normpath(path)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        # Falls through; tools that actually need the dir will surface the error.
+        pass
+    return path
+
+
 class BaseConfig:
     """Application configuration.
 

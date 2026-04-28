@@ -3,7 +3,11 @@ name: email-cli
 description: Send, receive, search, list, reply, and trash email messages from the CLI via IMAP/SMTP. Works with any IMAP/SMTP provider (Gmail, Outlook, Yahoo, iCloud, Fastmail, custom servers). A persistent event listener drops incoming messages as markdown.
 metadata: {
   environment_variables: ["USERNAME", "PASSWORD", "IMAP_HOST", "SMTP_HOST"],
-  events: {"event_type":[{"name":"new_email","description":"Event of receiving a new email"}]}
+  events: {"event_type":[{"name":"new_email","description":"Event of receiving a new email"}]},
+  long_running_app: {
+    command: "uv run scripts/email_listener.py",
+    description: "Persistent listener for new emails. Drops incoming messages as markdown.",
+  }
 }
 ---
 

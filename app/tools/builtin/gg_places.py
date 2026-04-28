@@ -436,7 +436,12 @@ def create_prepare_tools(embedding_vendor, embedding_table) -> Optional[Callable
     if embedding_vendor is None or embedding_table is None:
         return None
 
-    def prepare_tools(query: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def prepare_tools(
+        query: str,
+        tools: List[Dict[str, Any]],
+        *,
+        arguments: Optional[Dict[str, Any]] = None,  # noqa: ARG001 — unused, accepted for adapter signature
+    ) -> List[Dict[str, Any]]:
         """Filter search_places type enum to the top 50 semantically relevant types."""
         try:
             from app.utils.common import find_similar_items

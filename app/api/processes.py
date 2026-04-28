@@ -27,6 +27,7 @@ from app.storage import get_autostart_storage
 from app.tools.builtin.exec_shell import (
     list_processes,
     process_status,
+    publish_process_list_changed,
     resize_pty,
     stop_process,
     subscribe,
@@ -34,6 +35,8 @@ from app.tools.builtin.exec_shell import (
     write_stdin_to_process,
     _process_registry,
 )
+from app.events.processes_bus import get_processes_stream_bus
+from starlette.responses import StreamingResponse
 from app.tools.builtin.exec_shell_autostart import spawn_from_autostart
 from app.utils.logger import logger
 
@@ -345,6 +348,7 @@ def get_process_routes() -> list:
         # Link the live process to the new registration so the UI sees the
         # star filled without waiting for the next boot.
         info.autostart_id = row["id"]
+        publish_process_list_changed(profile)
         return JSONResponse(row)
 
     async def handle_autostart_delete(request: Request) -> JSONResponse:
@@ -365,6 +369,7 @@ def get_process_routes() -> list:
         for info in _process_registry.values():
             if info.autostart_id == autostart_id:
                 info.autostart_id = None
+        publish_process_list_changed(profile)
         return JSONResponse({"ok": True})
 
     async def handle_autostart_run(request: Request) -> JSONResponse:
@@ -382,14 +387,67 @@ def get_process_routes() -> list:
         process_id, error = await spawn_from_autostart(row)
         if error:
             storage.set_error(autostart_id, error)
+            publish_process_list_changed(profile)
             return JSONResponse(
                 {"error": "spawn_failed", "message": error}, status_code=400,
             )
         storage.clear_error(autostart_id)
         return JSONResponse({"process_id": process_id})
 
+    async def handle_stream(request: Request) -> Any:
+        """SSE endpoint pushing the live process list for the caller's profile.
+
+        Replaces the old 5s ``GET /api/processes`` poll. On connect, the
+        first frame is a ``snapshot`` containing the current
+        ``list_processes(profile)`` result. Subsequent ``snapshot`` frames
+        are emitted whenever a process spawns, exits, is stopped, or an
+        autostart row mutates. A ``ready`` marker separates the initial
+        snapshot from the live tail; a comment keepalive is emitted every
+        15s so proxies don't drop the idle connection.
+        """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+
+        bus = get_processes_stream_bus()
+        queue = bus.subscribe(profile)
+
+        async def generator():
+            def _frame(payload: Dict[str, Any]) -> bytes:
+                return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
+
+            try:
+                yield _frame({
+                    "type": "snapshot",
+                    "data": {"processes": list_processes(profile)},
+                })
+                yield _frame({"type": "ready", "data": {}})
+
+                while True:
+                    if await request.is_disconnected():
+                        return
+                    try:
+                        entry = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield b": keepalive\n\n"
+                        continue
+                    yield _frame({"type": "snapshot", "data": entry})
+            finally:
+                bus.unsubscribe(profile, queue)
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        return StreamingResponse(
+            generator(), media_type="text/event-stream", headers=headers,
+        )
+
     return [
         Route("/api/processes", handle_list, methods=["GET"]),
+        Route("/api/processes/stream", handle_stream, methods=["GET"]),
         Route("/api/processes/{pid}", handle_get, methods=["GET"]),
         Route("/api/processes/{pid}/stop", handle_stop, methods=["POST"]),
         Route("/api/processes/{pid}/stdin", handle_stdin, methods=["POST"]),

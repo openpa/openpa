@@ -28,6 +28,7 @@ from app.tools.builtin.exec_shell import (
     _shell_for,
     _spawn_command,
     _write_state,
+    publish_process_list_changed,
     Var,
 )
 from app.tools.builtin.exec_shell_input_mode import TerminalState
@@ -108,8 +109,12 @@ async def spawn_from_autostart(
         # Success — register in the live registry so the Process Manager
         # picks it up.
         process_id = _uuid.uuid4().hex[:8]
+        # Stdout/state files are OpenPA-internal storage and live under
+        # OPENPA_WORKING_DIR/<profile>, not under the spawned process's cwd.
+        profile_for_logs = row.get("profile") or "admin"
         log_dir = os.path.join(
-            working_dir, "tools", "builtin", "exec_shell", "stdout", process_id,
+            BaseConfig.OPENPA_WORKING_DIR, profile_for_logs,
+            "tools", "builtin", "exec_shell", "stdout", process_id,
         )
         os.makedirs(log_dir, exist_ok=True)
         _write_state(log_dir, {
@@ -145,6 +150,7 @@ async def spawn_from_autostart(
             profile=row.get("profile") or None,
             autostart_id=row.get("id"),
         )
+        publish_process_list_changed(row.get("profile") or None)
 
         logger.info(
             f"autostart[{row.get('id')}]: process {process_id} started "
@@ -160,6 +166,10 @@ async def _spawn_one(storage: AutostartStorage, row: Dict[str, Any]) -> None:
     try:
         if error:
             storage.set_error(row["id"], error)
+            # Spawn failed at boot — the row will surface in list_processes
+            # as ``failed_to_autostart``; push the change so the UI lights it
+            # up without waiting for any other event.
+            publish_process_list_changed(row.get("profile") or None)
         else:
             storage.clear_error(row["id"])
     except Exception as exc:  # noqa: BLE001
