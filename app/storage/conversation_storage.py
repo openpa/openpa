@@ -77,6 +77,12 @@ class ConversationStorage:
             except Exception:  # noqa: BLE001
                 pass
 
+            # Drop the old single-subscription unique index on dev DBs that
+            # were initialized before multi-subscription support landed.
+            await conn.execute(text(
+                "DROP INDEX IF EXISTS uq_skill_event_subs"
+            ))
+
         self._initialized = True
         logger.info(f"ConversationStorage initialized with database: {self.db_path}")
 

@@ -635,6 +635,67 @@ class ReasoningAgent:
             isinstance(i, dict) and i.get("name") for i in items
         )
 
+    def _pin_skill_for_register_event(
+        self, action_input: str,
+    ) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+        """Resolve which loaded event-bearing skill ``register_skill_event`` is
+        being asked to subscribe.
+
+        Mirrors what ``_handle_skill_event_route`` injects on the routed path:
+        returns ``({"_skill_id", "_skill_source"}, None)`` on success, or
+        ``(None, error_message)`` if no candidate fits — the caller surfaces
+        the message as an observation so the loop can recover.
+        """
+        requested: Optional[str] = None
+        try:
+            parsed = json.loads(action_input) if action_input else None
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            sn = parsed.get("skill_name")
+            if isinstance(sn, str) and sn.strip():
+                requested = sn.strip()
+
+        candidates: List[Tuple[str, str]] = []
+        for tid in self._loaded_skill_ids:
+            t = self._tools_by_id.get(tid)
+            if t is None or not self._skill_has_events(t):
+                continue
+            dir_path = getattr(getattr(t, "info", None), "dir_path", None)
+            if dir_path is None:
+                continue
+            candidates.append((tid, str(dir_path)))
+
+        if not candidates:
+            return None, (
+                "register_skill_event was invoked but no event-bearing skill "
+                "is loaded in this conversation. Load a skill that declares "
+                "metadata.events first."
+            )
+
+        if requested:
+            prefix = f"{self.profile}__"
+            bare = requested[len(prefix):] if requested.startswith(prefix) else requested
+            wanted = {requested, f"{self.profile}__{bare}", bare}
+            for tid, src in candidates:
+                if tid in wanted:
+                    return {"_skill_id": tid, "_skill_source": src}, None
+            return None, (
+                f"register_skill_event named skill '{requested}', but it is "
+                f"not currently loaded. Loaded event-bearing skills: "
+                f"{', '.join(t for t, _ in candidates)}."
+            )
+
+        if len(candidates) == 1:
+            tid, src = candidates[0]
+            return {"_skill_id": tid, "_skill_source": src}, None
+
+        return None, (
+            "register_skill_event needs a skill_name because more than one "
+            "event-bearing skill is loaded: "
+            f"{', '.join(t for t, _ in candidates)}."
+        )
+
     async def _run_builtin_tool_events(
         self,
         tool,
@@ -723,6 +784,35 @@ class ReasoningAgent:
                     return
             else:
                 arguments = client_arguments
+
+        # ``register_skill_event`` requires the dispatcher to pin a target
+        # skill via ``_skill_id``/``_skill_source`` (the routed path through
+        # ``_handle_skill_event_route`` injects them). When the LLM picks
+        # ``register_skill_event`` directly off the action enum we have to
+        # resolve those fields here, otherwise the tool's ``run()`` rejects
+        # the call.
+        if tool.tool_id == "register_skill_event":
+            pinned, err_msg = self._pin_skill_for_register_event(
+                step.action_input or "",
+            )
+            if err_msg is not None:
+                step.observation = [Part(root=TextPart(text=err_msg))]
+                step.observation_text = err_msg
+                self._record_step_with_observation(step, err_msg)
+                if self.context_id:
+                    self._save_context(self.context_id)
+                if not self.reasoning:
+                    yield {
+                        "type": ChatCompletionTypeEnum.CLARIFY,
+                        "data": err_msg,
+                        "input_tokens": self._total_input_tokens,
+                        "output_tokens": self._total_output_tokens,
+                    }
+                    return
+                async for r in self._loop(step):
+                    yield r
+                return
+            arguments = {**arguments, **(pinned or {})}
 
         variables = self._load_variables(tool.tool_id) if tool.tool_type in (
             ToolType.A2A, ToolType.MCP, ToolType.BUILTIN,

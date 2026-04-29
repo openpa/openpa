@@ -216,10 +216,13 @@ class RegisterSkillEventTool(BuiltInTool):
         conversation_id = conv["id"]
 
         # Persist + watch using the canonical tool_id so every entry agrees
-        # regardless of the surface form the LLM happened to pass.
+        # regardless of the surface form the LLM happened to pass. Each call
+        # appends a new row — multiple subscriptions for the same
+        # (conversation, skill, trigger) run sequentially in registration
+        # order when the event fires.
         store = get_event_subscription_storage()
         try:
-            row = store.upsert(
+            row = store.insert(
                 conversation_id=conversation_id,
                 profile=profile,
                 skill_name=canonical_skill_id,
@@ -227,7 +230,7 @@ class RegisterSkillEventTool(BuiltInTool):
                 action=action,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("register_skill_event: upsert failed")
+            logger.exception("register_skill_event: insert failed")
             return _err(f"Failed to save subscription: {exc}")
 
         try:

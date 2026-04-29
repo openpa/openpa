@@ -193,6 +193,10 @@ class SkillEventSubscriptionModel(Base):
     A row says: when ``<skill_dir>/events/<event_type>/<id>.md`` appears for
     the skill named ``skill_name``, run ``action`` (a natural-language
     instruction) in ``conversation_id`` with the file content appended.
+
+    Multiple rows for the same (conversation_id, skill_name, event_type) are
+    allowed — when the event fires they execute sequentially in created_at
+    order via the per-conversation queue worker.
     """
     __tablename__ = "skill_event_subscriptions"
 
@@ -205,10 +209,3 @@ class SkillEventSubscriptionModel(Base):
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint(
-            "conversation_id", "skill_name", "event_type",
-            name="uq_skill_event_subs",
-        ),
-    )
