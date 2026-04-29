@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, Dict, Optional
 
 import jwt
@@ -33,6 +34,7 @@ from app.tools.builtin.exec_shell import (
     subscribe,
     unsubscribe,
     write_stdin_to_process,
+    _DEFAULT_CLEANUP_TTL_HOURS,
     _process_registry,
 )
 from app.events.processes_bus import get_processes_stream_bus
@@ -346,8 +348,11 @@ def get_process_routes() -> list:
             is_pty=info.is_pty,
         )
         # Link the live process to the new registration so the UI sees the
-        # star filled without waiting for the next boot.
+        # star filled without waiting for the next boot. While linked, the
+        # process opts out of the registry's TTL — registration is the
+        # user's "keep this running indefinitely" signal.
         info.autostart_id = row["id"]
+        info.expire_time = float("inf")
         publish_process_list_changed(profile)
         return JSONResponse(row)
 
@@ -365,10 +370,14 @@ def get_process_routes() -> list:
             return JSONResponse({"error": "Forbidden"}, status_code=403)
         storage.delete(autostart_id, profile)
         # If there's a live process linked to this registration, unlink it so
-        # the star clears on the next refresh.  The process keeps running.
+        # the star clears on the next refresh. The process keeps running, but
+        # re-arm a fresh TTL window since it's no longer "indefinite by
+        # registration" — normal cleanup applies again from now on.
+        fresh_expire = time.monotonic() + (_DEFAULT_CLEANUP_TTL_HOURS * 3600)
         for info in _process_registry.values():
             if info.autostart_id == autostart_id:
                 info.autostart_id = None
+                info.expire_time = fresh_expire
         publish_process_list_changed(profile)
         return JSONResponse({"ok": True})
 

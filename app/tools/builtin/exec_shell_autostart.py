@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import re
 import time
 import uuid as _uuid
 from typing import Any, Dict, Optional, Tuple
@@ -22,7 +23,6 @@ from app.storage.autostart_storage import AutostartStorage
 from app.tools.builtin.exec_shell import (
     LogWriterState,
     ProcessInfo,
-    _DEFAULT_CLEANUP_TTL_HOURS,
     _log_writer_loop,
     _process_registry,
     _shell_for,
@@ -36,6 +36,38 @@ from app.tools.builtin.exec_shell_pty import _spawn_command_pty
 from app.utils.logger import logger
 
 
+_URL_PREFIXES = ("http://", "https://", "ftp://", "file://", "git@", "ssh://", "git+")
+
+
+def normalize_command_paths(command: str, working_dir: str) -> str:
+    """Rewrite relative path tokens in *command* to use the OS-native separator.
+
+    Skills (and other autostart entries) can declare commands with forward
+    slashes for cross-platform readability — e.g. ``uv run scripts/foo.py``.
+    On Windows, however, PowerShell + many native binaries expect ``\\`` and
+    can fail to resolve a ``/``-separated relative path. We rewrite a token
+    only when it resolves to a real file/dir under *working_dir*; URLs
+    (``http://``, ``git@…``), short/long flags (``-x``, ``--key``), and any
+    other ``/``-bearing argument that does not resolve to a path are left
+    alone. Quoted tokens are also skipped — the user's quoting wins.
+
+    No-op on POSIX (``os.sep == '/'``).
+    """
+    if os.sep == "/" or not command or not working_dir:
+        return command
+
+    def maybe_rewrite(match: "re.Match[str]") -> str:
+        token = match.group(0)
+        if "/" not in token or token.startswith(_URL_PREFIXES) or token.startswith("-"):
+            return token
+        native = token.replace("/", os.sep)
+        if os.path.exists(os.path.join(working_dir, native)):
+            return native
+        return token
+
+    return re.sub(r"[^\s\"']+", maybe_rewrite, command)
+
+
 async def _sanity_check(proc, delay: float = 2.0) -> Optional[int]:
     """Wait briefly; return the process's exit code if it died early, else None."""
     try:
@@ -43,6 +75,33 @@ async def _sanity_check(proc, delay: float = 2.0) -> Optional[int]:
     except asyncio.TimeoutError:
         return None
     return proc.returncode
+
+
+async def _drain_early_output(proc) -> tuple[str, str]:
+    """Read whatever stdout/stderr a dead-early subprocess produced.
+
+    Used only after :func:`_sanity_check` has confirmed the process exited;
+    once it's exited the pipes have a known finite amount of buffered output,
+    so a bounded ``read()`` won't block. Each stream is capped to keep log
+    lines reasonable. Returns ``("", "")`` for PTY processes (no separate
+    stderr stream) or if the streams are unavailable.
+    """
+    max_bytes = 4096
+
+    async def _read(stream) -> str:
+        if stream is None:
+            return ""
+        try:
+            data = await asyncio.wait_for(stream.read(max_bytes), timeout=1.0)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            return ""
+        if not data:
+            return ""
+        return data.decode("utf-8", errors="replace").strip()
+
+    stdout = await _read(getattr(proc, "stdout", None))
+    stderr = await _read(getattr(proc, "stderr", None))
+    return stdout, stderr
 
 
 async def spawn_from_autostart(
@@ -73,6 +132,20 @@ async def spawn_from_autostart(
         except Exception as exc:  # noqa: BLE001
             return None, f"Invalid working directory {working_dir!r}: {exc}"
 
+    # Defensive normalization for rows persisted with POSIX-style separators
+    # (or registered via an older code path). Safe no-op on POSIX systems.
+    original_command = command
+    command = normalize_command_paths(command, working_dir)
+    if command != original_command:
+        logger.info(
+            f"autostart[{row.get('id')}]: normalized command for {system} "
+            f"({original_command!r} -> {command!r})"
+        )
+    logger.info(
+        f"autostart[{row.get('id')}]: spawning (cwd={working_dir!r}, "
+        f"shell={shell!r}, is_pty={is_pty}): {command!r}"
+    )
+
     last_error: Optional[str] = None
     for attempt in range(max_attempts):
         if attempt > 0:
@@ -97,7 +170,15 @@ async def spawn_from_autostart(
 
         early_rc = await _sanity_check(proc, delay=sanity_delay)
         if early_rc is not None:
-            last_error = f"process exited immediately with code {early_rc}"
+            stdout, stderr = ("", "")
+            if not is_pty:
+                stdout, stderr = await _drain_early_output(proc)
+            detail_parts = [f"exit code {early_rc}"]
+            if stderr:
+                detail_parts.append(f"stderr: {stderr}")
+            if stdout:
+                detail_parts.append(f"stdout: {stdout}")
+            last_error = "process exited immediately — " + " | ".join(detail_parts)
             logger.warning(f"autostart[{row.get('id')}]: {last_error}")
             if is_pty:
                 try:
@@ -135,7 +216,6 @@ async def spawn_from_autostart(
         )
         writer_state.task = asyncio.create_task(_log_writer_loop(proc, writer_state))
 
-        expire_time = time.monotonic() + (_DEFAULT_CLEANUP_TTL_HOURS * 3600)
         _process_registry[process_id] = ProcessInfo(
             process=proc,
             created_at=time.time(),
@@ -143,7 +223,9 @@ async def spawn_from_autostart(
             command=command,
             log_dir=log_dir,
             log_writer_state=writer_state,
-            expire_time=expire_time,
+            # Autostart-linked processes have no expiration: while linked
+            # they're meant to live as long as the registration exists.
+            expire_time=float("inf"),
             is_long_running=True,
             is_pty=is_pty,
             task_id=None,

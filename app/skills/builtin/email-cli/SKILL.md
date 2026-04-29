@@ -5,7 +5,7 @@ metadata: {
   environment_variables: ["USERNAME", "PASSWORD", "IMAP_HOST", "SMTP_HOST"],
   events: {"event_type":[{"name":"new_email","description":"Event of receiving a new email"}]},
   long_running_app: {
-    command: "uv run scripts/email_listener.py",
+    command: "uv run scripts/event_listener.py",
     description: "Persistent listener for new emails. Drops incoming messages as markdown.",
   }
 }

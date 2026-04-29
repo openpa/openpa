@@ -743,7 +743,14 @@ def list_processes(profile: str) -> List[Dict[str, Any]]:
         if profile and info.profile and info.profile != profile:
             continue
         status, exit_code = process_status(info)
-        expire_at_wall = now_wall + max(0.0, info.expire_time - now_mono)
+        # ``expire_time`` is ``float('inf')`` for autostart-linked processes
+        # (no expiration). Surface that as ``null`` since ``Infinity`` is not
+        # valid JSON and the UI renders ``null`` as "never".
+        expire_at_wall: Optional[float]
+        if info.expire_time == float("inf"):
+            expire_at_wall = None
+        else:
+            expire_at_wall = now_wall + max(0.0, info.expire_time - now_mono)
         if info.autostart_id:
             live_autostart_ids.add(info.autostart_id)
         result.append({
@@ -1803,10 +1810,14 @@ class ExecShellOutputTool(BuiltInTool):
                 except Exception:
                     pass
 
-        cleanup_ttl_hours = float(
-            variables.get(Var.CLEANUP_TTL_HOURS) or _DEFAULT_CLEANUP_TTL_HOURS
-        )
-        info.expire_time = time.monotonic() + (cleanup_ttl_hours * 3600)
+        # Autostart-linked processes opt out of TTL refresh — they're meant to
+        # live indefinitely while registered, and an agent interaction must not
+        # silently re-arm a 24h cleanup window.
+        if info.autostart_id is None:
+            cleanup_ttl_hours = float(
+                variables.get(Var.CLEANUP_TTL_HOURS) or _DEFAULT_CLEANUP_TTL_HOURS
+            )
+            info.expire_time = time.monotonic() + (cleanup_ttl_hours * 3600)
 
         state_data = _read_state(info.log_dir) or {}
         completed = state_data.get("status") == "completed"

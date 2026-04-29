@@ -17,11 +17,17 @@ from starlette.routing import Route
 
 from app.config.settings import BaseConfig
 from app.lib.llm.factory import create_llm_provider
+from app.storage import get_autostart_storage
 from app.tools import ToolRegistry, ToolType
 from app.tools.builtin import (
     BuiltInToolGroup,
     get_builtin_tool_config,
     refresh_builtin_tool_oauth,
+)
+from app.tools.builtin.exec_shell import publish_process_list_changed
+from app.tools.builtin.exec_shell_autostart import (
+    normalize_command_paths,
+    spawn_from_autostart,
 )
 from app.utils.logger import logger
 
@@ -74,6 +80,9 @@ def get_tool_routes(
                 row["url"] = tool.url
             if hasattr(tool, "owner_profile"):
                 row["owner_profile"] = tool.owner_profile
+            lra = _long_running_app_for_tool(tool)
+            if lra is not None:
+                row["long_running_app"] = lra
             enriched.append(row)
         return JSONResponse({"tools": enriched})
 
@@ -85,7 +94,7 @@ def get_tool_routes(
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
         schema = _schema_for_tool(tool)
         snapshot = config_manager.snapshot(tool_id, profile)
-        return JSONResponse({
+        payload = {
             "tool_id": tool_id,
             "name": tool.name,
             "tool_type": tool.tool_type.value,
@@ -95,7 +104,11 @@ def get_tool_routes(
             "config": snapshot,
             "llm_defaults": _llm_defaults_for_tool(tool),
             "configured": _is_tool_configured(tool, snapshot),
-        })
+        }
+        lra = _long_running_app_for_tool(tool)
+        if lra is not None:
+            payload["long_running_app"] = lra
+        return JSONResponse(payload)
 
     async def handle_set_variables(request: Request) -> JSONResponse:
         """Update Tool Variables (env-style secrets) for a tool."""
@@ -337,6 +350,89 @@ def get_tool_routes(
 
         return JSONResponse({"success": True, "enabled": bool(enabled)})
 
+    async def handle_register_long_running_app(request: Request) -> JSONResponse:
+        """Spawn a skill's declared ``long_running_app`` and persist it as autostart.
+
+        Reads ``long_running_app.command`` from the skill's ``SKILL.md``
+        metadata, inserts a row into ``autostart_processes``, then immediately
+        spawns the command via :func:`spawn_from_autostart` so the user sees
+        the new process in the registry.
+
+        Body: ``{"force": bool}`` -- when true, bypass the duplicate check.
+        Returns ``{process_id, autostart_id, command, working_dir}``.
+        """
+        profile = _profile_from_request(request)
+        tool_id = request.path_params["tool_id"]
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        force = bool(body.get("force") or False)
+
+        tool = registry.get(tool_id)
+        if tool is None:
+            return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
+        if tool.tool_type is not ToolType.SKILL:
+            return JSONResponse(
+                {"error": "Tool is not a skill"}, status_code=400,
+            )
+
+        lra = _long_running_app_for_tool(tool)
+        if lra is None:
+            return JSONResponse(
+                {"error": "Skill has no long_running_app metadata"},
+                status_code=400,
+            )
+        # Run the command from the skill's directory so relative paths like
+        # ``scripts/event_listener.py`` resolve correctly.
+        working_dir = str(getattr(tool, "info").dir_path)
+        # Normalize forward-slash relative paths in the command to the OS's
+        # native separator so the same SKILL.md works on POSIX and Windows.
+        command = normalize_command_paths(lra["command"], working_dir)
+
+        storage = get_autostart_storage()
+        duplicate = storage.find_duplicate(profile, command)
+        if duplicate and not force:
+            return JSONResponse(
+                {
+                    "error": "duplicate",
+                    "message": "A registration with the same command already exists.",
+                    "existing": duplicate,
+                },
+                status_code=409,
+            )
+
+        row = storage.insert(
+            profile=profile,
+            command=command,
+            working_dir=working_dir,
+            is_pty=False,
+        )
+
+        process_id, error = await spawn_from_autostart(row)
+        if process_id is None:
+            # The user clicked Register, so we should *only* persist the
+            # registration when the command actually starts. Roll back the
+            # row so the failed command doesn't show up on the Processes
+            # page or get retried at the next boot.
+            storage.delete(row["id"], profile)
+            publish_process_list_changed(profile)
+            return JSONResponse(
+                {
+                    "error": "spawn_failed",
+                    "message": error or "Failed to spawn process",
+                },
+                status_code=500,
+            )
+
+        publish_process_list_changed(profile)
+        return JSONResponse({
+            "process_id": process_id,
+            "autostart_id": row["id"],
+            "command": command,
+            "working_dir": working_dir,
+        })
+
     return [
         Route("/api/tools", handle_list_tools, methods=["GET"]),
         Route("/api/tools/{tool_id}", handle_get_tool, methods=["GET"]),
@@ -345,6 +441,11 @@ def get_tool_routes(
         Route("/api/tools/{tool_id}/llm", handle_set_llm_params, methods=["PUT"]),
         Route("/api/tools/{tool_id}/llm", handle_reset_llm_params, methods=["DELETE"]),
         Route("/api/tools/{tool_id}/enabled", handle_set_enabled, methods=["PUT"]),
+        Route(
+            "/api/tools/{tool_id}/long-running-app/register",
+            handle_register_long_running_app,
+            methods=["POST"],
+        ),
     ]
 
 
@@ -352,6 +453,32 @@ def get_tool_routes(
 
 
 _META_KEYS: frozenset[str] = frozenset({"system_prompt", "description"})
+
+
+def _long_running_app_for_tool(tool) -> dict | None:
+    """Return a skill's declared ``long_running_app`` metadata, or None.
+
+    Pulled from the skill's ``SKILL.md`` frontmatter via ``SkillInfo.metadata``
+    (the inner ``metadata: { … }`` block stored by the scanner). Only returns
+    the block when it has a non-empty ``command`` string -- malformed entries
+    are silently ignored so the rest of the tool listing keeps working.
+    """
+    if tool is None or tool.tool_type is not ToolType.SKILL:
+        return None
+    info = getattr(tool, "info", None)
+    if info is None:
+        return None
+    raw = info.metadata.get("long_running_app") if isinstance(info.metadata, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    command = raw.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return None
+    out: dict = {"command": command.strip()}
+    description = raw.get("description")
+    if isinstance(description, str) and description:
+        out["description"] = description
+    return out
 
 
 def _llm_defaults_for_tool(tool) -> dict:
