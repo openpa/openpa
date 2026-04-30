@@ -56,7 +56,7 @@ def _get_calendar_service(access_token: str):
     if not access_token:
         raise RuntimeError(
             "No access token available. "
-            "Please authenticate via the Dashboard first."
+            "Please authenticate this agent in the app first."
         )
 
     from google.oauth2.credentials import Credentials
@@ -81,7 +81,7 @@ def _extract_access_token(arguments: Dict[str, Any]) -> str:
         return token
     raise RuntimeError(
         "Access token not found in tool arguments. "
-        "Please authenticate via the Dashboard to use Google Calendar tools."
+        "Please authenticate this agent in the app to use Google Calendar tools."
     )
 
 

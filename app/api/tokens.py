@@ -1,54 +1,12 @@
 import os
 
 import jwt
-from datetime import datetime, timezone, timedelta
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from app.config.settings import BaseConfig, get_user_working_directory
-
-
-async def generate_token(request: Request) -> JSONResponse:
-    """Generate a signed JWT token with profile information."""
-    if not BaseConfig.get_jwt_secret():
-        return JSONResponse(
-            {"error": "JWT authentication is not configured"},
-            status_code=503,
-        )
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    subject = body.get("sub", "a2a-client")
-    profile = body.get("profile", "")
-    hours = body.get("expiration_hours", BaseConfig.JWT_EXPIRATION_HOURS)
-
-    if not profile:
-        return JSONResponse(
-            {"error": "Profile is required"},
-            status_code=400,
-        )
-
-    now = datetime.now(timezone.utc)
-    payload = {
-        "sub": subject,
-        "profile": profile,
-        "iat": now,
-        "exp": now + timedelta(hours=hours),
-    }
-
-    token = jwt.encode(payload, BaseConfig.get_jwt_secret(), algorithm="HS256")
-
-    return JSONResponse({
-        "token": token,
-        "expires_at": (now + timedelta(hours=hours)).isoformat(),
-        "subject": subject,
-        "profile": profile,
-    })
 
 
 async def get_me(request: Request) -> JSONResponse:
@@ -59,7 +17,6 @@ async def get_me(request: Request) -> JSONResponse:
             status_code=401,
         )
 
-    # Decode the full token payload to return profile info
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         return JSONResponse({"error": "Invalid authorization header"}, status_code=401)
@@ -81,6 +38,5 @@ async def get_me(request: Request) -> JSONResponse:
 
 def get_token_routes() -> list[Route]:
     return [
-        Route("/api/tokens", generate_token, methods=["POST"]),
         Route("/api/me", get_me, methods=["GET"]),
     ]

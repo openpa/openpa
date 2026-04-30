@@ -123,7 +123,7 @@ class BuiltInToolAdapter:
     def create_synthetic_card(self) -> AgentCard:
         """Create a synthetic AgentCard for this built-in tool server.
 
-        This card is used by _format_agents_info() and the Dashboard/API
+        This card is used by _format_agents_info() and the API
         so that built-in tools appear exactly like A2A agents.
         """
         return AgentCard(

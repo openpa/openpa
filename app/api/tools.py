@@ -33,7 +33,13 @@ from app.utils.logger import logger
 
 
 def _profile_from_request(request: Request) -> str:
-    return getattr(request.user, "username", "admin")
+    return getattr(request.user, "username", "") or ""
+
+
+def _require_auth(request: Request):
+    if not getattr(request.user, "is_authenticated", False):
+        return JSONResponse({"error": "Unauthenticated"}, status_code=401)
+    return None
 
 
 def get_tool_routes(
@@ -47,7 +53,7 @@ def get_tool_routes(
     async def handle_list_tools(request: Request) -> JSONResponse:
         """List all tools visible to the profile (excluding hidden intrinsic tools).
 
-        Each row carries enough metadata for the dashboard to render the
+        Each row carries enough metadata for the UI to render the
         configuration form without an extra round-trip:
         - ``required_fields`` -- built-in tool required_config schema
         - ``config`` -- current per-profile values (variables/arguments/llm/meta)
@@ -57,7 +63,12 @@ def get_tool_routes(
           override is forbidden (the UI disables them and the API rejects
           writes)
         """
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         rows = registry.visible_for_profile(profile)
         enriched: list[dict] = []
         for row in rows:
@@ -91,7 +102,12 @@ def get_tool_routes(
         return JSONResponse({"tools": enriched})
 
     async def handle_get_tool(request: Request) -> JSONResponse:
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool_id = request.path_params["tool_id"]
         tool = registry.get(tool_id)
         if tool is None:
@@ -117,7 +133,12 @@ def get_tool_routes(
 
     async def handle_set_variables(request: Request) -> JSONResponse:
         """Update Tool Variables (env-style secrets) for a tool."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
@@ -162,7 +183,12 @@ def get_tool_routes(
 
     async def handle_set_arguments(request: Request) -> JSONResponse:
         """Update Tool Arguments (JSON-Schema parameter values)."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
@@ -176,7 +202,12 @@ def get_tool_routes(
 
     async def handle_set_llm_params(request: Request) -> JSONResponse:
         """Update LLM Parameters (provider, model, full_reasoning, reasoning_effort)."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
@@ -268,7 +299,12 @@ def get_tool_routes(
         provider-shaping key is reset, the adapter's child LLM is rebuilt so
         the change takes effect without a restart.
         """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
@@ -360,7 +396,12 @@ def get_tool_routes(
         The HTTP response returns immediately so the UI toggle stays snappy;
         the next ``GET /api/tools`` will reflect the new connection state.
         """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
@@ -394,7 +435,12 @@ def get_tool_routes(
         Body: ``{"force": bool}`` -- when true, bypass the duplicate check.
         Returns ``{process_id, autostart_id, command, working_dir}``.
         """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()

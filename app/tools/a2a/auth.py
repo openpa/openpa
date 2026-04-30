@@ -122,13 +122,13 @@ class OAuthClient:
         
         return "authenticated"
 
-    def get_auth_url(self, redirect_uri: str, profile: str = "default", source: str = "dashboard") -> str | None:
+    def get_auth_url(self, redirect_uri: str, profile: str = "default", source: str = "api") -> str | None:
         """Construct the OAuth authorization URL for server-redirect flow.
 
         Args:
             redirect_uri: The callback URL where the OAuth provider will redirect
             profile: The profile name to encode in the state parameter
-            source: The source of the auth request ('dashboard' or 'chat') to determine post-auth behavior
+            source: The source of the auth request ('api' or 'chat') to determine post-auth behavior
 
         Returns:
             The authorization URL to redirect the user to, or None if OAuth is not supported

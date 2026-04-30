@@ -110,7 +110,7 @@ class MCPAgentAdapter:
     def create_synthetic_card(self) -> AgentCard:
         """Create a synthetic AgentCard for this MCP server.
 
-        This card is used by _format_agents_info() and the Dashboard/API
+        This card is used by _format_agents_info() and the API
         so that MCP servers appear exactly like A2A agents.
         """
         return AgentCard(

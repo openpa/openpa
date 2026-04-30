@@ -235,7 +235,7 @@ class MCPOAuthClient:
 
         return "authenticated"
 
-    async def get_auth_url(self, redirect_uri: str, profile: str = "default", source: str = "dashboard") -> Optional[str]:
+    async def get_auth_url(self, redirect_uri: str, profile: str = "default", source: str = "api") -> Optional[str]:
         """Construct the OAuth authorization URL from discovered metadata.
 
         Automatically performs Dynamic Client Registration if the server
@@ -244,7 +244,7 @@ class MCPOAuthClient:
         Args:
             redirect_uri: The callback URL where the OAuth provider will redirect
             profile: The profile name to encode in the state parameter
-            source: The source of the auth request ('dashboard', 'chat', or 'api')
+            source: The source of the auth request ('api' or 'chat')
 
         Returns:
             The authorization URL, or None if auth is not supported
@@ -505,7 +505,7 @@ class NoOpOAuthClient:
     def get_auth_status(self, profile: Optional[str] = None) -> str:
         return "not_supported"
 
-    def get_auth_url(self, redirect_uri: str, profile: str = "default", source: str = "dashboard") -> Optional[str]:
+    def get_auth_url(self, redirect_uri: str, profile: str = "default", source: str = "api") -> Optional[str]:
         return None
 
     async def handle_oauth_callback(self, code: str, redirect_uri: str,

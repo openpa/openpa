@@ -1,7 +1,7 @@
 """Shim that makes MCP servers appear as RemoteAgentConnections.
 
-This allows the existing Dashboard and API code to interact with MCP servers
-using the same interface as A2A remote agents, without any changes.
+This allows the existing API code to interact with MCP servers using the
+same interface as A2A remote agents, without any changes.
 """
 
 from typing import Optional, Union
@@ -13,7 +13,7 @@ from app.utils.logger import logger
 class MCPRemoteConnectionShim:
     """Makes an MCP server look like a RemoteAgentConnections to existing code.
 
-    Provides the same methods that dashboard.py and agents.py call on
+    Provides the same methods that agents.py calls on
     RemoteAgentConnections, delegating to MCPOAuthClient for auth.
     """
 

@@ -106,10 +106,11 @@ class RemoteAgentConnections:
         return self._profile_clients[profile]
 
     async def authenticate(self):
-        """Perform authentication if no token exists."""
-        # Note: With dashboard-based auth, we no longer auto-open browser
-        # Users should visit /dashboard to initiate authentication
-        # This method now only loads existing tokens for the configured profile
+        """Perform authentication if no token exists.
+
+        Loads existing tokens for the configured profile; auth flows are
+        initiated by the app UI via the agents API, not by this method.
+        """
         profile = BaseConfig.PROFILE
         if not profile:
             return

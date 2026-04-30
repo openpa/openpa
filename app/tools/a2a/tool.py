@@ -8,7 +8,6 @@ reasoning agent.
 from __future__ import annotations
 
 import asyncio
-import urllib.parse
 import uuid
 from typing import Any, AsyncGenerator, Dict, Optional
 
@@ -29,7 +28,6 @@ from a2a.types import (
     TextPart,
 )
 
-from app.config.settings import BaseConfig
 from app.tools.a2a.connection import RemoteAgentConnections
 from app.tools.base import (
     Tool,
@@ -151,20 +149,12 @@ class A2ATool(Tool):
 
         if auth_status in ("not_authenticated", "expired"):
             verb = "authenticate with" if auth_status == "not_authenticated" else "re-authenticate with"
-            encoded_name = urllib.parse.quote(self.name)
-            encoded_profile = urllib.parse.quote(profile)
-            link = (
-                f"{BaseConfig.APP_URL}/dashboard/{encoded_name}"
-                f"/authenticate?profile={encoded_profile}&source=chat"
-            )
             yield ToolErrorEvent(
                 message=(
                     f"To access {self.name}, you need to {verb} this agent first. "
-                    f"Please go to the app to complete authentication, "
-                    f"or click this link: [Authenticate {self.name}]({link})"
+                    f"Please open the app and complete authentication for this agent."
                 ),
                 auth_required=True,
-                auth_url=link,
             )
             return
 

@@ -115,11 +115,17 @@ def _validate_transport_config(config: dict, name):
 
 
 def _profile_from_request(request: Request) -> str:
-    return getattr(request.user, "username", "admin")
+    return getattr(request.user, "username", "") or ""
+
+
+def _require_auth(request: Request):
+    if not getattr(request.user, "is_authenticated", False):
+        return JSONResponse({"error": "Unauthenticated"}, status_code=401)
+    return None
 
 
 def _serialize_tool(tool, profile: str) -> dict:
-    """Render a tool as a JSON dict for the dashboard's agent list."""
+    """Render a tool as a JSON dict for the agents list endpoint."""
     auth_status = "not_supported"
     expiration_info = None
     show_authenticate = False
@@ -229,7 +235,12 @@ def get_agent_routes(
             tool._llm_factory = lambda profile: mcp_llm_factory(tid, profile)
 
     async def handle_list_agents(request: Request) -> JSONResponse:
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         enabled_per_profile = registry.storage.list_profile_tools(profile)
         agents = []
         for tool in registry.all_tools():
@@ -241,6 +252,9 @@ def get_agent_routes(
         return JSONResponse({"agents": agents})
 
     async def handle_add_agent(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         try:
             body = await request.json()
         except Exception:
@@ -248,7 +262,7 @@ def get_agent_routes(
 
         url = body.get("url")
         agent_type = body.get("type", "a2a")
-        profile = body.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
         json_config = body.get("json_config")
 
         if agent_type not in ("a2a", "mcp"):
@@ -359,6 +373,9 @@ def get_agent_routes(
         )
 
     async def handle_remove_agent(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         tool_id = request.path_params["tool_id"]
         tool = registry.get(tool_id)
         if tool is None:
@@ -387,13 +404,18 @@ def get_agent_routes(
         response returns immediately; the next ``GET /api/agents`` will
         reflect the new connection state.
         """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         enabled = body.get("enabled")
-        profile = body.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         if enabled is None:
             return JSONResponse({"error": "'enabled' field is required"}, status_code=400)
         try:
@@ -419,6 +441,9 @@ def get_agent_routes(
         stub in place via ``registry.replace_tool`` — preserving every
         profile's ``profile_tools.enabled`` state.
         """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         tool_id = request.path_params["tool_id"]
         tool = registry.get(tool_id)
         if tool is None:
@@ -442,8 +467,13 @@ def get_agent_routes(
         return JSONResponse({"success": True, "tool_id": tool_id})
 
     async def handle_get_auth_url(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         tool_id = request.path_params["tool_id"]
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         return_url = request.query_params.get("return_url")
         tool = registry.get(tool_id)
         if tool is None:
@@ -521,8 +551,13 @@ def get_agent_routes(
         )
 
     async def handle_unlink(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         tool_id = request.path_params["tool_id"]
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool = registry.get(tool_id)
         if tool is None:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
@@ -537,8 +572,13 @@ def get_agent_routes(
         return JSONResponse({"success": bool(success)})
 
     async def handle_get_agent_config(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         tool_id = request.path_params["tool_id"]
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool = registry.get(tool_id)
         if tool is None:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
@@ -561,12 +601,17 @@ def get_agent_routes(
         })
 
     async def handle_update_agent_config(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         tool_id = request.path_params["tool_id"]
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-        profile = body.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         tool = registry.get(tool_id)
         if tool is None:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)

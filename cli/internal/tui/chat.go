@@ -1,0 +1,358 @@
+// Package tui implements the bubbletea chat view used by `opa chat` and
+// `opa conv send`/`opa conv attach` (default modes).
+package tui
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"openpa.local/cli/internal/client"
+)
+
+// Mode controls behavior of the chat model.
+type Mode int
+
+const (
+	// ModeOneShot: send a single message, stream until complete, exit.
+	ModeOneShot Mode = iota
+	// ModeAttach: subscribe without sending, stream until complete or quit.
+	ModeAttach
+	// ModeInteractive: full REPL — input area visible, send loop runs forever.
+	ModeInteractive
+)
+
+// Config configures NewModel.
+type Config struct {
+	Client         *client.Client
+	ConversationID string
+	Title          string
+
+	Mode      Mode
+	InitialMsg string // ModeOneShot only — the message to send on connect
+	Reasoning  bool
+
+	Theme Theme
+}
+
+// Run starts the TUI and blocks until the user quits or the run completes.
+func Run(ctx context.Context, cfg Config) error {
+	m := newModel(cfg)
+	prog := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// Run the SSE stream + dispatch to bubbletea via Send.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go pumpStream(streamCtx, prog, cfg.Client, cfg.ConversationID, cfg.Mode, cfg.InitialMsg, cfg.Reasoning)
+
+	_, err := prog.Run()
+	return err
+}
+
+type model struct {
+	cfg   Config
+	theme Theme
+
+	viewport viewport.Model
+	textarea textarea.Model
+
+	events     []renderedEvent
+	tokenUsage string
+
+	streaming bool
+	runID     string
+	ready     bool
+	doneOnce  bool
+
+	width, height int
+
+	statusMsg string
+	errMsg    string
+}
+
+func newModel(cfg Config) model {
+	// Caller is responsible for providing a Theme; cmd/conv.go calls
+	// themeForCfg() which always returns a populated value. We don't fall
+	// back to DefaultTheme() here because lipgloss styles aren't comparable
+	// (they contain slice fields), so detecting the zero value isn't trivial.
+	ta := textarea.New()
+	ta.Placeholder = "Type a message and press Enter to send (Ctrl+C to cancel run, Ctrl+D to quit)"
+	ta.Prompt = "❯ "
+	ta.CharLimit = 0
+	ta.SetHeight(3)
+	ta.ShowLineNumbers = false
+	ta.Focus()
+
+	vp := viewport.New(80, 20)
+	vp.SetContent("")
+
+	return model{
+		cfg:      cfg,
+		theme:    cfg.Theme,
+		viewport: vp,
+		textarea: ta,
+	}
+}
+
+// Custom messages dispatched from the SSE pump.
+type evMsg client.Event
+type evErr struct{ err error }
+type evRunID struct{ id string }
+type evDone struct{}
+
+// pumpStream is the producer half: it runs in a goroutine, opens SSE and
+// translates each frame into a tea.Msg via prog.Send. It also performs the
+// `subscribe-first → wait for ready → POST` handshake.
+func pumpStream(ctx context.Context, prog *tea.Program, c *client.Client, convID string, mode Mode, initial string, reasoning bool) {
+	events, errs := c.Stream(ctx, c.ConversationStreamPath(convID))
+	ready := false
+	sent := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case err, open := <-errs:
+			if !open {
+				errs = nil // drain — events channel will signal done
+				continue
+			}
+			if err != nil {
+				prog.Send(evErr{err})
+				return
+			}
+		case ev, open := <-events:
+			if !open {
+				prog.Send(evDone{})
+				return
+			}
+			if ev.Type == "ready" && !ready {
+				ready = true
+				if (mode == ModeOneShot || mode == ModeInteractive) && initial != "" && !sent {
+					resp, err := c.SendMessage(ctx, convID, initial, reasoning)
+					if err != nil {
+						prog.Send(evErr{fmt.Errorf("send message: %w", err)})
+						return
+					}
+					sent = true
+					prog.Send(evRunID{id: resp.RunID})
+				}
+			}
+			prog.Send(evMsg(ev))
+		}
+	}
+}
+
+// sendUserMessage is invoked when the user submits the textarea. It sends the
+// message asynchronously so the model's Update can return promptly.
+func (m *model) sendUserMessage(text string) tea.Cmd {
+	convID := m.cfg.ConversationID
+	c := m.cfg.Client
+	reasoning := m.cfg.Reasoning
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		resp, err := c.SendMessage(ctx, convID, text, reasoning)
+		if err != nil {
+			return evErr{err}
+		}
+		return evRunID{id: resp.RunID}
+	}
+}
+
+// cancelRun calls the cancel-task endpoint asynchronously.
+func (m *model) cancelRun() tea.Cmd {
+	if m.runID == "" {
+		return nil
+	}
+	c := m.cfg.Client
+	id := m.runID
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		_, _ = c.CancelTask(ctx, id)
+		return nil
+	}
+}
+
+func (m *model) Init() tea.Cmd {
+	// We deliberately don't kick off cursor blink here — the textarea handles
+	// its own blink internally once Update receives its first message. Returning
+	// a literal package-level Cmd here would couple us to a symbol whose name
+	// has shifted between bubbles versions.
+	return nil
+}
+
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.layout()
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+d":
+			return m, tea.Quit
+		case "ctrl+c":
+			if m.streaming && m.runID != "" {
+				m.statusMsg = "cancelling run…"
+				return m, m.cancelRun()
+			}
+			return m, tea.Quit
+		case "enter":
+			if m.cfg.Mode == ModeInteractive && m.textarea.Focused() && !m.streaming {
+				text := strings.TrimSpace(m.textarea.Value())
+				if text == "" {
+					return m, nil
+				}
+				m.textarea.Reset()
+				m.streaming = true
+				m.statusMsg = "sending…"
+				return m, m.sendUserMessage(text)
+			}
+		}
+
+	case evMsg:
+		ev := client.Event(msg)
+		if ev.Type == "ready" {
+			m.ready = true
+		}
+		if ev.Type == "complete" || ev.Type == "error" {
+			m.streaming = false
+			m.runID = ""
+			m.statusMsg = ""
+		}
+		if u := extractTokenUsage(ev); u != "" {
+			m.tokenUsage = u
+		}
+		if rendered, ok := formatEvent(ev, m.theme); ok {
+			m.events = append(m.events, rendered)
+			m.refreshViewport()
+		}
+		if (ev.Type == "complete" || ev.Type == "error") && m.cfg.Mode != ModeInteractive {
+			// One-shot / attach: stop after the first run terminates.
+			if !m.doneOnce {
+				m.doneOnce = true
+				return m, tea.Quit
+			}
+		}
+
+	case evRunID:
+		m.runID = msg.id
+		m.streaming = true
+		m.statusMsg = "running…"
+
+	case evErr:
+		m.errMsg = msg.err.Error()
+		m.streaming = false
+		m.runID = ""
+		// In one-shot/attach modes, an error is terminal.
+		if m.cfg.Mode != ModeInteractive {
+			return m, tea.Quit
+		}
+
+	case evDone:
+		// Stream closed cleanly without `complete`.
+		if m.cfg.Mode != ModeInteractive {
+			return m, tea.Quit
+		}
+		m.statusMsg = "stream closed; press Ctrl+D to exit"
+	}
+
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	cmds = append(cmds, cmd)
+
+	if m.cfg.Mode == ModeInteractive {
+		m.textarea, cmd = m.textarea.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *model) layout() {
+	w := m.width
+	h := m.height
+	if w == 0 || h == 0 {
+		return
+	}
+
+	headerH := 1
+	statusH := 1
+	inputH := 0
+	if m.cfg.Mode == ModeInteractive {
+		inputH = 5
+	}
+	vpH := h - headerH - statusH - inputH
+	if vpH < 3 {
+		vpH = 3
+	}
+	m.viewport.Width = w
+	m.viewport.Height = vpH
+	if m.cfg.Mode == ModeInteractive {
+		m.textarea.SetWidth(w - 2)
+	}
+	m.refreshViewport()
+}
+
+func (m *model) refreshViewport() {
+	parts := make([]string, 0, len(m.events)*2)
+	for _, e := range m.events {
+		parts = append(parts, e.body)
+	}
+	m.viewport.SetContent(strings.Join(parts, "\n"))
+	m.viewport.GotoBottom()
+}
+
+func (m *model) View() string {
+	t := m.theme
+	header := t.Header.Width(m.width).Render(m.headerText())
+
+	status := m.statusLine()
+	statusBar := t.StatusBar.Width(m.width).Render(status)
+
+	body := m.viewport.View()
+
+	if m.cfg.Mode == ModeInteractive {
+		input := lipgloss.NewStyle().Width(m.width).Render(m.textarea.View())
+		return lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, input)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar)
+}
+
+func (m *model) headerText() string {
+	if m.cfg.Title != "" {
+		return m.cfg.Title
+	}
+	return m.cfg.ConversationID
+}
+
+func (m *model) statusLine() string {
+	t := m.theme
+	parts := []string{}
+	switch {
+	case m.errMsg != "":
+		parts = append(parts, t.Err.Render("error: "+m.errMsg))
+	case m.statusMsg != "":
+		parts = append(parts, m.statusMsg)
+	case m.streaming:
+		parts = append(parts, "streaming…")
+	case m.ready:
+		parts = append(parts, "ready")
+	default:
+		parts = append(parts, "connecting…")
+	}
+	if m.tokenUsage != "" {
+		parts = append(parts, t.Dim.Render(m.tokenUsage))
+	}
+	return strings.Join(parts, "  ·  ")
+}

@@ -25,11 +25,11 @@ def get_conversation_routes(
 ) -> list[Route]:
 
     async def handle_list_conversations(request: Request) -> JSONResponse:
-        """List conversations for a profile.
-
-        Query params: profile (required), limit (default 50), offset (default 0)
-        """
-        profile = request.query_params.get("profile")
+        """List conversations for the authenticated profile."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
 
@@ -65,16 +65,26 @@ def get_conversation_routes(
 
     async def handle_get_conversation(request: Request) -> JSONResponse:
         """Get a single conversation with its messages."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
         conversation_id = request.path_params["conversation_id"]
         conv = await conversation_storage.get_conversation(conversation_id)
         if not conv:
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
+        if conv.get("profile") != profile:
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
 
         messages = await conversation_storage.get_messages(conversation_id)
         return JSONResponse({"conversation": conv, "messages": messages})
 
     async def handle_get_messages(request: Request) -> JSONResponse:
         """Get messages for a conversation (paginated)."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
         conversation_id = request.path_params["conversation_id"]
         limit = int(request.query_params.get("limit", "100"))
         offset = int(request.query_params.get("offset", "0"))
@@ -82,6 +92,8 @@ def get_conversation_routes(
         conv = await conversation_storage.get_conversation(conversation_id)
         if not conv:
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
+        if conv.get("profile") != profile:
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
 
         messages = await conversation_storage.get_messages(conversation_id, limit=limit, offset=offset)
         return JSONResponse({"messages": messages})
@@ -155,12 +167,21 @@ def get_conversation_routes(
 
     async def handle_update_conversation(request: Request) -> JSONResponse:
         """Update a conversation (title, task_id)."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
         conversation_id = request.path_params["conversation_id"]
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         conv = await conversation_storage.get_conversation(conversation_id)
         if not conv:
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
+        if conv.get("profile") != profile:
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
 
         update_fields = {}
         if "title" in body:
@@ -176,18 +197,27 @@ def get_conversation_routes(
 
     async def handle_delete_conversation(request: Request) -> JSONResponse:
         """Delete a single conversation."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
         conversation_id = request.path_params["conversation_id"]
+        conv = await conversation_storage.get_conversation(conversation_id)
+        if not conv:
+            return JSONResponse({"error": "Conversation not found"}, status_code=404)
+        if conv.get("profile") != profile:
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
         deleted = await conversation_storage.delete_conversation(conversation_id)
         if not deleted:
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
         return JSONResponse({"success": True})
 
     async def handle_delete_all_conversations(request: Request) -> JSONResponse:
-        """Delete all conversations for a profile.
-
-        Query params: profile (required)
-        """
-        profile = request.query_params.get("profile")
+        """Delete all conversations for the authenticated profile."""
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
 
@@ -229,6 +259,9 @@ def get_conversation_routes(
         unified ``stream_runner`` registry and the legacy A2A executor's
         registry, so cancel works regardless of which path launched the run.
         """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         task_id = request.path_params["task_id"]
         cancelled = cancel_run(task_id)
         if not cancelled and agent_executor is not None:

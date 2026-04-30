@@ -117,7 +117,7 @@ class Tool(ABC):
 
     tool_type: ToolType
 
-    # Hidden tools are excluded from the dashboard / UI listing but still
+    # Hidden tools are excluded from the UI listing but still
     # available to the reasoning agent (intrinsic tools).
     hidden: bool = False
 
@@ -158,7 +158,7 @@ class Tool(ABC):
     # ── prompt & UI helpers ─────────────────────────────────────────────
 
     def get_card(self) -> Optional[AgentCard]:
-        """Return an :class:`AgentCard` for the dashboard, or ``None``.
+        """Return an :class:`AgentCard` for the UI, or ``None``.
 
         Intrinsic tools usually return ``None`` (they're not user-managed).
         """

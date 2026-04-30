@@ -26,7 +26,16 @@ def _safe_resolve(relative_path: str) -> str | None:
     return target
 
 
+def _require_auth(request: Request):
+    if not getattr(request.user, "is_authenticated", False):
+        return JSONResponse({"error": "Unauthenticated"}, status_code=401)
+    return None
+
+
 async def _serve_file(request: Request):
+    unauth = _require_auth(request)
+    if unauth is not None:
+        return unauth
     relative_path = request.path_params.get("path", "")
     if not relative_path:
         return JSONResponse({"error": "No path specified"}, status_code=400)
@@ -48,6 +57,9 @@ async def _serve_file(request: Request):
 
 async def _serve_file_by_path(request: Request):
     """Serve a file given its absolute path (must be inside OPENPA_WORKING_DIR)."""
+    unauth = _require_auth(request)
+    if unauth is not None:
+        return unauth
     abs_path = request.query_params.get("path", "")
     if not abs_path:
         return JSONResponse({"error": "No path specified"}, status_code=400)

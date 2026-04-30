@@ -18,7 +18,13 @@ from app.storage.dynamic_config_storage import DynamicConfigStorage
 
 
 def _profile_from_request(request: Request) -> str:
-    return getattr(request.user, "username", "admin")
+    return getattr(request.user, "username", "") or ""
+
+
+def _require_auth(request: Request):
+    if not getattr(request.user, "is_authenticated", False):
+        return JSONResponse({"error": "Unauthenticated"}, status_code=401)
+    return None
 
 
 def _serialize_schema() -> dict:
@@ -59,7 +65,12 @@ def get_user_config_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         return JSONResponse(_serialize_schema())
 
     async def handle_get_user_config(request: Request) -> JSONResponse:
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         stored = config_storage.get_all("user_config", profile=profile)
         values: dict[str, object] = {}
         defaults: dict[str, object] = {}
@@ -78,12 +89,17 @@ def get_user_config_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         })
 
     async def handle_update_user_config(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-        profile = body.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         values = body.get("values") or {}
         if not isinstance(values, dict):
             return JSONResponse({"error": "'values' must be an object"}, status_code=400)
@@ -113,12 +129,17 @@ def get_user_config_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         return JSONResponse({"success": True, "updated": list(coerced)})
 
     async def handle_reset_user_config_key(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         key = request.path_params.get("key", "")
         try:
             lookup(key)
         except KeyError:
             return JSONResponse({"error": "unknown config key"}, status_code=404)
-        profile = request.query_params.get("profile") or _profile_from_request(request)
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
         deleted = config_storage.delete("user_config", key, profile=profile)
         return JSONResponse({"success": True, "deleted": deleted})
 

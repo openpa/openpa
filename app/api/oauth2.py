@@ -7,7 +7,6 @@ State format (base64-encoded):
 from __future__ import annotations
 
 import base64
-import urllib.parse
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse
@@ -31,7 +30,7 @@ def get_oauth2_routes(
             return HTMLResponse("<h1>Error: Missing state parameter</h1>", status_code=400)
 
         profile = None
-        source = "dashboard"
+        source = "api"
         tool_id = None
         try:
             decoded_state = base64.urlsafe_b64decode(state).decode()
@@ -103,18 +102,15 @@ def get_oauth2_routes(
                     "<p>You can close this tab and continue your conversation.</p>"
                     "<script>setTimeout(function(){ window.close(); }, 2000);</script>"
                 )
-            if source == "api":
-                return_url = pending_return_urls.pop((tool_id, profile), None)
-                if return_url:
-                    sep = "&" if "?" in return_url else "?"
-                    return RedirectResponse(url=f"{return_url}{sep}agents=open")
-                return HTMLResponse(
-                    "<h1>Authentication Successful</h1>"
-                    "<p>You can close this window and return to the app.</p>"
-                    "<script>setTimeout(function(){window.close()},3000);</script>"
-                )
-            encoded_profile = urllib.parse.quote(profile)
-            return RedirectResponse(url=f"/dashboard?profile={encoded_profile}")
+            return_url = pending_return_urls.pop((tool_id, profile), None)
+            if return_url:
+                sep = "&" if "?" in return_url else "?"
+                return RedirectResponse(url=f"{return_url}{sep}agents=open")
+            return HTMLResponse(
+                "<h1>Authentication Successful</h1>"
+                "<p>You can close this window and return to the app.</p>"
+                "<script>setTimeout(function(){window.close()},3000);</script>"
+            )
         return HTMLResponse(
             f"<h1>Authentication Failed</h1>"
             f"<p>Failed to exchange authorization code for tool '{tool_id}' "

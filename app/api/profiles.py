@@ -17,6 +17,16 @@ from app.utils import logger
 from app.utils.persona import ensure_persona_file, read_persona_file, write_persona_file
 
 
+def _require_auth(request: Request):
+    if not getattr(request.user, "is_authenticated", False):
+        return JSONResponse({"error": "Unauthenticated"}, status_code=401)
+    return None
+
+
+def _profile_from_request(request: Request) -> str:
+    return getattr(request.user, "username", "") or ""
+
+
 def get_profile_routes(
     conversation_storage: ConversationStorage,
     *,
@@ -25,6 +35,9 @@ def get_profile_routes(
 ) -> list[Route]:
 
     async def handle_list_profiles(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         try:
             profiles = await conversation_storage.list_profiles()
             visible = [p["name"] for p in profiles if not p["name"].startswith("__")]
@@ -34,6 +47,9 @@ def get_profile_routes(
             return JSONResponse({"error": f"Internal server error: {e}"}, status_code=500)
 
     async def handle_add_profile(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         try:
             body = await request.json()
             name = body.get("name")
@@ -86,11 +102,16 @@ def get_profile_routes(
             return JSONResponse({"error": f"Internal server error: {e}"}, status_code=500)
 
     async def handle_delete_profile(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         try:
             profile_name = request.path_params.get("profile_name")
             if not profile_name:
                 return JSONResponse({"error": "Profile name is required"}, status_code=400)
             profile_name = urllib.parse.unquote(profile_name)
+            if profile_name != _profile_from_request(request):
+                return JSONResponse({"error": "Forbidden"}, status_code=403)
 
             # Cascade FKs handle profile_tools / tool_configs / conversations / messages
             success = await conversation_storage.delete_profile(profile_name)
@@ -127,9 +148,14 @@ def get_profile_routes(
             return JSONResponse({"error": f"Internal server error: {e}"}, status_code=500)
 
     async def handle_get_persona(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile_name = urllib.parse.unquote(request.path_params.get("profile_name", ""))
         if not profile_name:
             return JSONResponse({"error": "Profile name is required"}, status_code=400)
+        if profile_name != _profile_from_request(request):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
         try:
             content = read_persona_file(profile_name)
             return JSONResponse({"content": content})
@@ -138,9 +164,14 @@ def get_profile_routes(
             return JSONResponse({"error": str(e)}, status_code=500)
 
     async def handle_update_persona(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile_name = urllib.parse.unquote(request.path_params.get("profile_name", ""))
         if not profile_name:
             return JSONResponse({"error": "Profile name is required"}, status_code=400)
+        if profile_name != _profile_from_request(request):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
@@ -156,9 +187,14 @@ def get_profile_routes(
             return JSONResponse({"error": str(e)}, status_code=500)
 
     async def handle_get_skill_mode(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile_name = urllib.parse.unquote(request.path_params.get("profile_name", ""))
         if not profile_name:
             return JSONResponse({"error": "Profile name is required"}, status_code=400)
+        if profile_name != _profile_from_request(request):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
         try:
             if not await conversation_storage.profile_exists(profile_name):
                 return JSONResponse({"error": f"Profile '{profile_name}' not found"}, status_code=404)
@@ -169,9 +205,14 @@ def get_profile_routes(
             return JSONResponse({"error": str(e)}, status_code=500)
 
     async def handle_update_skill_mode(request: Request) -> JSONResponse:
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
         profile_name = urllib.parse.unquote(request.path_params.get("profile_name", ""))
         if not profile_name:
             return JSONResponse({"error": "Profile name is required"}, status_code=400)
+        if profile_name != _profile_from_request(request):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
         try:
             body = await request.json()
         except Exception:

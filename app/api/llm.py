@@ -19,11 +19,20 @@ _GH_DEVICE_CODE_URL = "https://github.com/login/device/code"
 _GH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 
 
+def _require_auth(request: Request):
+    if not getattr(request.user, "is_authenticated", False):
+        return JSONResponse({"error": "Unauthenticated"}, status_code=401)
+    return None
+
+
 def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
     async def handle_list_providers(request: Request) -> JSONResponse:
         """List all available LLM providers with their config status."""
-        profile = getattr(request.user, "username", "admin")
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = getattr(request.user, "username", "") or ""
         catalogs = load_all_provider_catalogs()
         providers = []
 
@@ -145,7 +154,10 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
     async def handle_update_provider(request: Request) -> JSONResponse:
         """Update provider configuration (API key, auth method, etc.)."""
-        profile = getattr(request.user, "username", "admin")
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = getattr(request.user, "username", "") or ""
         provider_name = request.path_params["name"]
 
         if provider_name not in SUPPORTED_LLM_PROVIDERS:
@@ -191,7 +203,10 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
     async def handle_delete_provider(request: Request) -> JSONResponse:
         """Remove all stored configuration for a provider."""
-        profile = getattr(request.user, "username", "admin")
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = getattr(request.user, "username", "") or ""
         provider_name = request.path_params["name"]
 
         if provider_name not in SUPPORTED_LLM_PROVIDERS:
@@ -206,7 +221,10 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
     async def handle_get_model_groups(request: Request) -> JSONResponse:
         """Get current model group assignments (high/low) and their reasoning_effort."""
-        profile = getattr(request.user, "username", "admin")
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = getattr(request.user, "username", "") or ""
         from app.config import settings as dynaconf_settings
 
         groups = {}
@@ -241,7 +259,10 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
     async def handle_update_model_groups(request: Request) -> JSONResponse:
         """Update model group assignments."""
-        profile = getattr(request.user, "username", "admin")
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = getattr(request.user, "username", "") or ""
         try:
             body = await request.json()
         except Exception:
@@ -299,7 +320,7 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         profile. The wizard bundles the returned token into that same call.
         """
         is_authenticated = bool(getattr(request.user, "is_authenticated", False))
-        profile = getattr(request.user, "username", "admin")
+        profile = getattr(request.user, "username", "") or ""
         try:
             body = await request.json()
         except Exception:
