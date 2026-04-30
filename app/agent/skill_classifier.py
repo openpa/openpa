@@ -14,6 +14,7 @@ from typing import Any, Dict
 
 from openai.types.chat import ChatCompletionMessageParam
 
+from app.config.user_config import resolve_skill_classifier_config
 from app.constants import ChatCompletionTypeEnum
 from app.lib.llm.base import LLMProvider
 from app.utils.logger import logger
@@ -52,6 +53,7 @@ async def classify_skill_request(
     skill_name: str,
     source: str,
     llm: LLMProvider,
+    profile: str,
 ) -> Dict[str, Any]:
     """Classify ``action_input`` as either ``load`` or ``event``.
 
@@ -70,14 +72,15 @@ async def classify_skill_request(
         {"role": "user", "content": user_text},
     ]
 
+    cfg = resolve_skill_classifier_config(profile)
     raw = ""
     try:
         async for response in llm.chat_completion(
             messages=messages,
             tools=None,
-            temperature=0,
-            max_tokens=64,
-            retry=2,
+            temperature=cfg.temperature,
+            max_tokens=cfg.max_tokens,
+            retry=cfg.retry,
         ):
             if response["type"] == ChatCompletionTypeEnum.CONTENT:
                 chunk = response.get("data") or ""

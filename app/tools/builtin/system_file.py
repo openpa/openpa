@@ -29,6 +29,37 @@ MAX_MARKITDOWN_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_LIST_ENTRIES = 100
 MAX_SEARCH_RESULTS = 100
 
+
+class Var:
+    """Variable keys for the System File tool's per-profile overrides."""
+    MAX_READABLE_TOKENS = "MAX_READABLE_TOKENS"
+    MAX_MARKITDOWN_FILE_SIZE = "MAX_MARKITDOWN_FILE_SIZE"
+    MAX_LIST_ENTRIES = "MAX_LIST_ENTRIES"
+    MAX_SEARCH_RESULTS = "MAX_SEARCH_RESULTS"
+
+
+def _resolve_limits(arguments: Dict[str, Any]) -> Dict[str, int]:
+    """Read the four file-tool limits from ``arguments['_variables']``.
+
+    Falls back to the module-level constants when no per-profile override
+    is present or when the override fails to parse as an integer.
+    """
+    variables = arguments.get("_variables") or {}
+
+    def _as_int(key: str, fallback: int) -> int:
+        try:
+            raw = variables.get(key)
+            return int(raw) if raw not in (None, "") else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    return {
+        "max_readable_tokens": _as_int(Var.MAX_READABLE_TOKENS, MAX_READABLE_TOKENS),
+        "max_markitdown_file_size": _as_int(Var.MAX_MARKITDOWN_FILE_SIZE, MAX_MARKITDOWN_FILE_SIZE),
+        "max_list_entries": _as_int(Var.MAX_LIST_ENTRIES, MAX_LIST_ENTRIES),
+        "max_search_results": _as_int(Var.MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS),
+    }
+
 # Lazy-loaded encoder (created once on first use)
 _encoder = None
 
@@ -226,11 +257,12 @@ class SearchFilesTool(BuiltInTool):
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         data_dir = arguments.pop("_working_directory", None) or self._data_dir
+        limits = _resolve_limits(arguments)
         query = arguments.get("query", "").strip()
         rel_path = arguments.get("path", ".")
         pattern = arguments.get("pattern")
         type_filter = arguments.get("type")
-        max_results = min(arguments.get("max_results", 20), MAX_SEARCH_RESULTS)
+        max_results = min(arguments.get("max_results", 20), limits["max_search_results"])
 
         if not query:
             return BuiltInToolResult(structured_content={
@@ -343,6 +375,7 @@ class ListFilesTool(BuiltInTool):
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         data_dir = arguments.pop("_working_directory", None) or self._data_dir
+        limits = _resolve_limits(arguments)
         rel_path = arguments.get("path", ".")
         pattern = arguments.get("pattern")
 
@@ -375,7 +408,7 @@ class ListFilesTool(BuiltInTool):
                         })
                     except OSError:
                         entries.append({"name": entry.name, "type": "unknown", "error": "cannot stat"})
-                    if len(entries) >= MAX_LIST_ENTRIES:
+                    if len(entries) >= limits["max_list_entries"]:
                         break
         except PermissionError:
             return BuiltInToolResult(structured_content={
@@ -482,6 +515,7 @@ class ReadFileTool(BuiltInTool):
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         data_dir = arguments.pop("_working_directory", None) or self._data_dir
+        limits = _resolve_limits(arguments)
         rel_path = arguments.get("path", "")
         readable = arguments.get("readable", True)
 
@@ -525,7 +559,7 @@ class ReadFileTool(BuiltInTool):
             return _result(_file_description(file_name, mime, file_uri))
 
         # Too large for markitdown processing
-        if file_size > MAX_MARKITDOWN_FILE_SIZE:
+        if file_size > limits["max_markitdown_file_size"]:
             return _result(_file_description(file_name, mime, file_uri))
 
         # Attempt markitdown conversion
@@ -557,9 +591,9 @@ class ReadFileTool(BuiltInTool):
         token_count = len(encoder.encode(md_content))
 
         logger.debug(f"[ReadFileTool] file={file_name}, token_count={token_count}, "
-                     f"max_readable={MAX_READABLE_TOKENS}")
+                     f"max_readable={limits['max_readable_tokens']}")
 
-        if token_count > MAX_READABLE_TOKENS:
+        if token_count > limits["max_readable_tokens"]:
             return _result(_file_description(file_name, mime, file_uri))
 
         # Readable content -- include text for the LLM and file meta for the frontend
@@ -598,6 +632,7 @@ class WriteFileTool(BuiltInTool):
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         data_dir = arguments.pop("_working_directory", None) or self._data_dir
+        limits = _resolve_limits(arguments)
         rel_path = arguments.get("path", "")
         content = arguments.get("content", "")
 
@@ -627,12 +662,12 @@ class WriteFileTool(BuiltInTool):
 
         encoder = _get_encoder()
         token_count = len(encoder.encode(content))
-        if token_count > MAX_READABLE_TOKENS:
+        if token_count > limits["max_readable_tokens"]:
             return BuiltInToolResult(structured_content={
                 "error": "Content too large",
                 "message": (
                     f"Content has {token_count} tokens, which exceeds the "
-                    f"maximum of {MAX_READABLE_TOKENS} tokens."
+                    f"maximum of {limits['max_readable_tokens']} tokens."
                 ),
             })
 
@@ -893,6 +928,40 @@ TOOL_CONFIG: ToolConfig = {
             "A file management assistant. "
             "Operates within the user's profile-specific working directory."
         ),
+    },
+    "required_config": {
+        Var.MAX_READABLE_TOKENS: {
+            "description": (
+                "Maximum tokens of file content returned inline to the agent "
+                "before falling back to a metadata-only response. Default: 1000."
+            ),
+            "type": "number",
+            "default": MAX_READABLE_TOKENS,
+        },
+        Var.MAX_MARKITDOWN_FILE_SIZE: {
+            "description": (
+                "Maximum file size in bytes that markitdown will attempt to "
+                "convert. Larger files return metadata only. Default: 10485760 (10 MB)."
+            ),
+            "type": "number",
+            "default": MAX_MARKITDOWN_FILE_SIZE,
+        },
+        Var.MAX_LIST_ENTRIES: {
+            "description": (
+                "Maximum number of entries returned by list_files in one call. "
+                "Default: 100."
+            ),
+            "type": "number",
+            "default": MAX_LIST_ENTRIES,
+        },
+        Var.MAX_SEARCH_RESULTS: {
+            "description": (
+                "Hard cap on results returned by search_files (the per-call "
+                "max_results argument is clamped to this). Default: 100."
+            ),
+            "type": "number",
+            "default": MAX_SEARCH_RESULTS,
+        },
     },
 }
 

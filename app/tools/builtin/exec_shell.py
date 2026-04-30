@@ -178,6 +178,7 @@ class Var:
     LARGE_OUTPUT_MODE = "LARGE_OUTPUT_MODE"
     LARGE_OUTPUT_TOKEN_THRESHOLD = "LARGE_OUTPUT_TOKEN_THRESHOLD"
     LOG_SILENCE_THRESHOLD = "LOG_SILENCE_THRESHOLD"
+    LONG_RUNNING_TIMEOUT = "LONG_RUNNING_TIMEOUT"
     CLEANUP_TTL_HOURS = "CLEANUP_TTL_HOURS"
     # UI-only defaults used by the Process Manager terminal view.  The
     # agent's per-invocation ``cols`` / ``rows`` arguments on ExecShellTool
@@ -228,6 +229,14 @@ TOOL_CONFIG: ToolConfig = {
             ),
             "type": "number",
             "default": 3,
+        },
+        Var.LONG_RUNNING_TIMEOUT: {
+            "description": (
+                "Seconds before a process is reclassified as 'long-running' "
+                "and detached from the synchronous response. Default: 10."
+            ),
+            "type": "number",
+            "default": _DEFAULT_LONG_RUNNING_TIMEOUT,
         },
         Var.TERMINAL_DEFAULT_COLS: {
             "description": (
@@ -1256,6 +1265,7 @@ class ExecShellTool(BuiltInTool):
         variables = arguments.get("_variables") or {}
         log_silence_threshold = float(variables.get(Var.LOG_SILENCE_THRESHOLD) or 3.0)
         cleanup_ttl_hours = float(variables.get(Var.CLEANUP_TTL_HOURS) or _DEFAULT_CLEANUP_TTL_HOURS)
+        long_running_timeout = float(variables.get(Var.LONG_RUNNING_TIMEOUT) or _DEFAULT_LONG_RUNNING_TIMEOUT)
 
         if not command:
             return BuiltInToolResult(
@@ -1312,7 +1322,7 @@ class ExecShellTool(BuiltInTool):
                 proc,
                 overall_timeout=classify_timeout,
                 silence_timeout=silence_timeout,
-                long_running_timeout=_DEFAULT_LONG_RUNNING_TIMEOUT,
+                long_running_timeout=long_running_timeout,
                 skip_tui=use_pty,
                 terminal_state=terminal_state,
             )
@@ -1353,7 +1363,7 @@ class ExecShellTool(BuiltInTool):
                     proc,
                     overall_timeout=classify_timeout,
                     silence_timeout=silence_timeout,
-                    long_running_timeout=_DEFAULT_LONG_RUNNING_TIMEOUT,
+                    long_running_timeout=long_running_timeout,
                     skip_tui=True,
                     terminal_state=terminal_state,
                 )

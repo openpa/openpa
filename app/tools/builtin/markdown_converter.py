@@ -18,6 +18,13 @@ from app.utils.logger import logger
 
 SERVER_NAME = "Markdown Converter"
 
+MAX_MARKITDOWN_FILE_SIZE = 50 * 1024 * 1024  # 50 MB — fallback
+
+
+class Var:
+    MAX_FILE_SIZE = "MAX_FILE_SIZE"
+
+
 TOOL_CONFIG: ToolConfig = {
     "name": "markdown_converter",
     "display_name": "Markdown Converter",
@@ -29,9 +36,17 @@ TOOL_CONFIG: ToolConfig = {
             "markdown for further processing, editing, or analysis."
         ),
     },
+    "required_config": {
+        Var.MAX_FILE_SIZE: {
+            "description": (
+                "Maximum file size in bytes that the converter will accept. "
+                "Default: 52428800 (50 MB)."
+            ),
+            "type": "number",
+            "default": MAX_MARKITDOWN_FILE_SIZE,
+        },
+    },
 }
-
-MAX_MARKITDOWN_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 # ---------------------------------------------------------------------------
 # Lazy markitdown converter
@@ -173,12 +188,18 @@ class ConvertToMarkdownTool(BuiltInTool):
                 "message": f"'{source_path}' is not a file or does not exist.",
             })
 
+        variables = arguments.get("_variables") or {}
+        try:
+            max_size = int(variables.get(Var.MAX_FILE_SIZE) or MAX_MARKITDOWN_FILE_SIZE)
+        except (TypeError, ValueError):
+            max_size = MAX_MARKITDOWN_FILE_SIZE
+
         file_size = os.path.getsize(source_abs)
-        if file_size > MAX_MARKITDOWN_FILE_SIZE:
+        if file_size > max_size:
             return BuiltInToolResult(structured_content={
                 "error": "File too large",
                 "message": (
-                    f"File exceeds {_format_size(MAX_MARKITDOWN_FILE_SIZE)} limit "
+                    f"File exceeds {_format_size(max_size)} limit "
                     f"(actual: {_format_size(file_size)})."
                 ),
             })

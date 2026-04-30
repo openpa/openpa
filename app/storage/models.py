@@ -17,6 +17,7 @@ Tables
                         (FK profile CASCADE, FK tool CASCADE)
 - server_config       : global server settings (no FK)
 - llm_config          : per-profile LLM settings (FK profile, CASCADE)
+- user_config         : per-profile general application settings (FK profile, CASCADE)
 """
 
 import uuid
@@ -170,6 +171,23 @@ class LLMConfigModel(Base):
     key: Mapped[str] = mapped_column(String(256), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     is_secret: Mapped[bool] = mapped_column(Integer, default=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class UserConfigModel(Base):
+    """Per-profile general application configuration (Settings → Config page).
+
+    Distinct from ``llm_config`` (provider credentials) and ``server_config``
+    (global). Drives runtime tunables such as agent ``max_steps``, history
+    token windows, and per-LLM-call retry counts.
+    """
+    __tablename__ = "user_config"
+
+    profile: Mapped[str] = mapped_column(
+        String(128), ForeignKey("profiles.name", ondelete="CASCADE"), primary_key=True,
+    )
+    key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 

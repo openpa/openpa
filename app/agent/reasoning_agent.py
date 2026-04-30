@@ -32,7 +32,8 @@ from a2a.types import Part, TextPart
 from app.agent.context_store import ReasoningContextStore
 from app.agent.skill_classifier import classify_skill_request
 from app.config.settings import BaseConfig, get_user_working_directory
-from app.constants import MAX_TOKENS_FOR_HISTORY, MAX_TOKENS_PER_MESSAGE, ChatCompletionTypeEnum
+from app.config.user_config import resolve_agent_config
+from app.constants import ChatCompletionTypeEnum
 from app.lib.exception import AgentException
 from app.lib.llm.base import LLMProvider
 from app.tools import (
@@ -52,8 +53,6 @@ from app.utils.context_storage import set_context
 from app.utils.logger import logger
 from app.utils.persona import read_persona_file
 
-
-MAX_LLM_RETRIES = 2
 
 OBSERVATION_START_MARKER = "------------OBS-START------------"
 OBSERVATION_END_MARKER = "------------OBS-END------------"
@@ -170,7 +169,7 @@ class ReasoningAgent:
         registry: ToolRegistry,
         profile: str,
         context_id: Optional[str] = None,
-        max_steps: int = 40,
+        max_steps: Optional[int] = None,
         steps_length: int = 80,
         reasoning: bool = True,
         allowed_skill_ids: Optional[set[str]] = None,
@@ -181,6 +180,15 @@ class ReasoningAgent:
         self.reasoning = reasoning
         self.current_skills_directory = os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills")
         self.current_user_working_directory = get_user_working_directory()
+
+        cfg = resolve_agent_config(profile)
+        self._runtime_cfg = cfg
+        self._max_llm_retries = cfg.max_llm_retries
+        self._reasoning_temperature = cfg.reasoning_temperature
+        self._reasoning_max_tokens = cfg.reasoning_max_tokens
+        self._reasoning_retry = cfg.reasoning_retry
+        self._history_max_tokens_total = cfg.history_max_tokens_total
+        self._history_max_tokens_per_message = cfg.history_max_tokens_per_message
 
         # Snapshot the tool list available to this profile for this run.
         # When ``allowed_skill_ids`` is provided (automatic skill mode), skills
@@ -198,7 +206,7 @@ class ReasoningAgent:
 
         self.context_store = ReasoningContextStore()
         self.steps: List[str] = []
-        self.max_steps = max_steps
+        self.max_steps = max_steps if max_steps is not None else cfg.max_steps
         self.steps_length = steps_length
         self.current_step_count = 0
         self.instruction = ""
@@ -486,8 +494,8 @@ class ReasoningAgent:
         func_def = cast(dict, self.reasoning_tool["function"])
         func_def["parameters"]["properties"]["Action"]["enum"] = [""] + self._active_action_names()
 
-        truncated = truncate_messages(self.history_messages, max_tokens_per_message=MAX_TOKENS_PER_MESSAGE)
-        limited = limit_messages(truncated, max_length=MAX_TOKENS_FOR_HISTORY)
+        truncated = truncate_messages(self.history_messages, max_tokens_per_message=self._history_max_tokens_per_message)
+        limited = limit_messages(truncated, max_length=self._history_max_tokens_total)
         messages: List[ChatCompletionMessageParam] = [
             {"role": "system", "content": self.instruction},
             *limited,
@@ -500,14 +508,14 @@ class ReasoningAgent:
                 messages=messages,
                 tools=[self.reasoning_tool],
                 tool_choice="auto",
-                temperature=1,
-                max_tokens=32768,
-                retry=3,
+                temperature=self._reasoning_temperature,
+                max_tokens=self._reasoning_max_tokens,
+                retry=self._reasoning_retry,
             ):
                 llm_responses.append(response)
         except AgentException as err:
             logger.error(f"LLM call failed at step {self.current_step_count}: {err}")
-            if llm_retry < MAX_LLM_RETRIES:
+            if llm_retry < self._max_llm_retries:
                 self.current_step_count -= 1
                 async for r in self._loop(step, llm_retry + 1):
                     yield r
@@ -605,7 +613,7 @@ class ReasoningAgent:
                 "was too long for the current configuration."
             )
         else:
-            if not has_result and llm_retry < MAX_LLM_RETRIES:
+            if not has_result and llm_retry < self._max_llm_retries:
                 self.current_step_count -= 1
                 async for r in self._loop(step, llm_retry + 1):
                     yield r
@@ -1004,6 +1012,7 @@ class ReasoningAgent:
                         skill_name=tool.name,
                         source=skill_source,
                         llm=self.llm,
+                        profile=self.profile,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(

@@ -8,7 +8,6 @@ import socket
 import ssl
 import time
 from pathlib import Path
-from typing import Optional
 
 from . import config, formatter, message
 from .imap_client import ImapClient, ImapError
@@ -52,17 +51,6 @@ def _remove_heartbeat() -> None:
         config.HEARTBEAT_FILE.unlink(missing_ok=True)
     except OSError:
         pass
-
-
-def _load_state() -> Optional[dict]:
-    try:
-        with open(config.STATE_FILE, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        if not isinstance(state, dict):
-            return None
-        return state
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
 
 
 def _save_state(state: dict) -> None:
@@ -185,15 +173,16 @@ def run() -> None:
     events_dir = config.NEW_EMAIL_DIR
     events_dir.mkdir(parents=True, exist_ok=True)
 
-    state = _load_state()
-    if state is None:
-        log.info("no state file; baselining from current UIDNEXT")
-        with ImapClient() as c:
-            c.select("INBOX", readonly=True)
-            state = _baseline_state(c)
-        _save_state(state)
-        log.info("baseline: last_seen_uid=%s uidvalidity=%s",
-                 state["last_seen_uid"], state["uidvalidity"])
+    # Always baseline on startup so we only react to emails that arrive while
+    # the listener is running. Backlog accumulated during OpenPA downtime is
+    # intentionally skipped to avoid firing subscriptions for stale events.
+    log.info("baselining from current UIDNEXT on startup")
+    with ImapClient() as c:
+        c.select("INBOX", readonly=True)
+        state = _baseline_state(c)
+    _save_state(state)
+    log.info("baseline: last_seen_uid=%s uidvalidity=%s",
+             state["last_seen_uid"], state["uidvalidity"])
 
     backoff = 10
     while not _shutdown:

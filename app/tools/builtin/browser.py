@@ -53,6 +53,10 @@ class Var:
     CHANNEL = "BROWSER_CHANNEL"
     USER_DATA_DIR = "BROWSER_USER_DATA_DIR"
     EXECUTABLE_PATH = "BROWSER_EXECUTABLE_PATH"
+    MAX_CONTENT_CHARS = "BROWSER_MAX_CONTENT_CHARS"
+
+
+_DEFAULT_MAX_CONTENT_CHARS = 30000
 
 
 TOOL_CONFIG: ToolConfig = {
@@ -119,6 +123,14 @@ TOOL_CONFIG: ToolConfig = {
                 "to let Playwright auto-discover the binary via the channel."
             ),
             "type": "string",
+        },
+        Var.MAX_CONTENT_CHARS: {
+            "description": (
+                "Maximum characters of page snapshot content returned to the "
+                "agent before truncation. Default: 30000."
+            ),
+            "type": "number",
+            "default": _DEFAULT_MAX_CONTENT_CHARS,
         },
     },
 }
@@ -666,6 +678,11 @@ class BrowserTool(BuiltInTool):
     async def _snapshot(self, arguments: Dict[str, Any], session: _BrowserSession) -> BuiltInToolResult:
         target_id = arguments.get("target_id")
         selector = arguments.get("selector")
+        variables = arguments.get("_variables") or {}
+        try:
+            max_chars = int(variables.get(Var.MAX_CONTENT_CHARS) or _DEFAULT_MAX_CONTENT_CHARS)
+        except (TypeError, ValueError):
+            max_chars = _DEFAULT_MAX_CONTENT_CHARS
 
         try:
             page = await session.get_page(target_id)
@@ -687,7 +704,6 @@ class BrowserTool(BuiltInTool):
                 )
 
             # Trim to a reasonable size for the LLM context
-            max_chars = 30000
             if len(snapshot_text) > max_chars:
                 snapshot_text = snapshot_text[:max_chars] + "\n... (snapshot truncated)"
 

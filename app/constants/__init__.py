@@ -15,6 +15,3 @@ class ChatCompletionTypeEnum(Enum):
 
 
 INTRODUCE_ASSISTANT = "You are a virtual assistant that can help with a variety of tasks"
-
-MAX_TOKENS_FOR_HISTORY = 5000
-MAX_TOKENS_PER_MESSAGE = 500

@@ -12,6 +12,13 @@ from app.types import ToolConfig
 
 SERVER_NAME = "Sleep"
 
+MAX_SLEEP = 300  # 5 minutes — fallback when no per-profile override is set
+
+
+class Var:
+    MAX_SECONDS = "MAX_SECONDS"
+
+
 TOOL_CONFIG: ToolConfig = {
     "name": "sleep",
     "display_name": "Sleep",
@@ -22,9 +29,17 @@ TOOL_CONFIG: ToolConfig = {
         "Always use 'sleep' tool call for any user input"
         "E.g. 'sleep 2 seconds {\"seconds\": 2}'"),
     },
+    "required_config": {
+        Var.MAX_SECONDS: {
+            "description": (
+                "Maximum number of seconds the sleep tool will accept in a "
+                "single call. Default: 300 (5 minutes)."
+            ),
+            "type": "number",
+            "default": MAX_SLEEP,
+        },
+    },
 }
-
-MAX_SLEEP = 300  # 5 minutes
 
 
 class SleepTool(BuiltInTool):
@@ -44,15 +59,20 @@ class SleepTool(BuiltInTool):
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         seconds = arguments.get("seconds", 0)
+        variables = arguments.get("_variables") or {}
+        try:
+            max_sleep = float(variables.get(Var.MAX_SECONDS) or MAX_SLEEP)
+        except (TypeError, ValueError):
+            max_sleep = MAX_SLEEP
 
         if not isinstance(seconds, (int, float)) or seconds < 0:
             return BuiltInToolResult(
                 content=[{"type": "text", "text": "seconds must be a non-negative number"}]
             )
 
-        if seconds > MAX_SLEEP:
+        if seconds > max_sleep:
             return BuiltInToolResult(
-                content=[{"type": "text", "text": f"seconds exceeds maximum of {MAX_SLEEP}"}]
+                content=[{"type": "text", "text": f"seconds exceeds maximum of {max_sleep}"}]
             )
 
         await asyncio.sleep(seconds)

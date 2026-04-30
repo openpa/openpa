@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from app.agent.agent import OpenPAAgent
+from app.config.user_config import resolve_summarizer_config
 from app.constants import ChatCompletionTypeEnum
 from app.utils.logger import logger
 
@@ -29,12 +30,13 @@ async def summarize_reasoning(
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": input_section},
     ]
+    cfg = resolve_summarizer_config(profile)
     collected: list[str] = []
     async for resp in llm.chat_completion(
         messages=cast(Any, messages),
-        temperature=0.3,
-        max_tokens=1024,
-        retry=2,
+        temperature=cfg.temperature,
+        max_tokens=cfg.max_tokens,
+        retry=cfg.retry,
     ):
         if resp.get("type") == ChatCompletionTypeEnum.CONTENT:
             data = resp.get("data")

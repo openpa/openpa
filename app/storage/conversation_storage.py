@@ -11,7 +11,7 @@ from a2a.server.models import Base
 from app.storage.models import (
     AuthTokenModel, AutostartProcessModel, ConversationModel, LLMConfigModel,
     MessageModel, ProfileModel, ProfileToolModel, ServerConfigModel,
-    SkillEventSubscriptionModel, ToolConfigModel, ToolModel,
+    SkillEventSubscriptionModel, ToolConfigModel, ToolModel, UserConfigModel,
 )
 from app.utils.logger import logger
 
@@ -54,7 +54,7 @@ class ConversationStorage:
             for model_class in [
                 ProfileModel,
                 ConversationModel, MessageModel,
-                ServerConfigModel, LLMConfigModel,
+                ServerConfigModel, LLMConfigModel, UserConfigModel,
                 ToolModel,
                 ProfileToolModel, ToolConfigModel, AuthTokenModel,
                 AutostartProcessModel,

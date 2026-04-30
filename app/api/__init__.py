@@ -11,6 +11,7 @@ from app.api.processes import get_process_routes
 from app.api.profiles import get_profile_routes
 from app.api.tokens import get_token_routes
 from app.api.tools import get_tool_routes
+from app.api.user_config import get_user_config_routes
 
 
 def get_api_routes(
@@ -59,6 +60,7 @@ def get_api_routes(
             on_first_setup=on_first_setup, registry=registry,
         ))
         routes.extend(get_llm_routes(config_storage))
+        routes.extend(get_user_config_routes(config_storage))
     routes.extend(get_tool_routes(
         registry, config_storage=config_storage,
         connect_persisted_tool=connect_persisted_tool,
