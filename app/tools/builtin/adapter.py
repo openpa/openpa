@@ -40,6 +40,7 @@ from app.constants import ChatCompletionTypeEnum
 from app.lib.llm.base import LLMProvider
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.tools.mcp.mcp_auth import MCPOAuthClient
+from app.utils.context_storage import get_context
 from app.utils.logger import logger
 
 BUILTIN_AGENT_SYSTEM_PROMPT = (
@@ -69,6 +70,7 @@ class BuiltInToolAdapter:
         tool_instructions: Optional[str] = None,
         prepare_tools: Optional[Callable[[str, List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
         full_reasoning: bool = False,
+        direct_dispatch: bool = False,
     ):
         self._tools = tools
         self._tools_by_name: Dict[str, BuiltInTool] = {t.name: t for t in tools}
@@ -81,6 +83,11 @@ class BuiltInToolAdapter:
         self._server_instructions = tool_instructions or ""
         self._prepare_tools = prepare_tools
         self._full_reasoning = full_reasoning
+        # When True the adapter bypasses its routing LLM call for groups
+        # with exactly one sub-tool and dispatches the user's query
+        # directly to ``tool.run({"query": <query>})``. Saves a useless
+        # LLM round when there is nothing to route.
+        self._direct_dispatch = direct_dispatch
 
     @property
     def name(self) -> str:
@@ -225,39 +232,54 @@ class BuiltInToolAdapter:
         content_parts: List[str] = []
         function_calls: List[Dict] = []
 
-        logger.debug(messages)
-        logger.info(
-            f"[Built-in '{self.name}'] Invoking child LLM | "
-            f"provider={self._llm.provider_name}, model={self._llm.model_label}, "
-            f"reasoning_effort={getattr(self._llm, 'default_reasoning_effort', None)}, "
-            f"full_reasoning={self._full_reasoning}"
-        )
-        logger.debug(f"Available tools for LLM: {available_tools}")
-        try:
-            async for response in self._llm.chat_completion(
-                messages=messages,
-                tools=available_tools if available_tools else None,
-                tool_choice="auto" if available_tools else None,
-                temperature=1,
-            ):
-                logger.debug(response)
-                if response["type"] == ChatCompletionTypeEnum.CONTENT:
-                    content = response.get("data")
-                    if content:
-                        content_parts.append(content)
-                elif response["type"] == ChatCompletionTypeEnum.FUNCTION_CALLING:
-                    if (response.get("data") and isinstance(response["data"], dict)
-                            and response["data"].get("function")):
-                        function_calls = response["data"]["function"]
-                elif response["type"] == ChatCompletionTypeEnum.DONE:
-                    total_input_tokens += response.get("input_tokens") or 0
-                    total_output_tokens += response.get("output_tokens") or 0
-                    break
+        # Direct-dispatch fast path: skip the routing LLM round when the
+        # group is configured for it. The user's query is the tool's input
+        # verbatim, so there's no decision for an LLM to make and we save
+        # a chat_completion call.
+        if self._direct_dispatch and len(self._tools) == 1:
+            sole_tool = self._tools[0]
+            logger.info(
+                f"[Built-in '{self.name}'] direct dispatch -> "
+                f"{sole_tool.name}(query=...) (routing LLM bypassed)"
+            )
+            function_calls = [{
+                "name": sole_tool.name,
+                "arguments": {"query": query},
+            }]
+        else:
+            logger.debug(messages)
+            logger.info(
+                f"[Built-in '{self.name}'] Invoking child LLM | "
+                f"provider={self._llm.provider_name}, model={self._llm.model_label}, "
+                f"reasoning_effort={getattr(self._llm, 'default_reasoning_effort', None)}, "
+                f"full_reasoning={self._full_reasoning}"
+            )
+            logger.debug(f"Available tools for LLM: {available_tools}")
+            try:
+                async for response in self._llm.chat_completion(
+                    messages=messages,
+                    tools=available_tools if available_tools else None,
+                    tool_choice="auto" if available_tools else None,
+                    temperature=1,
+                ):
+                    logger.debug(response)
+                    if response["type"] == ChatCompletionTypeEnum.CONTENT:
+                        content = response.get("data")
+                        if content:
+                            content_parts.append(content)
+                    elif response["type"] == ChatCompletionTypeEnum.FUNCTION_CALLING:
+                        if (response.get("data") and isinstance(response["data"], dict)
+                                and response["data"].get("function")):
+                            function_calls = response["data"]["function"]
+                    elif response["type"] == ChatCompletionTypeEnum.DONE:
+                        total_input_tokens += response.get("input_tokens") or 0
+                        total_output_tokens += response.get("output_tokens") or 0
+                        break
 
-        except Exception as e:
-            logger.error(f"LLM call failed in built-in adapter '{self.name}': {e}")
-            yield self._make_error_event(context_id, task_id, str(e))
-            return
+            except Exception as e:
+                logger.error(f"LLM call failed in built-in adapter '{self.name}': {e}")
+                yield self._make_error_event(context_id, task_id, str(e))
+                return
 
         # Execute tool calls if any
         tool_results: Dict[str, Any] = {}
@@ -286,7 +308,13 @@ class BuiltInToolAdapter:
                 # all built-in tools. This is intentionally distinct from
                 # OPENPA_WORKING_DIR/<profile>, which is reserved for
                 # OpenPA-internal storage (skills, persona, exec_shell stdout).
-                tool_args["_working_directory"] = get_user_working_directory()
+                # ``change_working_directory`` may store a per-conversation
+                # override under ``_working_directory_override`` -- honor it.
+                override = (
+                    get_context(context_id, "_working_directory_override")
+                    if context_id else None
+                )
+                tool_args["_working_directory"] = override or get_user_working_directory()
 
                 # Inject the active profile name so tools can scope per-profile
                 # state (e.g. browser keeps a separate Chrome profile per OpenPA profile).
@@ -295,6 +323,14 @@ class BuiltInToolAdapter:
                 # Reasoning-agent context_id (== conversation.context_id), so a
                 # tool can resolve the calling conversation when needed.
                 tool_args["_context_id"] = context_id
+
+                # Hand the adapter's child LLM to the tool so an internal
+                # LLM-as-judge step (e.g. ``documentation_search`` picking the
+                # most accurate vector-search candidate) reuses the same
+                # configured provider/model as the routing pass instead of
+                # re-resolving from settings. Tools that don't need an LLM
+                # simply ignore this key.
+                tool_args["_llm"] = self._llm
 
                 # Inject arguments from metadata (e.g., latitude/longitude)
                 if metadata and "arguments" in metadata:

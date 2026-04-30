@@ -42,11 +42,19 @@ from a2a.types import (
     SecurityScheme,
 )
 
+from pathlib import Path
+
 from app.agent.agent import OpenPAAgent
 from app.agent.executor import OpenPAAgentExecutor
 from app.api import get_api_routes
 from app.config.settings import BaseConfig, set_dynamic_config_storage
 from app.constants import INTRODUCE_ASSISTANT
+from app.documents import (
+    DocumentSyncService,
+    set_service as set_document_service,
+)
+from app.documents.sync import SHARED_SCOPE
+from app.documents.watcher import DocumentWatcher
 from app.lib.embedding import GrpcEmbeddings
 from app.lib.llm.factory import create_llm_provider
 from app.lib.llm.model_groups import ModelGroupManager
@@ -459,6 +467,44 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                 f"Skill init failed for profile '{profile_name}'"
             )
 
+    # 6b. Documentation Search -- shared + per-profile `.md` sync to Qdrant.
+    #     Seed bundled docs into the shared working directory (skip-if-exists),
+    #     reconcile each scope on boot so deletions/additions/edits made while
+    #     the server was offline are reflected in the vector store, then start
+    #     a watcher per scope for live updates.
+    try:
+        document_service = DocumentSyncService(
+            working_dir=Path(BaseConfig.OPENPA_WORKING_DIR),
+            vector_store=vector_store,
+            embedding=grpc_embedding,
+        )
+        set_document_service(document_service)
+
+        bundled_docs = Path(__file__).resolve().parents[1] / "documents"
+        document_service.seed_shared_from_app(bundled_docs)
+
+        document_service.full_reconcile(SHARED_SCOPE)
+        DocumentWatcher(
+            scope=SHARED_SCOPE,
+            directory=document_service.shared_dir(),
+            sync_service=document_service,
+        ).start()
+
+        for profile_name in known_profiles:
+            try:
+                document_service.full_reconcile(profile_name)
+                DocumentWatcher(
+                    scope=profile_name,
+                    directory=document_service.profile_dir(profile_name),
+                    sync_service=document_service,
+                ).start()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    f"Document sync failed for profile '{profile_name}'"
+                )
+    except Exception:  # noqa: BLE001
+        logger.exception("Documentation Search subsystem failed to initialize")
+
     # 7. High-group LLM (admin) + OpenPAAgent
     runner = None
     if config_storage.is_setup_complete():
@@ -592,6 +638,21 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             logger.exception(
                 f"Post-setup skill init failed for profile '{profile}'"
             )
+
+        # Reconcile + watch the new profile's documents directory so the
+        # Documentation Search tool can serve per-profile docs immediately.
+        try:
+            document_service.full_reconcile(profile)
+            DocumentWatcher(
+                scope=profile,
+                directory=document_service.profile_dir(profile),
+                sync_service=document_service,
+            ).start()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                f"Post-setup document sync failed for profile '{profile}'"
+            )
+
         openpa_agent.update_embeddings()
         logger.info("Post-setup: built-in tools rebound and skills synced")
 

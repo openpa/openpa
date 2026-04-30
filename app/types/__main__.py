@@ -188,6 +188,20 @@ class ToolConfig(TypedDict, total=False):
     oauth: OAuthConfig
     arguments: dict[str, Any]
     llm_parameters: LLMParameters
+    # Names of LLM-parameter keys whose user-facing override is forbidden.
+    # The settings UI disables the field and the API rejects writes that
+    # would change it. Used by tools whose contract depends on a specific
+    # LLM-parameter value (e.g. documentation_search keeps
+    # ``full_reasoning=False`` because relevance ranking already runs
+    # inside the tool).
+    locked_llm_fields: list[str]
+    # When True, ``BuiltInToolAdapter`` skips its routing LLM call and
+    # invokes the group's single sub-tool directly with
+    # ``{"query": <Action_Input>}``. Use this for tool groups whose
+    # contract is "take the user's input verbatim and do the work" --
+    # the routing LLM otherwise just paraphrases the input into a
+    # one-tool-call no-op (token waste with no decision to make).
+    direct_dispatch: bool
 
 
 class ChatCompletionStreamResponseType(TypedDict):

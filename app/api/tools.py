@@ -53,6 +53,9 @@ def get_tool_routes(
         - ``config`` -- current per-profile values (variables/arguments/llm/meta)
         - ``full_reasoning`` -- mirrored from ``config.llm.full_reasoning`` so
           the frontend doesn't have to know about the scoping
+        - ``locked_llm_fields`` -- LLM-parameter keys whose user-facing
+          override is forbidden (the UI disables them and the API rejects
+          writes)
         """
         profile = request.query_params.get("profile") or _profile_from_request(request)
         rows = registry.visible_for_profile(profile)
@@ -67,6 +70,7 @@ def get_tool_routes(
                 "config": snapshot,
                 "required_fields": required_fields,
                 "llm_defaults": _llm_defaults_for_tool(tool),
+                "locked_llm_fields": _locked_llm_fields_for_tool(tool),
                 "full_reasoning": bool(snapshot.get("llm", {}).get("full_reasoning", False)),
             })
             if hasattr(tool, "connection_error") and getattr(tool, "connection_error"):
@@ -103,6 +107,7 @@ def get_tool_routes(
             "schema": schema,
             "config": snapshot,
             "llm_defaults": _llm_defaults_for_tool(tool),
+            "locked_llm_fields": _locked_llm_fields_for_tool(tool),
             "configured": _is_tool_configured(tool, snapshot),
         }
         lra = _long_running_app_for_tool(tool)
@@ -181,10 +186,24 @@ def get_tool_routes(
         if not isinstance(llm_params, dict):
             return JSONResponse({"error": "'llm' must be an object"}, status_code=400)
 
+        tool = registry.get(tool_id)
+        locked = set(_locked_llm_fields_for_tool(tool))
+        if locked:
+            llm_defaults = _llm_defaults_for_tool(tool)
+            for key in locked:
+                if key in llm_params and llm_params[key] != llm_defaults.get(key):
+                    return JSONResponse(
+                        {
+                            "error": (
+                                f"LLM parameter '{key}' is locked for tool "
+                                f"'{tool_id}' and cannot be modified."
+                            )
+                        },
+                        status_code=400,
+                    )
+
         for key, value in llm_params.items():
             config_manager.set_llm_param(tool_id, profile, key, value)
-
-        tool = registry.get(tool_id)
 
         # If provider/model/reasoning_effort changed, rebuild the adapter's LLM.
         # Read the *post-write* DB values so partial updates (e.g. only
@@ -264,6 +283,20 @@ def get_tool_routes(
         tool = registry.get(tool_id)
         if tool is None:
             return JSONResponse({"error": f"Tool '{tool_id}' not found"}, status_code=404)
+
+        locked = set(_locked_llm_fields_for_tool(tool))
+        if locked:
+            blocked = [k for k in keys if k in locked]
+            if blocked:
+                return JSONResponse(
+                    {
+                        "error": (
+                            f"Cannot reset locked LLM parameter(s) "
+                            f"{blocked} for tool '{tool_id}'."
+                        )
+                    },
+                    status_code=400,
+                )
 
         storage = config_manager.storage
         from app.storage.tool_storage import SCOPE_LLM, SCOPE_META
@@ -493,6 +526,22 @@ def _llm_defaults_for_tool(tool) -> dict:
         schema = get_builtin_tool_config(tool.config_name)
         return dict(schema.get("tool", {}).get("llm_parameters") or {})
     return {}
+
+
+def _locked_llm_fields_for_tool(tool) -> list[str]:
+    """Return ``locked_llm_fields`` declared by a built-in tool's TOOL_CONFIG.
+
+    These keys cannot be overridden via the API or the Settings UI. Returns
+    an empty list for tools without that declaration (the common case).
+    """
+    if tool is None:
+        return []
+    if tool.tool_type is ToolType.BUILTIN and isinstance(tool, BuiltInToolGroup):
+        schema = get_builtin_tool_config(tool.config_name)
+        raw = schema.get("tool", {}).get("locked_llm_fields") or []
+        if isinstance(raw, list):
+            return [str(k) for k in raw if isinstance(k, str)]
+    return []
 
 
 def _schema_for_tool(tool) -> dict:

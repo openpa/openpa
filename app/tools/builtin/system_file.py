@@ -24,7 +24,7 @@ from app.utils.logger import logger
 # Configuration defaults
 # ---------------------------------------------------------------------------
 
-MAX_READABLE_TOKENS = 1000
+MAX_READABLE_TOKENS = 10000
 MAX_MARKITDOWN_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_LIST_ENTRIES = 100
 MAX_SEARCH_RESULTS = 100

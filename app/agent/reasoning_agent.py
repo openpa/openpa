@@ -49,7 +49,7 @@ from app.tools.ids import slugify
 from app.skills.scanner import generate_dir_tree
 from app.types import ReasoningStreamResponseType
 from app.utils.common import limit_messages, truncate_messages
-from app.utils.context_storage import set_context
+from app.utils.context_storage import get_context, set_context
 from app.utils.logger import logger
 from app.utils.persona import read_persona_file
 
@@ -179,7 +179,6 @@ class ReasoningAgent:
         self.profile = profile
         self.reasoning = reasoning
         self.current_skills_directory = os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills")
-        self.current_user_working_directory = get_user_working_directory()
 
         cfg = resolve_agent_config(profile)
         self._runtime_cfg = cfg
@@ -376,13 +375,20 @@ class ReasoningAgent:
 
     def _build_instruction(self) -> str:
         persona = read_persona_file(self.profile)
+        # Re-resolve every step so a per-conversation override set by the
+        # ``change_working_directory`` tool is reflected in the next prompt.
+        override = (
+            get_context(self.context_id, "_working_directory_override")
+            if self.context_id else None
+        )
+        current_user_working_directory = override or get_user_working_directory()
         return template_instruction.format(
             persona_description=persona,
             current_time=f"{datetime.now().isoformat()}",
             current_os=platform.system(),
             current_working_directory=BaseConfig.OPENPA_WORKING_DIR,
             current_skills_directory=self.current_skills_directory,
-            current_user_working_directory=self.current_user_working_directory,
+            current_user_working_directory=current_user_working_directory,
             tools=self._build_tools_block(),
             loaded_skills=self._build_loaded_skills_block(),
             tool_names=", ".join(self._active_action_names()),

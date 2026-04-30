@@ -64,6 +64,8 @@ _BUILTIN_MODULE_NAMES: tuple[str, ...] = (
     "browser",
     "sleep",
     "register_skill_event",
+    "documentation_search",
+    "change_working_directory",
 )
 
 
@@ -265,6 +267,7 @@ async def register_builtin_tools(
             system_prompt=effective_meta.get("system_prompt") or None,
             tool_instructions=instructions or None,
             llm_factory=llm_factory,
+            direct_dispatch=bool(tool_info.get("direct_dispatch", False)),
         )
         registry.register_builtin(group, source=module_name)
 
