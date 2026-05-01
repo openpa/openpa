@@ -288,7 +288,7 @@ def get_prepare_tools():
     child LLM can only pick a declared event name.
     """
 
-    def prepare_tools(query, tools, *, arguments=None):
+    def prepare_tools(query, tools, *, arguments=None, **_):
         if not arguments:
             return tools
         source = (arguments.get("_skill_source") or "").strip() if isinstance(arguments, dict) else ""

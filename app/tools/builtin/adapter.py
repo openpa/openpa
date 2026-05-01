@@ -68,7 +68,7 @@ class BuiltInToolAdapter:
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         tool_instructions: Optional[str] = None,
-        prepare_tools: Optional[Callable[[str, List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
+        prepare_tools: Optional[Callable[..., List[Dict[str, Any]]]] = None,
         full_reasoning: bool = False,
         direct_dispatch: bool = False,
     ):
@@ -201,12 +201,19 @@ class BuiltInToolAdapter:
             })
 
         # Allow per-request tool customization (e.g., semantic type filtering,
-        # dynamic enums sourced from caller-injected arguments).
+        # dynamic enums sourced from caller-injected arguments or per-context
+        # state held in ContextStorage). ``context_id`` and ``profile`` are
+        # passed through so callbacks that need conversation-scoped state
+        # (e.g. ``change_working_directory``'s loaded-skill enum) can read it.
         if self._prepare_tools:
             try:
                 meta_arguments = (metadata or {}).get("arguments") if metadata else None
                 available_tools = self._prepare_tools(
-                    query, available_tools, arguments=meta_arguments,
+                    query,
+                    available_tools,
+                    arguments=meta_arguments,
+                    context_id=context_id,
+                    profile=profile,
                 )
             except Exception as e:
                 logger.warning(f"prepare_tools callback failed for '{self.name}': {e}")

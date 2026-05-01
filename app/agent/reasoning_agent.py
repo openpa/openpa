@@ -49,13 +49,20 @@ from app.tools.ids import slugify
 from app.skills.scanner import generate_dir_tree
 from app.types import ReasoningStreamResponseType
 from app.utils.common import limit_messages, truncate_messages
-from app.utils.context_storage import get_context, set_context
+from app.utils.context_storage import clear_context, get_context, set_context
 from app.utils.logger import logger
 from app.utils.persona import read_persona_file
 
 
 OBSERVATION_START_MARKER = "------------OBS-START------------"
 OBSERVATION_END_MARKER = "------------OBS-END------------"
+
+# Mirror of ``self._loaded_skill_ids`` written into ContextStorage so that
+# per-request callbacks (e.g. ``change_working_directory``'s prepare_tools)
+# can read the current loaded-skill set without holding an agent reference.
+# Must match the constant of the same name in
+# ``app.tools.builtin.change_working_directory``.
+LOADED_SKILLS_KEY = "_loaded_skill_ids"
 
 template_instruction = '''(***[VERY IMPORTANT] You MUST always call the "personal_assistant_react" function tool to return your reasoning step. DO NOT return any plain text. Always use the function call with the fields: Thought, Action, Action_Input, Thought_In_Next.***)
 {persona_description}
@@ -944,6 +951,9 @@ class ReasoningAgent:
             self._loaded_skill_sections.clear()
             if self.context_id:
                 self._clear_context(self.context_id)
+                # Reset the dynamic enum mirror so change_working_directory's
+                # ``target`` falls back to the default values on the next turn.
+                clear_context(self.context_id, LOADED_SKILLS_KEY)
             done_chunk: Dict[str, Any] = {
                 "type": ChatCompletionTypeEnum.DONE,
                 "data": observation_text,
@@ -968,6 +978,7 @@ class ReasoningAgent:
             self._loaded_skill_sections.clear()
             if self.context_id:
                 self._save_context(self.context_id)
+                clear_context(self.context_id, LOADED_SKILLS_KEY)
             yield {
                 "type": ChatCompletionTypeEnum.CLARIFY,
                 "data": observation_text,
@@ -1075,6 +1086,14 @@ class ReasoningAgent:
             # the LLM having to re-supply current_shell_directory.
             if self.context_id:
                 set_context(self.context_id, "current_shell_directory", str(dir_path))
+                # Mirror loaded skills into ContextStorage so per-request
+                # callbacks (change_working_directory.prepare_tools) can
+                # extend the ``target`` enum with the active skill IDs.
+                set_context(
+                    self.context_id,
+                    LOADED_SKILLS_KEY,
+                    sorted(self._loaded_skill_ids),
+                )
             # The full SKILL.md content is shown to the user in the frontend's
             # Thinking Process via RESULT_ARTIFACT, but the recorded step in
             # self.steps only carries a short pointer — the actual content
@@ -1347,6 +1366,7 @@ class ReasoningAgent:
         self._loaded_skill_sections.clear()
         if self.context_id:
             self._clear_context(self.context_id)
+            clear_context(self.context_id, LOADED_SKILLS_KEY)
 
         yield {
             "type": ChatCompletionTypeEnum.DONE,

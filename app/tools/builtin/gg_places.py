@@ -441,6 +441,7 @@ def create_prepare_tools(embedding_vendor, embedding_table) -> Optional[Callable
         tools: List[Dict[str, Any]],
         *,
         arguments: Optional[Dict[str, Any]] = None,  # noqa: ARG001 — unused, accepted for adapter signature
+        **_: Any,  # forward-compat: adapter also passes context_id, profile
     ) -> List[Dict[str, Any]]:
         """Filter search_places type enum to the top 50 semantically relevant types."""
         try:

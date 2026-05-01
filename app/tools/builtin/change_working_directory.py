@@ -17,27 +17,67 @@ Allowed targets:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, List, Optional
 
 from app.config.settings import BaseConfig, get_user_working_directory
 from app.skills.sync import profile_skills_dir
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig
 from app.utils.context_storage import clear_context, get_context, set_context
+from app.utils.logger import logger
 
 OVERRIDE_KEY = "_working_directory_override"
+
+# Must match the constant of the same name in ``app.agent.reasoning_agent``.
+# The Reasoning Agent mirrors its in-memory ``_loaded_skill_ids`` set into
+# ContextStorage under this key so the per-request ``prepare_tools`` callback
+# below can read it without holding a reference to the agent instance.
+LOADED_SKILLS_KEY = "_loaded_skill_ids"
 
 SERVER_NAME = "Change Working Directory"
 
 _TARGETS = ("user_working", "skills", "documents")
 
 
-def _resolve_target(target: str, profile: str) -> Path:
+def _looks_like_skill_id(target: str) -> bool:
+    """Skill IDs are ``<profile>__<slug>``; rule out the static targets first."""
+    return target not in _TARGETS and "__" in target
+
+
+def _get_skill_row(target: str) -> Optional[Dict[str, Any]]:
+    """Fetch the tools row for a skill tool_id, or ``None`` if absent."""
+    try:
+        from app.storage.tool_storage import ToolStorage
+        row = ToolStorage().get_tool(target)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"change_working_directory: skill lookup failed for {target}: {exc}")
+        return None
+    if not row or row.get("tool_type") != "skill":
+        return None
+    return row
+
+
+def _resolve_skill_dir(target: str) -> Optional[Path]:
+    """Look up a skill's on-disk source directory by its tool_id."""
+    row = _get_skill_row(target)
+    if not row:
+        return None
+    source = row.get("source")
+    if not source:
+        return None
+    return Path(source)
+
+
+def _resolve_target(target: str, profile: str) -> Optional[Path]:
     if target == "skills":
         return profile_skills_dir(profile)
     if target == "documents":
         return Path(BaseConfig.OPENPA_WORKING_DIR) / profile / "documents"
-    return Path(get_user_working_directory())
+    if target == "user_working":
+        return Path(get_user_working_directory())
+    if _looks_like_skill_id(target):
+        return _resolve_skill_dir(target)
+    return None
 
 
 TOOL_CONFIG: ToolConfig = {
@@ -49,9 +89,11 @@ TOOL_CONFIG: ToolConfig = {
             "Always switch the active working directory before executing any "
             "commands relevant to the user's files or skills. This ensures "
             "the agent is operating in the correct context.\n"
-            "Supported targets are 'user working' (the profile default), "
-            "'skills', and 'documents'.\n"
-            "E.g. 'change to skills directory'"
+            "Supported targets are user working (the profile default), "
+            "documents and skills, it can be skills or skill name "
+            "strings (e.g. 'my weather skill' to switch to a "
+            "specific skill's source dir). \n"
+            "E.g. 'change to user working directory', 'switch to documents folder', 'change to my weather skill' (if 'my weather skill' is a loaded skill)."
         ),
         "system_prompt": (
             "Don't answer any questions or provide any information. "
@@ -70,8 +112,8 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
                 "type": "string",
                 "enum": list(_TARGETS),
                 "description": (
-                    "Which directory to switch to: 'user_working' (profile "
-                    "default; clears any override), 'skills', or 'documents'."
+                    "Which directory to switch to: user working' (profile "
+                    "default; clears any override), 'documents' and skills"
                 ),
             }
         },
@@ -81,10 +123,10 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
 
     async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
         target = arguments.get("target")
-        if target not in _TARGETS:
+        if not isinstance(target, str) or not target:
             return BuiltInToolResult(
                 content=[{"type": "text", "text": (
-                    f"target must be one of {list(_TARGETS)}"
+                    f"target must be one of {list(_TARGETS)} or a loaded skill name"
                 )}]
             )
 
@@ -98,11 +140,30 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
 
         profile = arguments.get("_profile") or "default"
 
+        # Reject unknown skill IDs (defense in depth — even if the inner LLM
+        # hallucinates a skill_id outside the dynamic enum, only currently
+        # loaded skill IDs are allowed through).
+        if target not in _TARGETS:
+            loaded = get_context(context_id, LOADED_SKILLS_KEY) or []
+            if target not in loaded:
+                return BuiltInToolResult(
+                    content=[{"type": "text", "text": (
+                        f"target '{target}' is not a valid working directory option. "
+                        f"Allowed: {list(_TARGETS) + list(loaded)}"
+                    )}]
+                )
+
         previous = (
             get_context(context_id, OVERRIDE_KEY)
             or get_user_working_directory()
         )
         new_path = _resolve_target(target, profile)
+        if new_path is None:
+            return BuiltInToolResult(
+                content=[{"type": "text", "text": (
+                    f"Could not resolve directory for target '{target}'."
+                )}]
+            )
 
         if target == "user_working":
             clear_context(context_id, OVERRIDE_KEY)
@@ -127,3 +188,70 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
 def get_tools(config: dict) -> list[BuiltInTool]:
     """Return tool instances for this server."""
     return [ChangeWorkingDirectoryTool()]
+
+
+def create_prepare_tools() -> Callable:
+    """Build a ``prepare_tools`` callback that injects loaded skill IDs into
+    the ``target`` enum of the ``change_working_directory`` schema.
+
+    The Reasoning Agent mirrors its current ``_loaded_skill_ids`` set into
+    ContextStorage under ``LOADED_SKILLS_KEY``. We read that mirror keyed by
+    the active ``context_id`` and append the IDs to the static enum so the
+    inner adapter LLM can pick a skill-specific directory. When the loop ends
+    (Final Answer / Casual Chat) the agent clears the mirror, so subsequent
+    requests see only the static targets — i.e. the enum auto-resets.
+    """
+
+    def prepare_tools(
+        query: str,  # noqa: ARG001
+        tools: List[Dict[str, Any]],
+        *,
+        arguments: Optional[Dict[str, Any]] = None,  # noqa: ARG001
+        context_id: Optional[str] = None,
+        profile: Optional[str] = None,  # noqa: ARG001
+        **_: Any,
+    ) -> List[Dict[str, Any]]:
+        if not context_id:
+            return tools
+        loaded = get_context(context_id, LOADED_SKILLS_KEY) or []
+        if not loaded:
+            return tools
+        # Resolve each loaded skill_id → display name so the inner LLM can
+        # match the user's free-form phrasing ("python app test") against the
+        # skill_id it must emit ("admin__python_app_test").
+        name_lines: List[str] = []
+        for skill_id in loaded:
+            row = _get_skill_row(skill_id)
+            display_name = (row or {}).get("name") or skill_id
+            name_lines.append(f"{display_name}: {skill_id}")
+        for tool in tools:
+            fn = tool.get("function") or {}
+            if fn.get("name") != "change_working_directory":
+                continue
+            params = fn.get("parameters") or {}
+            props = params.get("properties") or {}
+            target_prop = props.get("target")
+            if isinstance(target_prop, dict):
+                # When skills are loaded, drop the generic "skills" option:
+                # the agent should switch into a specific loaded skill's
+                # directory rather than the parent skills folder.
+                base_targets = [t for t in _TARGETS if t != "skills"]
+                target_prop["enum"] = base_targets + list(loaded)
+                base_desc = target_prop.get("description") or ""
+                target_prop["description"] = (
+                    f"{base_desc}\n\nLoaded skills (skill name: skill id):\n"
+                    + "\n".join(name_lines)
+                ).strip()
+            break
+        return tools
+
+    return prepare_tools
+
+
+def get_prepare_tools() -> Optional[Callable]:
+    """Module hook auto-detected by ``register_builtin_tools``.
+
+    Returns the per-request ``prepare_tools`` callback that injects the
+    dynamic enum. No external services needed (no ``vector_store`` arg).
+    """
+    return create_prepare_tools()
