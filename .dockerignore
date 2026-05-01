@@ -57,3 +57,6 @@ docker-compose.yml
 *.log
 
 .playwright-mcp/
+
+cli/opa
+cli/opa.exe

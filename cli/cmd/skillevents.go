@@ -23,6 +23,9 @@ func newSkillEventsCmd() *cobra.Command {
 		newSkillEventsSimulateCmd(),
 		newSkillEventsStreamCmd(),
 		newSkillEventsNotificationsCmd(),
+		newSkillEventsEventsCmd(),
+		newSkillEventsListenerStatusCmd(),
+		newSkillEventsListenerStartCmd(),
 	)
 	return cmd
 }
@@ -122,6 +125,81 @@ func newSkillEventsNotificationsCmd() *cobra.Command {
 	}
 	cmd.Flags().Int64Var(&since, "since", 0, "Resume cursor (millis since epoch)")
 	return cmd
+}
+
+func newSkillEventsEventsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "events <skill>",
+		Short: "List the events declared by a skill (from its SKILL.md)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireToken(); err != nil {
+				return err
+			}
+			out, err := state.Client.ListSkillEvents(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if state.Output.JSON {
+				return output.PrintJSON(out)
+			}
+			dumpJSON(out)
+			return nil
+		},
+	}
+}
+
+func newSkillEventsListenerStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "listener-status <skill>",
+		Short: "Show the listener daemon's heartbeat-derived status for a skill",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireToken(); err != nil {
+				return err
+			}
+			out, err := state.Client.GetListenerStatus(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if state.Output.JSON {
+				return output.PrintJSON(out)
+			}
+			output.PrintKV([][2]string{
+				{"skill_name", stringField(out, "skill_name")},
+				{"running", boolField(out, "running", false)},
+				{"last_heartbeat", fmt.Sprintf("%v", out["last_heartbeat"])},
+				{"autostart_id", fmt.Sprintf("%v", out["autostart_id"])},
+				{"command", stringField(out, "command")},
+			})
+			return nil
+		},
+	}
+}
+
+func newSkillEventsListenerStartCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "listener-start <skill>",
+		Short: "Start (or resume) a skill's listener daemon as an autostart process",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireToken(); err != nil {
+				return err
+			}
+			out, err := state.Client.StartListener(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if state.Output.JSON {
+				return output.PrintJSON(out)
+			}
+			output.PrintKV([][2]string{
+				{"process_id", stringField(out, "process_id")},
+				{"autostart_id", fmt.Sprintf("%v", out["autostart_id"])},
+			})
+			return nil
+		},
+	}
 }
 
 func runStream(parent context.Context, path string) error {

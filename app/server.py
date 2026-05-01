@@ -358,6 +358,12 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # 0. Purge stale exec_shell stdout directories from previous runs.
     cleanup_stdout_on_startup()
 
+    # 0b. Install the bundled CLI binary into ~/.openpa/bin and prepend it to
+    #     PATH so the Exec Shell tool (and any other subprocess-spawning tool)
+    #     can resolve `opa` without the user editing their shell profile.
+    from app.setup.cli_install import install_cli_binary
+    install_cli_binary()
+
     # 1. Storage
     config_storage = get_dynamic_config_storage()
     set_dynamic_config_storage(config_storage)

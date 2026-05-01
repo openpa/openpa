@@ -11,6 +11,7 @@ type Theme struct {
 	AssistMsg lipgloss.Style
 	Thinking  lipgloss.Style
 	Phase     lipgloss.Style
+	Section   lipgloss.Style
 	Box       lipgloss.Style
 	Err       lipgloss.Style
 	Dim       lipgloss.Style
@@ -40,6 +41,9 @@ func DefaultTheme() Theme {
 		Phase: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214")).
 			Italic(true),
+		Section: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Bold(true),
 		Box: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("240")).
@@ -65,6 +69,7 @@ func MonochromeTheme() Theme {
 		AssistMsg: plain,
 		Thinking:  plain.Italic(true),
 		Phase:     plain.Italic(true),
+		Section:   plain.Bold(true),
 		Box:       plain.Border(lipgloss.NormalBorder()),
 		Err:       plain.Bold(true),
 		Dim:       plain,

@@ -47,3 +47,6 @@ storage/
 *.egg-info/
 .claude/
 .playwright-mcp/
+
+cli/opa
+cli/opa.exe

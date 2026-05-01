@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
+	"openpa.local/cli/internal/client"
 	"openpa.local/cli/internal/output"
 	"openpa.local/cli/internal/stream"
 	"openpa.local/cli/internal/tui"
@@ -24,6 +26,7 @@ func newConvCmd() *cobra.Command {
 		newConvHistoryCmd(),
 		newConvSendCmd(),
 		newConvAttachCmd(),
+		newConvRenameCmd(),
 		newConvCancelCmd(),
 		newConvDeleteCmd(),
 		newConvDeleteAllCmd(),
@@ -99,10 +102,16 @@ func newConvNewCmd() *cobra.Command {
 }
 
 func newConvGetCmd() *cobra.Command {
-	return &cobra.Command{
+	var detail bool
+	cmd := &cobra.Command{
 		Use:   "get <id>",
 		Short: "Fetch a conversation with its full message history",
-		Args:  cobra.ExactArgs(1),
+		Long: `Print a conversation summary plus its messages.
+
+  --detail   open a TUI that replays the full thinking-process trace
+             (Thought / Action / Input / Observation / Response) for every
+             agent turn. Press ESC to exit.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireToken(); err != nil {
 				return err
@@ -115,6 +124,17 @@ func newConvGetCmd() *cobra.Command {
 				return output.PrintJSON(out)
 			}
 			conv, _ := out["conversation"].(map[string]any)
+			messages, _ := out["messages"].([]any)
+			if detail {
+				return tui.Run(cmd.Context(), tui.Config{
+					Client:         state.Client,
+					ConversationID: stringField(conv, "id"),
+					Title:          stringField(conv, "title"),
+					Mode:           tui.ModeReplay,
+					Replay:         buildReplayEvents(messages),
+					Theme:          themeForCfg(),
+				})
+			}
 			output.PrintKV([][2]string{
 				{"id", stringField(conv, "id")},
 				{"title", stringField(conv, "title")},
@@ -123,7 +143,6 @@ func newConvGetCmd() *cobra.Command {
 			})
 			fmt.Println()
 			fmt.Println("--- messages ---")
-			messages, _ := out["messages"].([]any)
 			for _, m := range messages {
 				mm, ok := m.(map[string]any)
 				if !ok {
@@ -134,6 +153,66 @@ func newConvGetCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&detail, "detail", false, "Open a TUI that replays the full thinking-process trace")
+	return cmd
+}
+
+// buildReplayEvents converts the persisted message list returned by
+// GetConversation into the same SSE-event shape the live stream produces, so
+// the TUI can re-render a completed conversation faithfully (including each
+// ReAct step's Thought / Action / Input / Observation).
+func buildReplayEvents(messages []any) []client.Event {
+	events := make([]client.Event, 0, len(messages)*4+1)
+	for _, m := range messages {
+		mm, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		role := stringField(mm, "role")
+		content := stringField(mm, "content")
+		switch role {
+		case "user":
+			events = append(events, makeReplayEvent("user_message", map[string]any{
+				"content": content,
+			}))
+		case "agent", "assistant":
+			steps, _ := mm["thinking_steps"].([]any)
+			for _, s := range steps {
+				step, ok := s.(map[string]any)
+				if !ok {
+					continue
+				}
+				// Persisted steps use lowercase keys; the wire format (and
+				// the TUI's events.go parser) uses the agent's capitalized
+				// keys. Translate so the renderer sees a familiar shape.
+				events = append(events, makeReplayEvent("thinking", map[string]any{
+					"Thought":      stringField(step, "thought"),
+					"Action":       stringField(step, "action"),
+					"Action_Input": step["action_input"],
+					"Model_Label":  step["model_label"],
+				}))
+				if obs := stringField(step, "observation"); obs != "" {
+					events = append(events, makeReplayEvent("result", map[string]any{
+						"Observation": obs,
+					}))
+				}
+			}
+			if content != "" {
+				events = append(events, makeReplayEvent("text", map[string]any{
+					"token": content,
+				}))
+			}
+		}
+	}
+	events = append(events, makeReplayEvent("complete", map[string]any{}))
+	return events
+}
+
+// makeReplayEvent wraps a synthesized payload in the same {type, data} envelope
+// the SSE pipeline produces, so the TUI's formatEvent can read it unchanged.
+func makeReplayEvent(typ string, data map[string]any) client.Event {
+	raw, _ := json.Marshal(map[string]any{"type": typ, "data": data})
+	return client.Event{Type: typ, Raw: raw}
 }
 
 func newConvHistoryCmd() *cobra.Command {
@@ -243,6 +322,21 @@ func newConvAttachCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&raw, "raw", false, "Plain text output (no TUI)")
 	return cmd
+}
+
+func newConvRenameCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rename <id> <title>",
+		Short: "Set the title of a conversation",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireToken(); err != nil {
+				return err
+			}
+			return state.Client.UpdateConversation(cmd.Context(), args[0],
+				map[string]any{"title": args[1]})
+		},
+	}
 }
 
 func newConvCancelCmd() *cobra.Command {

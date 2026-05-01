@@ -25,6 +25,7 @@ func newToolsCmd() *cobra.Command {
 		newToolsSetArgsCmd(),
 		newToolsSetLLMCmd(),
 		newToolsResetLLMCmd(),
+		newToolsRegisterLongRunningCmd(),
 	)
 	return cmd
 }
@@ -234,6 +235,36 @@ func newToolsResetLLMCmd() *cobra.Command {
 			return state.Client.ResetToolLLMParams(cmd.Context(), args[0], args[1:])
 		},
 	}
+}
+
+func newToolsRegisterLongRunningCmd() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "register-long-running <tool_id>",
+		Short: "Spawn a skill's long_running_app and persist it as autostart",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireToken(); err != nil {
+				return err
+			}
+			out, err := state.Client.RegisterLongRunningApp(cmd.Context(), args[0], force)
+			if err != nil {
+				return err
+			}
+			if state.Output.JSON {
+				return output.PrintJSON(out)
+			}
+			output.PrintKV([][2]string{
+				{"process_id", stringField(out, "process_id")},
+				{"autostart_id", fmt.Sprintf("%v", out["autostart_id"])},
+				{"command", stringField(out, "command")},
+				{"working_dir", stringField(out, "working_dir")},
+			})
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "Bypass the duplicate-command check")
+	return cmd
 }
 
 func stringField(m map[string]any, k string) string {

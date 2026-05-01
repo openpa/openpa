@@ -59,6 +59,28 @@ def _shell_for(system: str) -> tuple[str, str]:
     return "/bin/bash", "-c"
 
 
+def _load_opa_token(profile: Optional[str]) -> Optional[str]:
+    """Read the per-profile OPA_TOKEN from ``~/.openpa/tokens/<profile>.token``.
+
+    Returns the stripped token string, or None if the profile is unset, the
+    file is missing, or it cannot be read. Failure is non-fatal — callers
+    should simply omit OPA_TOKEN from the spawned env.
+    """
+    if not profile:
+        return None
+    token_path = os.path.join(BaseConfig.OPENPA_WORKING_DIR, "tokens", f"{profile}.token")
+    try:
+        with open(token_path, "r", encoding="utf-8") as f:
+            token = f.read().strip()
+        return token or None
+    except FileNotFoundError:
+        logger.warning(f"OPA token file missing for profile '{profile}': {token_path}")
+        return None
+    except OSError as e:
+        logger.warning(f"Could not read OPA token for profile '{profile}' ({token_path}): {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Process registry & log writer state
 # ---------------------------------------------------------------------------
@@ -281,10 +303,13 @@ TOOL_CONFIG: ToolConfig = {
 
 async def _spawn_command(
     command: str, working_dir: str, system: str, shell: str, shell_flag: str,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> asyncio.subprocess.Process:
     """Spawn a command as a standalone subprocess with piped stdin/stdout/stderr."""
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    if extra_env:
+        env.update(extra_env)
     if system == "Windows":
         proc = await asyncio.create_subprocess_exec(
             shell, "-NoLogo", "-NoProfile", shell_flag, command,
@@ -1290,10 +1315,28 @@ class ExecShellTool(BuiltInTool):
         use_pty = bool(pty_arg) if pty_arg is not None else False
         auto_retry_allowed = pty_arg is None
 
+        # Inject the per-profile OPA_TOKEN and the server's own loopback URL so
+        # the spawned shell can invoke the `opa` CLI against this server as the
+        # user owning this conversation. 127.0.0.1:PORT bypasses any external
+        # APP_URL / reverse proxy — the CLI runs on the same box as the server.
+        profile = arguments.get("_profile")
+        opa_token = _load_opa_token(profile)
+        extra_env: Dict[str, str] = {
+            "OPA_SERVER": f"http://127.0.0.1:{BaseConfig.PORT}",
+        }
+        if opa_token:
+            extra_env["OPA_TOKEN"] = opa_token
+
         async def _spawn(pty_mode: bool):
             if pty_mode:
-                return await _spawn_command_pty(command, shell_working_directory, cols, rows, system)
-            return await _spawn_command(command, shell_working_directory, system, shell, shell_flag)
+                return await _spawn_command_pty(
+                    command, shell_working_directory, cols, rows, system,
+                    extra_env=extra_env,
+                )
+            return await _spawn_command(
+                command, shell_working_directory, system, shell, shell_flag,
+                extra_env=extra_env,
+            )
 
         logger.debug(
             f"exec_shell: running '{command}' on {system} with shell {shell} "

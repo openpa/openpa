@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"openpa.local/cli/internal/client"
 )
@@ -21,49 +22,60 @@ func formatEvent(ev client.Event, t Theme) (renderedEvent, bool) {
 	case "ready":
 		return renderedEvent{kind: "info", body: t.Dim.Render("• connected")}, true
 	case "user_message":
+		// Server publishes `{"id", "content", "metadata"}` — the request text
+		// lives in `content`, not `text`.
 		var p struct {
 			Data struct {
-				Text string `json:"text"`
+				Content string `json:"content"`
 			} `json:"data"`
 		}
 		_ = json.Unmarshal(ev.Raw, &p)
 		return renderedEvent{
 			kind: "user",
-			body: t.UserMsg.Render("you: ") + p.Data.Text,
+			body: t.UserMsg.Render("you: ") + p.Data.Content,
 		}, true
 	case "thinking":
+		// Server publishes the agent's ReAct chunk verbatim. Field names use
+		// the agent's capitalized convention (`Thought`, `Action`,
+		// `Action_Input`); Observation is NOT in this event — it arrives in
+		// a separate `result` event handled below.
 		var p struct {
 			Data struct {
-				Thought       string `json:"thought"`
-				Action        string `json:"action"`
-				ActionInput   any    `json:"action_input"`
-				Observation   string `json:"observation"`
-				ModelLabel    string `json:"model_label"`
+				Thought     string `json:"Thought"`
+				Action      string `json:"Action"`
+				ActionInput any    `json:"Action_Input"`
+				ModelLabel  string `json:"Model_Label"`
 			} `json:"data"`
 		}
 		_ = json.Unmarshal(ev.Raw, &p)
 		body := ""
 		if p.Data.Thought != "" {
-			body += t.Thinking.Render("◇ "+p.Data.Thought) + "\n"
+			body += t.Thinking.Render("◇ Thought: "+p.Data.Thought) + "\n"
 		}
 		if p.Data.Action != "" {
-			body += t.Dim.Render("  → "+p.Data.Action) + "\n"
+			body += t.Dim.Render("  → Action: "+p.Data.Action) + "\n"
+		}
+		if input := formatActionInput(p.Data.ActionInput); input != "" {
+			body += t.Dim.Render("    Input: "+input) + "\n"
 		}
 		if body == "" {
 			return renderedEvent{}, false
 		}
 		return renderedEvent{kind: "thinking", body: body}, true
 	case "text":
+		// Server streams the assistant's response as one event per token in
+		// `data.token`. The chat model accumulates consecutive text events
+		// into a single growing message (see chat.go).
 		var p struct {
 			Data struct {
-				Text string `json:"text"`
+				Token string `json:"token"`
 			} `json:"data"`
 		}
 		_ = json.Unmarshal(ev.Raw, &p)
-		if p.Data.Text == "" {
+		if p.Data.Token == "" {
 			return renderedEvent{}, false
 		}
-		return renderedEvent{kind: "text", body: t.AssistMsg.Render(p.Data.Text)}, true
+		return renderedEvent{kind: "text", body: t.AssistMsg.Render(p.Data.Token)}, true
 	case "phase":
 		var p struct {
 			Data struct {
@@ -117,16 +129,21 @@ func formatEvent(ev client.Event, t Theme) (renderedEvent, bool) {
 		// Status-bar concern, not a viewport entry.
 		return renderedEvent{}, false
 	case "result":
+		// `result` carries the tool observation that follows the most recent
+		// thinking event in the ReAct loop. It belongs in the Thinking
+		// Process section, not the final response.
 		var p struct {
 			Data struct {
-				Result string `json:"result"`
+				Observation string `json:"Observation"`
 			} `json:"data"`
 		}
 		_ = json.Unmarshal(ev.Raw, &p)
-		if p.Data.Result == "" {
+		if p.Data.Observation == "" {
 			return renderedEvent{}, false
 		}
-		return renderedEvent{kind: "text", body: t.AssistMsg.Render(p.Data.Result)}, true
+		obs := strings.ReplaceAll(p.Data.Observation, "\n", "\n    ")
+		body := t.Dim.Render("  ◂ Observation: "+obs) + "\n"
+		return renderedEvent{kind: "thinking", body: body}, true
 	case "complete":
 		return renderedEvent{kind: "info", body: t.Dim.Render("• run complete")}, true
 	case "error":
@@ -149,26 +166,44 @@ func formatEvent(ev client.Event, t Theme) (renderedEvent, bool) {
 	return renderedEvent{}, false
 }
 
+// formatActionInput renders the ReAct action_input field. Strings pass through
+// verbatim; structured values get pretty-printed JSON aligned under the
+// "Input:" label so nested fields stay visually grouped. Returns "" for absent
+// inputs (nil, empty string, or unmarshal failure on an empty payload).
+func formatActionInput(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	}
+	b, err := json.MarshalIndent(v, "    ", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(b)
+}
+
 // extractTokenUsage parses a token_usage event into a one-line status string.
 // Returns "" for unparseable events.
 func extractTokenUsage(ev client.Event) string {
 	if ev.Type != "token_usage" {
 		return ""
 	}
+	// Server nests usage under data.token_usage.
 	var p struct {
 		Data struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-			TotalTokens  int `json:"total_tokens"`
+			TokenUsage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"token_usage"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(ev.Raw, &p); err != nil {
 		return ""
 	}
-	in, out, total := p.Data.InputTokens, p.Data.OutputTokens, p.Data.TotalTokens
-	if total == 0 {
-		total = in + out
-	}
+	in, out := p.Data.TokenUsage.InputTokens, p.Data.TokenUsage.OutputTokens
+	total := in + out
 	if total == 0 {
 		return ""
 	}

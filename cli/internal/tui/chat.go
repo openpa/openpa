@@ -25,6 +25,21 @@ const (
 	ModeAttach
 	// ModeInteractive: full REPL — input area visible, send loop runs forever.
 	ModeInteractive
+	// ModeReplay: render a precomputed sequence of events (e.g. a persisted
+	// conversation history) and wait for the user to dismiss with ESC. No
+	// SSE stream is opened.
+	ModeReplay
+)
+
+// sectionState tracks which logical block of output the viewport is currently
+// in, so the model can inject a header when the agent transitions from
+// reasoning to its final response.
+type sectionState int
+
+const (
+	sectionNone sectionState = iota
+	sectionThinking
+	sectionResponse
 )
 
 // Config configures NewModel.
@@ -37,6 +52,10 @@ type Config struct {
 	InitialMsg string // ModeOneShot only — the message to send on connect
 	Reasoning  bool
 
+	// Replay is the event sequence rendered in ModeReplay. Ignored in other
+	// modes.
+	Replay []client.Event
+
 	Theme Theme
 }
 
@@ -45,13 +64,31 @@ func Run(ctx context.Context, cfg Config) error {
 	m := newModel(cfg)
 	prog := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	// Run the SSE stream + dispatch to bubbletea via Send.
-	streamCtx, cancel := context.WithCancel(ctx)
+	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go pumpStream(streamCtx, prog, cfg.Client, cfg.ConversationID, cfg.Mode, cfg.InitialMsg, cfg.Reasoning)
+	if cfg.Mode == ModeReplay {
+		go pumpReplay(pumpCtx, prog, cfg.Replay)
+	} else {
+		go pumpStream(pumpCtx, prog, cfg.Client, cfg.ConversationID, cfg.Mode, cfg.InitialMsg, cfg.Reasoning)
+	}
 
 	_, err := prog.Run()
 	return err
+}
+
+// pumpReplay walks a precomputed event sequence and dispatches each entry
+// through the same evMsg pipeline used by the live stream. After the last
+// event it sends evDone so the model latches into "press ESC to exit".
+func pumpReplay(ctx context.Context, prog *tea.Program, events []client.Event) {
+	for _, ev := range events {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		prog.Send(evMsg(ev))
+	}
+	prog.Send(evDone{})
 }
 
 type model struct {
@@ -67,7 +104,9 @@ type model struct {
 	streaming bool
 	runID     string
 	ready     bool
-	doneOnce  bool
+	completed bool
+
+	section sectionState
 
 	width, height int
 
@@ -81,7 +120,7 @@ func newModel(cfg Config) model {
 	// back to DefaultTheme() here because lipgloss styles aren't comparable
 	// (they contain slice fields), so detecting the zero value isn't trivial.
 	ta := textarea.New()
-	ta.Placeholder = "Type a message and press Enter to send (Ctrl+C to cancel run, Ctrl+D to quit)"
+	ta.Placeholder = "Type a message and press Enter to send (ESC to exit, Ctrl+C to cancel run)"
 	ta.Prompt = "❯ "
 	ta.CharLimit = 0
 	ta.SetHeight(3)
@@ -199,7 +238,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+d":
+		case "esc", "ctrl+d":
 			return m, tea.Quit
 		case "ctrl+c":
 			if m.streaming && m.runID != "" {
@@ -215,6 +254,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.textarea.Reset()
 				m.streaming = true
+				m.completed = false
+				m.section = sectionNone
 				m.statusMsg = "sending…"
 				return m, m.sendUserMessage(text)
 			}
@@ -234,15 +275,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tokenUsage = u
 		}
 		if rendered, ok := formatEvent(ev, m.theme); ok {
-			m.events = append(m.events, rendered)
+			if rendered.kind == "user" {
+				// New turn — reset section tracking so the next thinking/text
+				// event re-emits the header.
+				m.section = sectionNone
+			}
+			if hdr, ok := m.sectionHeaderFor(rendered.kind); ok {
+				m.events = append(m.events, hdr)
+			}
+			// Coalesce streamed response tokens into a single growing entry
+			// so the viewport renders one message instead of one-per-token.
+			if rendered.kind == "text" && len(m.events) > 0 && m.events[len(m.events)-1].kind == "text" {
+				m.events[len(m.events)-1].body += rendered.body
+			} else {
+				m.events = append(m.events, rendered)
+			}
 			m.refreshViewport()
 		}
 		if (ev.Type == "complete" || ev.Type == "error") && m.cfg.Mode != ModeInteractive {
-			// One-shot / attach: stop after the first run terminates.
-			if !m.doneOnce {
-				m.doneOnce = true
-				return m, tea.Quit
-			}
+			// One-shot / attach: keep the screen up so the user can review
+			// the output. ESC dismisses (handled in the KeyMsg branch above).
+			m.completed = true
 		}
 
 	case evRunID:
@@ -254,17 +307,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errMsg = msg.err.Error()
 		m.streaming = false
 		m.runID = ""
-		// In one-shot/attach modes, an error is terminal.
+		// In one-shot/attach modes, an error ends the run but we keep the
+		// screen up so the user can read the error before pressing ESC.
 		if m.cfg.Mode != ModeInteractive {
-			return m, tea.Quit
+			m.completed = true
 		}
 
 	case evDone:
 		// Stream closed cleanly without `complete`.
 		if m.cfg.Mode != ModeInteractive {
-			return m, tea.Quit
+			m.completed = true
+		} else {
+			m.statusMsg = "stream closed; press ESC to exit"
 		}
-		m.statusMsg = "stream closed; press Ctrl+D to exit"
 	}
 
 	var cmd tea.Cmd
@@ -304,6 +359,38 @@ func (m *model) layout() {
 	m.refreshViewport()
 }
 
+// sectionHeaderFor advances the model's section state based on the kind of the
+// next rendered event. If the section transitions (or starts), it returns a
+// synthesized header event to insert before the real event. Neutral kinds
+// (user, info, error) don't change the section.
+func (m *model) sectionHeaderFor(kind string) (renderedEvent, bool) {
+	var next sectionState
+	switch kind {
+	case "thinking", "phase", "terminal", "file", "summary":
+		next = sectionThinking
+	case "text":
+		next = sectionResponse
+	default:
+		return renderedEvent{}, false
+	}
+	if next == m.section {
+		return renderedEvent{}, false
+	}
+	m.section = next
+	label := "── Thinking Process ──"
+	if next == sectionResponse {
+		label = "── Response ──"
+	}
+	prefix := ""
+	if len(m.events) > 0 {
+		prefix = "\n"
+	}
+	return renderedEvent{
+		kind: "section",
+		body: prefix + m.theme.Section.Render(label),
+	}, true
+}
+
 func (m *model) refreshViewport() {
 	parts := make([]string, 0, len(m.events)*2)
 	for _, e := range m.events {
@@ -340,6 +427,10 @@ func (m *model) statusLine() string {
 	t := m.theme
 	parts := []string{}
 	switch {
+	case m.completed && m.cfg.Mode != ModeInteractive && m.errMsg != "":
+		parts = append(parts, t.Err.Render("error: "+m.errMsg+" · press ESC to exit"))
+	case m.completed && m.cfg.Mode != ModeInteractive:
+		parts = append(parts, "done · press ESC to exit")
 	case m.errMsg != "":
 		parts = append(parts, t.Err.Render("error: "+m.errMsg))
 	case m.statusMsg != "":

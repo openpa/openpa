@@ -62,6 +62,21 @@ func (c *Client) SetToolLLMParams(ctx context.Context, toolID string, params map
 		map[string]any{"llm": params}, nil)
 }
 
+// RegisterLongRunningApp spawns a skill's declared long_running_app and
+// persists it as autostart. Returns {process_id, autostart_id, command,
+// working_dir} on success. force=true bypasses the duplicate check.
+func (c *Client) RegisterLongRunningApp(ctx context.Context, toolID string, force bool) (map[string]any, error) {
+	body := map[string]any{}
+	if force {
+		body["force"] = true
+	}
+	var out map[string]any
+	if err := c.PostJSON(ctx, "/api/tools/"+url.PathEscape(toolID)+"/long-running-app/register", body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ResetToolLLMParams deletes the listed LLM-parameter override keys, reverting
 // them to code defaults.
 func (c *Client) ResetToolLLMParams(ctx context.Context, toolID string, keys []string) error {

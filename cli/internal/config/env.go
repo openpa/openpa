@@ -26,7 +26,7 @@ const (
 	EnvOutput  = "OPA_OUTPUT"
 	EnvNoColor = "OPA_NO_COLOR"
 
-	DefaultServer = "http://localhost:8000"
+	DefaultServer = "http://localhost:10000"
 )
 
 // LoadFromEnv reads configuration from environment variables. The active

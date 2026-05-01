@@ -54,7 +54,7 @@ ENVIRONMENT VARIABLES
                 from your OpenPA admin or from openpa-ui — the CLI cannot mint
                 tokens. The active profile is resolved server-side from the
                 token's claims, so no profile env var is needed.
-  OPA_SERVER    Server base URL (default: http://localhost:8000).
+  OPA_SERVER    Server base URL (default: http://localhost:10000).
   OPA_OUTPUT    'table' (default) or 'json'.
   OPA_NO_COLOR  When set, ANSI colors and table borders are disabled.
 `
@@ -75,6 +75,8 @@ func Execute() error {
 		newChatCmd(),
 		newProcCmd(),
 		newSkillEventsCmd(),
+		newAgentsCmd(),
+		newSetupCmd(),
 	)
 
 	return rootCmd.Execute()
