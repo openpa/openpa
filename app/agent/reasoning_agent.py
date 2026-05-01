@@ -177,7 +177,7 @@ class ReasoningAgent:
         profile: str,
         context_id: Optional[str] = None,
         max_steps: Optional[int] = None,
-        steps_length: int = 80,
+        steps_length: Optional[int] = None,
         reasoning: bool = True,
         allowed_skill_ids: Optional[set[str]] = None,
     ):
@@ -213,7 +213,7 @@ class ReasoningAgent:
         self.context_store = ReasoningContextStore()
         self.steps: List[str] = []
         self.max_steps = max_steps if max_steps is not None else cfg.max_steps
-        self.steps_length = steps_length
+        self.steps_length = steps_length if steps_length is not None else cfg.steps_length
         self.current_step_count = 0
         self.instruction = ""
         self._agent_call_history: List[Tuple[str, str]] = []

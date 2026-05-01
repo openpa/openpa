@@ -72,6 +72,7 @@ class AgentRuntimeConfig:
     reasoning_temperature: float
     reasoning_max_tokens: int
     reasoning_retry: int
+    steps_length: int
     history_max_tokens_total: int
     history_max_tokens_per_message: int
 
@@ -86,6 +87,7 @@ def resolve_agent_config(profile: str) -> AgentRuntimeConfig:
         reasoning_temperature=float(agent["reasoning_temperature"]),
         reasoning_max_tokens=int(agent["reasoning_max_tokens"]),
         reasoning_retry=int(agent["reasoning_retry"]),
+        steps_length=int(agent["steps_length"]),
         history_max_tokens_total=int(history["max_tokens_total"]),
         history_max_tokens_per_message=int(history["max_tokens_per_message"]),
     )

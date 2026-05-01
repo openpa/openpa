@@ -123,6 +123,12 @@ CONFIG_SCHEMA: dict[str, ConfigGroup] = {
                 description="How many times an individual reasoning LLM call retries on transient errors.",
                 min=0, max=10,
             ),
+            "steps_length": Field(
+                type="number", default_toml="agent.steps_length", default_fallback=80,
+                label="Steps history length",
+                description="Maximum number of recent ReAct step entries kept in the prompt context. Older entries are dropped once this is exceeded.",
+                min=5, max=500,
+            ),
         },
     ),
     "history": ConfigGroup(

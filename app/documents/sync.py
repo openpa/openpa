@@ -4,9 +4,12 @@ Single source of truth for the ``documentation_search`` Qdrant collection.
 
 Responsibilities
 ----------------
-- ``seed_shared_from_app(...)``  -- on boot, copy bundled ``<repo>/documents/*.md``
-  into ``<OPENPA_WORKING_DIR>/documents/`` only when the destination is missing
-  (per-spec: "if a file already exists, you can skip syncing that file").
+- ``seed_shared_from_app(...)``  -- on boot, mirror bundled
+  ``<repo>/documents/*.md`` into ``<OPENPA_WORKING_DIR>/documents/`` exactly:
+  missing files are copied in, divergent files are overwritten, and files
+  not present in the bundle are deleted. The bundle is authoritative for
+  system documents, so any in-session edits or extras only live until the
+  next restart.
 - ``full_reconcile(scope, profile=None)`` -- scan a scope's on-disk directory,
   upsert new/changed docs, delete points whose source files have disappeared.
 - ``apply_event(scope, path, event_type)`` -- handle a single watcher event
@@ -73,10 +76,17 @@ class DocumentSyncService:
     # ── System-level seeding ───────────────────────────────────────────────
 
     def seed_shared_from_app(self, app_documents_dir: Path) -> None:
-        """Copy bundled ``app_documents_dir/*.md`` into the shared dir.
+        """Mirror bundled docs into the shared dir exactly.
 
-        Skips files that already exist in the destination so user edits are
-        never overwritten.
+        The bundle is authoritative for system documents. On every boot:
+
+        - Files missing from dst are copied in.
+        - Files whose content differs from the bundle are overwritten.
+        - Any file in dst that doesn't exist in the bundle is deleted.
+
+        Mid-session edits or extras therefore live only until the next
+        restart. Profile-scoped docs under ``<working_dir>/<profile>/``
+        are unaffected -- this method only touches the shared dir.
         """
         if not app_documents_dir.exists():
             return
@@ -84,21 +94,53 @@ class DocumentSyncService:
         target = self.shared_dir()
         target.mkdir(parents=True, exist_ok=True)
 
+        bundled_dst: set[Path] = set()
         copied = 0
-        for src in app_documents_dir.glob("**/*.md"):
-            relpath = src.relative_to(app_documents_dir)
-            dst = target / relpath
-            if dst.exists():
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                shutil.copy2(src, dst)
-                copied += 1
-            except OSError as e:
-                logger.warning(f"[documents] failed to seed {src} -> {dst}: {e}")
+        overwritten = 0
 
-        if copied:
-            logger.info(f"[documents] seeded {copied} shared doc(s) from {app_documents_dir}")
+        for src in app_documents_dir.glob("**/*.md"):
+            rel = src.relative_to(app_documents_dir)
+            dst = target / rel
+            bundled_dst.add(dst.resolve())
+
+            if dst.exists():
+                try:
+                    same = _hash_file(src) == _hash_file(dst)
+                except OSError as e:
+                    logger.warning(f"[documents] failed to hash {dst}: {e}")
+                    continue
+                if same:
+                    continue
+                try:
+                    shutil.copy2(src, dst)
+                    overwritten += 1
+                except OSError as e:
+                    logger.warning(f"[documents] failed to overwrite {src} -> {dst}: {e}")
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(src, dst)
+                    copied += 1
+                except OSError as e:
+                    logger.warning(f"[documents] failed to seed {src} -> {dst}: {e}")
+
+        deleted = 0
+        for path in list(target.rglob("*")):
+            if path.is_dir():
+                continue
+            if path.resolve() in bundled_dst:
+                continue
+            try:
+                path.unlink()
+                deleted += 1
+            except OSError as e:
+                logger.warning(f"[documents] failed to delete extra {path}: {e}")
+
+        if copied or overwritten or deleted:
+            logger.info(
+                f"[documents] mirror from {app_documents_dir}: "
+                f"copied={copied} overwritten={overwritten} deleted={deleted}"
+            )
 
     # ── Reconciliation ─────────────────────────────────────────────────────
 
@@ -422,3 +464,7 @@ class DocumentSyncService:
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _hash_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()

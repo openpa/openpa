@@ -10,8 +10,28 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
-from app.config.settings import BaseConfig
+from app.config.settings import BaseConfig, get_user_working_directory
 from app.utils.logger import logger
+
+
+def _allowed_bases() -> list[str]:
+    """Directories the file-serving routes are allowed to read from.
+
+    Includes both the internal OpenPA working dir and the user's
+    working dir (where the agent operates and produces files).
+    """
+    bases = [os.path.realpath(BaseConfig.OPENPA_WORKING_DIR)]
+    user_dir = os.path.realpath(get_user_working_directory())
+    if user_dir not in bases:
+        bases.append(user_dir)
+    return bases
+
+
+def _is_inside_allowed(target: str) -> bool:
+    for base in _allowed_bases():
+        if target == base or target.startswith(base + os.sep):
+            return True
+    return False
 
 
 def _safe_resolve(relative_path: str) -> str | None:
@@ -56,7 +76,11 @@ async def _serve_file(request: Request):
 
 
 async def _serve_file_by_path(request: Request):
-    """Serve a file given its absolute path (must be inside OPENPA_WORKING_DIR)."""
+    """Serve a file given its absolute path.
+
+    The path must resolve inside one of the allowed bases
+    (OPENPA_WORKING_DIR or the user working directory).
+    """
     unauth = _require_auth(request)
     if unauth is not None:
         return unauth
@@ -64,10 +88,9 @@ async def _serve_file_by_path(request: Request):
     if not abs_path:
         return JSONResponse({"error": "No path specified"}, status_code=400)
 
-    # Normalise and verify the absolute path is inside the working directory
-    base = os.path.realpath(BaseConfig.OPENPA_WORKING_DIR)
     target = os.path.realpath(abs_path)
-    if target != base and not target.startswith(base + os.sep):
+    if not _is_inside_allowed(target):
+        logger.debug(f"File access denied: target={target}, allowed_bases={_allowed_bases()}")
         return JSONResponse({"error": "Access denied"}, status_code=403)
 
     if not os.path.isfile(target):
