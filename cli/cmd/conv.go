@@ -27,6 +27,7 @@ func newConvCmd() *cobra.Command {
 		newConvSendCmd(),
 		newConvAttachCmd(),
 		newConvRenameCmd(),
+		newConvSetIDCmd(),
 		newConvCancelCmd(),
 		newConvDeleteCmd(),
 		newConvDeleteAllCmd(),
@@ -335,6 +336,27 @@ func newConvRenameCmd() *cobra.Command {
 			}
 			return state.Client.UpdateConversation(cmd.Context(), args[0],
 				map[string]any{"title": args[1]})
+		},
+	}
+}
+
+func newConvSetIDCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-id <old_id> <new_id>",
+		Short: "Change a conversation's id (also resets title to the new id)",
+		Long: `Rename a conversation's id. The new id must match
+^[a-z0-9][a-z0-9_-]{0,127}$ — lowercase a-z, digits, '-', or '_', starting
+with an alphanumeric character. The title is reset to the new id; use
+'opa conv rename <new_id> <title>' afterward if you want a different title.
+
+Cannot be run while the conversation has an active streaming run.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireToken(); err != nil {
+				return err
+			}
+			return state.Client.UpdateConversation(cmd.Context(), args[0],
+				map[string]any{"id": args[1]})
 		},
 	}
 }

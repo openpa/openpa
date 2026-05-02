@@ -1,18 +1,58 @@
 ---
-description: "Complete reference for the `opa config` CLI command — how to inspect, set, and reset per-profile OpenPA agent settings using the four subcommands `opa config schema`, `opa config get`, `opa config set`, and `opa config reset`, including the full list of configurable keys (agent, history, skill_classifier, summarizer) with their types, defaults, and allowed ranges."
+description: "Complete reference for the `opa config` CLI command — the terminal-side counterpart to the **Settings → Config** page in the OpenPA web UI — covering how to inspect, override, and reset per-profile agent settings using the four subcommands `opa config schema`, `opa config get`, `opa config set`, and `opa config reset`. Lists every configurable key across the reasoning agent loop (max steps, retries, temperature, max tokens, steps history), conversation history token budgets, skill classifier, and trace summarizer, with dotted names, types, defaults, allowed ranges, and the matching card and field label on the Settings page so users can switch between CLI and UI without losing their place."
 ---
 
 # `opa config` — Per-Profile Settings Reference
 
 `opa config` is the CLI for inspecting and changing per-profile settings
-that control OpenPA's reasoning agent loop, conversation-history budgets,
-skill classifier, and trace summarizer.
+that control the OpenPA reasoning agent. Each subcommand maps one-to-one
+to an action on the **Settings → Config** page in the web UI, so you can
+freely switch between the two: anything you change in the CLI shows up
+on that page, and anything you change there is visible to `opa config
+get`.
 
-Every setting has a built-in **default**. When you change a setting with
-`opa config set`, your value becomes an **override** that takes priority
-over the default for your profile only; the override persists across
-restarts. `opa config reset` removes the override and the setting goes
-back to its default.
+The settings are grouped into four areas:
+
+- **Reasoning Agent** — iteration limits and per-call LLM parameters
+  for the ReAct loop that drives every conversation turn.
+- **Conversation History** — token budgets for the message window
+  assembled before each LLM call.
+- **Skill Classifier** — the lightweight LLM that decides whether an
+  incoming request maps to a registered skill.
+- **Trace Summarizer** — the LLM that compresses long reasoning traces
+  back into the conversation history when they grow too large.
+
+Every setting has a built-in **default**. When you change a setting
+with `opa config set`, your value becomes an **override** that takes
+priority over the default for your profile only; the override persists
+across restarts. `opa config reset` removes the override and the
+setting goes back to its default. Overrides are scoped to one profile,
+so different profiles can carry different values for the same key
+without interfering with each other.
+
+## Finding these settings in the web UI
+
+Every key documented here also has a control on the **Settings** page
+of the OpenPA web UI. The path is:
+
+> **Sidebar → Settings → Config**
+
+The Config page is a vertical stack of cards, one card per group, in
+this order:
+
+1. **Reasoning Agent** — the `agent.*` keys.
+2. **Conversation History** — the `history.*` keys.
+3. **Skill Classifier** — the `skill_classifier.*` keys.
+4. **Trace Summarizer** — the `summarizer.*` keys.
+
+Inside each card, every row shows the field's label, a one-line
+description, the current default, and a type-appropriate input — a
+number spinner that enforces the min/max, a toggle, or a dropdown.
+When a value differs from its default, a **Reset** button appears next
+to the row to revert just that key. Edits are batched: a **Save
+changes** button at the top of the page commits all pending edits in
+one go. The per-group tables below list the exact UI label for every
+key so you can match it to the row you see in the card.
 
 ## Global flags
 
@@ -177,46 +217,58 @@ values for your installation.
 
 Controls the ReAct loop's iteration limits and per-call LLM parameters.
 
-| Key                            | Type   | Default | Range          | Meaning                                                                             |
-|--------------------------------|--------|---------|----------------|-------------------------------------------------------------------------------------|
-| `agent.max_steps`              | number | `40`    | 1 – 200        | Maximum ReAct iterations before the agent stops a turn.                             |
-| `agent.max_llm_retries`        | number | `2`     | 0 – 10         | How many times the loop retries after an LLM error before giving up.                |
-| `agent.reasoning_temperature`  | number | `1.0`   | 0 – 2 (±0.1)   | Sampling temperature for the main reasoning LLM call.                               |
-| `agent.reasoning_max_tokens`   | number | `32768` | 256 – 131072   | Output token cap for the reasoning LLM call.                                        |
-| `agent.reasoning_retry`        | number | `3`     | 0 – 10         | How many times an individual reasoning LLM call retries on transient errors.        |
-| `agent.steps_length`           | number | `80`    | 5 – 500        | Maximum number of recent ReAct step entries kept in the prompt context. Older entries are dropped once this is exceeded. |
+**Settings → Config card:** **Reasoning Agent** (the first card on the
+page).
+
+| Key                            | UI label              | Type   | Default | Range          | Meaning                                                                             |
+|--------------------------------|-----------------------|--------|---------|----------------|-------------------------------------------------------------------------------------|
+| `agent.max_steps`              | Max steps             | number | `40`    | 1 – 200        | Maximum ReAct iterations before the agent stops a turn.                             |
+| `agent.max_llm_retries`        | Max LLM retries       | number | `2`     | 0 – 10         | How many times the loop retries after an LLM error before giving up.                |
+| `agent.reasoning_temperature`  | Reasoning temperature | number | `1.0`   | 0 – 2 (±0.1)   | Sampling temperature for the main reasoning LLM call.                               |
+| `agent.reasoning_max_tokens`   | Reasoning max tokens  | number | `32768` | 256 – 131072   | Output token cap for the reasoning LLM call.                                        |
+| `agent.reasoning_retry`        | Per-call retry count  | number | `3`     | 0 – 10         | How many times an individual reasoning LLM call retries on transient errors.        |
+| `agent.steps_length`           | Steps history length  | number | `80`    | 5 – 500        | Maximum number of recent ReAct step entries kept in the prompt context. Older entries are dropped once this is exceeded. |
 
 ### Group `history` — Conversation History
 
 Token-budget limits applied when assembling the message window for each
 LLM call.
 
-| Key                              | Type   | Default | Range          | Meaning                                                                |
-|----------------------------------|--------|---------|----------------|------------------------------------------------------------------------|
-| `history.max_tokens_total`       | number | `5000`  | 500 – 200000   | Maximum total tokens of past messages included in each prompt.         |
-| `history.max_tokens_per_message` | number | `500`   | 50 – 20000     | Each message is truncated to at most this many tokens before assembly. |
+**Settings → Config card:** **Conversation History** (the second card on
+the page).
+
+| Key                              | UI label              | Type   | Default | Range          | Meaning                                                                |
+|----------------------------------|-----------------------|--------|---------|----------------|------------------------------------------------------------------------|
+| `history.max_tokens_total`       | Total history tokens  | number | `5000`  | 500 – 200000   | Maximum total tokens of past messages included in each prompt.         |
+| `history.max_tokens_per_message` | Per-message tokens    | number | `500`   | 50 – 20000     | Each message is truncated to at most this many tokens before assembly. |
 
 ### Group `skill_classifier` — Skill Classifier
 
 Lightweight LLM that decides whether a request maps to a registered
 skill.
 
-| Key                          | Type   | Default | Range          | Meaning                                                              |
-|------------------------------|--------|---------|----------------|----------------------------------------------------------------------|
-| `skill_classifier.temperature` | number | `0.0`   | 0 – 2 (±0.1)   | Sampling temperature; keep low for deterministic classification.   |
-| `skill_classifier.max_tokens`  | number | `64`    | 8 – 2048       | Output token cap for the classifier call.                          |
-| `skill_classifier.retry`       | number | `2`     | 0 – 10         | Retries on transient classifier LLM errors.                        |
+**Settings → Config card:** **Skill Classifier** (the third card on the
+page).
+
+| Key                            | UI label    | Type   | Default | Range          | Meaning                                                            |
+|--------------------------------|-------------|--------|---------|----------------|--------------------------------------------------------------------|
+| `skill_classifier.temperature` | Temperature | number | `0.0`   | 0 – 2 (±0.1)   | Sampling temperature; keep low for deterministic classification.   |
+| `skill_classifier.max_tokens`  | Max tokens  | number | `64`    | 8 – 2048       | Output token cap for the classifier call.                          |
+| `skill_classifier.retry`       | Retry count | number | `2`     | 0 – 10         | Retries on transient classifier LLM errors.                        |
 
 ### Group `summarizer` — Trace Summarizer
 
 LLM that compresses long reasoning traces back into the conversation
 history.
 
-| Key                       | Type   | Default | Range          | Meaning                                                  |
-|---------------------------|--------|---------|----------------|----------------------------------------------------------|
-| `summarizer.temperature`  | number | `0.3`   | 0 – 2 (±0.1)   | Sampling temperature for the summarization call.         |
-| `summarizer.max_tokens`   | number | `1024`  | 128 – 8192     | Output token cap for the summary.                        |
-| `summarizer.retry`        | number | `2`     | 0 – 10         | Retries on transient summarizer LLM errors.              |
+**Settings → Config card:** **Trace Summarizer** (the fourth card on
+the page).
+
+| Key                       | UI label    | Type   | Default | Range          | Meaning                                                  |
+|---------------------------|-------------|--------|---------|----------------|----------------------------------------------------------|
+| `summarizer.temperature`  | Temperature | number | `0.3`   | 0 – 2 (±0.1)   | Sampling temperature for the summarization call.         |
+| `summarizer.max_tokens`   | Max tokens  | number | `1024`  | 128 – 8192     | Output token cap for the summary.                        |
+| `summarizer.retry`        | Retry count | number | `2`     | 0 – 10         | Retries on transient summarizer LLM errors.              |
 
 ## Worked examples
 

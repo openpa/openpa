@@ -4,7 +4,8 @@ from starlette.routing import Route
 
 from app.agent.stream_runner import cancel_run, make_run_id
 from app.events import queue as event_queue
-from app.storage.conversation_storage import ConversationStorage
+from app.events.stream_bus import get_event_stream_bus
+from app.storage.conversation_storage import ConversationStorage, is_valid_conversation_id
 from app.utils import logger
 from app.utils.common import convert_db_messages_to_history
 
@@ -166,7 +167,13 @@ def get_conversation_routes(
         )
 
     async def handle_update_conversation(request: Request) -> JSONResponse:
-        """Update a conversation (title, task_id)."""
+        """Update a conversation (id, title, task_id).
+
+        Renaming the id cascades to ``messages.conversation_id`` and
+        ``skill_event_subscriptions.conversation_id`` atomically. When the id
+        changes the title is reset to the new id; pass ``title`` in the same
+        body to override.
+        """
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
@@ -182,6 +189,65 @@ def get_conversation_routes(
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
         if conv.get("profile") != profile:
             return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        # Id rename path. Handled separately because it has to clean up
+        # in-memory event state and cascade FK references atomically.
+        new_id_raw = body.get("id") if isinstance(body, dict) else None
+        if isinstance(new_id_raw, str) and new_id_raw != conversation_id:
+            new_id = new_id_raw
+            if not is_valid_conversation_id(new_id):
+                return JSONResponse(
+                    {
+                        "error": "Invalid id format",
+                        "message": (
+                            "Conversation id must start with a-z or 0-9 and contain "
+                            "only lowercase letters, digits, '-', or '_' (max 128 chars)."
+                        ),
+                    },
+                    status_code=400,
+                )
+
+            bus = get_event_stream_bus()
+            if bus.is_active(conversation_id):
+                return JSONResponse(
+                    {"error": "Conversation is streaming",
+                     "message": "Cannot rename while a run is in progress."},
+                    status_code=409,
+                )
+
+            if await conversation_storage.conversation_id_exists(new_id):
+                return JSONResponse(
+                    {"error": "Id already in use",
+                     "message": f"Conversation id {new_id!r} is already taken."},
+                    status_code=409,
+                )
+
+            new_title = body.get("title") if "title" in body else None
+            renamed = await conversation_storage.rename_conversation_id(
+                conversation_id, new_id, new_title=new_title,
+            )
+            if renamed is None:
+                # Race: another writer took the id between the check and the
+                # update. Treat as a collision.
+                return JSONResponse(
+                    {"error": "Id already in use",
+                     "message": f"Conversation id {new_id!r} is already taken."},
+                    status_code=409,
+                )
+
+            event_queue.discard_queue(conversation_id)
+            await bus.discard(conversation_id)
+
+            # Apply any non-id, non-title fields (e.g., task_id) that were
+            # included in the same body.
+            extra_fields = {}
+            if "task_id" in body:
+                extra_fields["task_id"] = body["task_id"]
+            if extra_fields:
+                await conversation_storage.update_conversation(new_id, **extra_fields)
+                renamed = await conversation_storage.get_conversation(new_id)
+
+            return JSONResponse({"conversation": renamed})
 
         update_fields = {}
         if "title" in body:

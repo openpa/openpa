@@ -77,6 +77,7 @@ opa conv history <id> [--limit N] [--offset N]
 opa conv send <id> "message" [--raw|--json] [--no-reasoning]
 opa conv attach <id>                             Watch a live run (no message sent)
 opa conv rename <id> "new title"
+opa conv set-id <old_id> <new_id>                Rename id (a-z, 0-9, '-', '_'; resets title to new id)
 opa conv cancel <run_id>
 opa conv delete <id>
 opa conv delete-all

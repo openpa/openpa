@@ -1,3 +1,4 @@
+import re
 import time
 import uuid
 from pathlib import Path
@@ -14,6 +15,22 @@ from app.storage.models import (
     SkillEventSubscriptionModel, ToolConfigModel, ToolModel, UserConfigModel,
 )
 from app.utils.logger import logger
+
+
+# Conversation id format for user-renamed ids. Server-allocated UUIDs already
+# satisfy this (lowercase hex + hyphen, leading char alphanumeric). The regex
+# is the single source of truth — frontend duplicates it for UX validation
+# but the server is authoritative.
+_CONVERSATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
+
+
+def is_valid_conversation_id(s: str) -> bool:
+    """True iff `s` is a syntactically valid conversation id.
+
+    Allowed: lowercase a-z, digits 0-9, `-`, `_`. Must start with a letter or
+    digit (no leading separator). Length 1..128.
+    """
+    return isinstance(s, str) and bool(_CONVERSATION_ID_RE.match(s))
 
 
 class ConversationStorage:
@@ -238,6 +255,92 @@ class ConversationStorage:
                 .where(ConversationModel.id == conversation_id)
                 .values(**kwargs)
             )
+
+    async def conversation_id_exists(self, conversation_id: str) -> bool:
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(ConversationModel)
+                .where(ConversationModel.id == conversation_id)
+            )
+            return (result.scalar() or 0) > 0
+
+    async def rename_conversation_id(
+        self, old_id: str, new_id: str, *, new_title: str | None = None,
+    ) -> dict | None:
+        """Rename a conversation's primary id, cascading to FK children.
+
+        Atomic across `messages.conversation_id` and
+        `skill_event_subscriptions.conversation_id` via SQLite's
+        ``PRAGMA defer_foreign_keys=ON`` (FKs are re-checked at COMMIT, so the
+        parent row can be updated before all children).
+
+        Returns the refreshed conversation dict on success, or ``None`` if
+        ``old_id`` does not exist or ``new_id`` is already in use.
+
+        ``new_title`` overrides the default behavior of resetting the title
+        to ``new_id``. Pass an explicit string to keep a custom title; pass
+        ``None`` to let the title follow the new id.
+        """
+        await self._ensure_initialized()
+
+        if not is_valid_conversation_id(new_id):
+            return None
+        if old_id == new_id:
+            return await self.get_conversation(old_id)
+
+        async with self.async_session_maker.begin() as session:
+            # Pre-flight existence checks share the transaction, so a
+            # concurrent rename can't slip in between check and update.
+            old_row = (await session.execute(
+                select(ConversationModel).where(ConversationModel.id == old_id)
+            )).scalar_one_or_none()
+            if old_row is None:
+                return None
+            collision = (await session.execute(
+                select(func.count())
+                .select_from(ConversationModel)
+                .where(ConversationModel.id == new_id)
+            )).scalar() or 0
+            if collision > 0:
+                return None
+
+            # Defer FK checks until COMMIT so we can update the parent row
+            # while children still point at the old id. Pragma resets at
+            # COMMIT — scoped to this connection/transaction.
+            await session.execute(text("PRAGMA defer_foreign_keys=ON"))
+
+            await session.execute(
+                update(MessageModel)
+                .where(MessageModel.conversation_id == old_id)
+                .values(conversation_id=new_id)
+            )
+            await session.execute(
+                update(SkillEventSubscriptionModel)
+                .where(SkillEventSubscriptionModel.conversation_id == old_id)
+                .values(conversation_id=new_id)
+            )
+
+            now = time.time() * 1000
+            values: dict = {
+                "id": new_id,
+                "title": new_title if new_title is not None else new_id,
+                "updated_at": now,
+            }
+            # context_id is back-filled to the conversation id at first stream
+            # tick (see app/agent/stream_runner.py). Rewrite if it currently
+            # equals the old id so tool-storage scoping follows the rename.
+            if old_row.context_id == old_id:
+                values["context_id"] = new_id
+
+            await session.execute(
+                update(ConversationModel)
+                .where(ConversationModel.id == old_id)
+                .values(**values)
+            )
+
+        return await self.get_conversation(new_id)
 
     async def delete_conversation(self, conversation_id: str) -> bool:
         await self._ensure_initialized()

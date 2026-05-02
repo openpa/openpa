@@ -104,6 +104,21 @@ class ConversationStreamBus:
             if not bucket:
                 del self._subs[conversation_id]
 
+    async def discard(self, conversation_id: str) -> None:
+        """Drop all in-memory state for a conversation id.
+
+        Called when a conversation is renamed or deleted. ``_seq`` survives
+        across runs (kept monotonic so SSE-reconnect dedupe works), so a
+        rename without discarding would leak the old id's counter forever.
+        Subscribers are expected to be empty when the rename is allowed
+        (the API rejects rename while ``is_active`` is true).
+        """
+        async with self._lock:
+            self._subs.pop(conversation_id, None)
+            self._ring.pop(conversation_id, None)
+            self._seq.pop(conversation_id, None)
+            self._active.pop(conversation_id, None)
+
 
 _instance: ConversationStreamBus | None = None
 
