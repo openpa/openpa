@@ -1,6 +1,7 @@
 from starlette.routing import Route
 
 from app.api.agents import get_agent_routes
+from app.api.channels import get_channel_routes
 from app.api.config import get_config_routes
 from app.api.conversations import get_conversation_routes
 from app.api.events import get_event_routes
@@ -54,6 +55,7 @@ def get_api_routes(
         routes.extend(get_conversation_routes(
             conversation_storage, agent_executor=agent_executor,
         ))
+        routes.extend(get_channel_routes(conversation_storage))
     if config_storage:
         routes.extend(get_config_routes(
             config_storage, conversation_storage,

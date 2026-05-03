@@ -44,7 +44,7 @@ func (c *Client) Stream(ctx context.Context, path string) (<-chan Event, <-chan 
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("Cache-Control", "no-cache")
 
-		resp, err := c.http.Do(req)
+		resp, err := c.streamHTTP.Do(req)
 		if err != nil {
 			errs <- err
 			return

@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from app.api._auth import require_auth_or_setup_mode
 from app.config.settings import BaseConfig
 from app.lib.llm.factory import create_llm_provider
 from app.storage import get_autostart_storage
@@ -62,12 +63,16 @@ def get_tool_routes(
         - ``locked_llm_fields`` -- LLM-parameter keys whose user-facing
           override is forbidden (the UI disables them and the API rejects
           writes)
+
+        Open during first-run setup (no JWT, no profile) so the wizard
+        can render the tool catalog with default enabled flags and empty
+        per-profile snapshots; gated post-setup.
         """
-        unauth = _require_auth(request)
-        if unauth is not None:
-            return unauth
+        denied = require_auth_or_setup_mode(request, config_storage)
+        if denied is not None:
+            return denied
         profile = _profile_from_request(request)
-        if not profile:
+        if not profile and config_storage is not None and config_storage.is_setup_complete():
             return JSONResponse({"error": "Profile is required"}, status_code=400)
         rows = registry.visible_for_profile(profile)
         enriched: list[dict] = []

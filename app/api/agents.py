@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
 
+from app.api._auth import require_auth_or_setup_mode
 from app.config.settings import BaseConfig
 from app.lib.llm.factory import create_llm_provider
 from app.tools import ToolRegistry, ToolType
@@ -235,13 +236,18 @@ def get_agent_routes(
             tool._llm_factory = lambda profile: mcp_llm_factory(tid, profile)
 
     async def handle_list_agents(request: Request) -> JSONResponse:
-        unauth = _require_auth(request)
-        if unauth is not None:
-            return unauth
+        """Open during first-run setup (no JWT, no profile) so the
+        wizard can render the (likely empty) agents list; gated
+        post-setup."""
+        denied = require_auth_or_setup_mode(request, config_storage)
+        if denied is not None:
+            return denied
         profile = _profile_from_request(request)
-        if not profile:
+        if not profile and config_storage is not None and config_storage.is_setup_complete():
             return JSONResponse({"error": "Profile is required"}, status_code=400)
-        enabled_per_profile = registry.storage.list_profile_tools(profile)
+        enabled_per_profile = (
+            registry.storage.list_profile_tools(profile) if profile else {}
+        )
         agents = []
         for tool in registry.all_tools():
             if tool.tool_type not in (ToolType.A2A, ToolType.MCP):

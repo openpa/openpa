@@ -72,6 +72,30 @@ def _trim(text: str, n: int = 240) -> str:
     return text[: n - 1].rstrip() + "…"
 
 
+def _format_trigger_content(event_type: str, action: str, content: str) -> str:
+    """Render a skill-event trigger as a markdown block for an agent bubble.
+
+    Picks an outer fence wider than the longest backtick run inside ``content``
+    so embedded code fences round-trip through markdown rendering.
+    """
+    longest_backtick_run = 0
+    run = 0
+    for ch in content:
+        if ch == "`":
+            run += 1
+            if run > longest_backtick_run:
+                longest_backtick_run = run
+        else:
+            run = 0
+    fence = "`" * max(3, longest_backtick_run + 1)
+    return (
+        f"Trigger: {event_type}\n"
+        f"Action: {action}\n"
+        f"Content:\n"
+        f"{fence}\n{content}\n{fence}"
+    )
+
+
 def _serialize_observation(observation_parts: List[Any]) -> List[Dict[str, Any]]:
     """Serialize Part objects to dicts for the frontend DataPart payload."""
     serialized: List[Dict[str, Any]] = []
@@ -139,6 +163,7 @@ async def run_agent_to_bus(
     push_user_message: bool = True,
     publish_notification: bool = False,
     update_title_from_query: bool = True,
+    trigger_event: Dict[str, Any] | None = None,
 ) -> None:
     """Run the reasoning agent for one conversation, publishing chunks to the bus.
 
@@ -222,8 +247,40 @@ async def run_agent_to_bus(
     cancelled = False
 
     try:
-        # 1. Persist the user message and announce it on the bus.
-        if push_user_message:
+        # 1. Persist the trigger / user message and announce it on the bus.
+        #    For skill events we render the trigger as an *agent* bubble with
+        #    a structured Trigger/Action/Content block so a reload can tell
+        #    operator-typed turns apart from event-synthesised ones. The agent
+        #    loop below still receives ``query`` as its user-side input — only
+        #    the persistence + UI display change here.
+        if trigger_event is not None:
+            trigger_content = _format_trigger_content(
+                event_type=str(trigger_event.get("event_type", "")),
+                action=str(trigger_event.get("action", "")),
+                content=str(trigger_event.get("content", "")),
+            )
+            trigger_msg_id: Optional[str] = None
+            try:
+                trigger_msg = await conversation_storage.add_message(
+                    conversation_id=conversation_id,
+                    role="agent",
+                    content=trigger_content,
+                    metadata=user_message_metadata,
+                )
+                trigger_msg_id = (
+                    trigger_msg.get("id") if isinstance(trigger_msg, dict) else None
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    f"stream_runner: failed to persist trigger message for {conversation_id}"
+                )
+
+            await bus.publish(conversation_id, "event_trigger_message", {
+                "id": trigger_msg_id,
+                "content": trigger_content,
+                "metadata": user_message_metadata or {},
+            })
+        elif push_user_message:
             user_msg_id: Optional[str] = None
             try:
                 user_msg = await conversation_storage.add_message(

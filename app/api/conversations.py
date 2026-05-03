@@ -26,7 +26,11 @@ def get_conversation_routes(
 ) -> list[Route]:
 
     async def handle_list_conversations(request: Request) -> JSONResponse:
-        """List conversations for the authenticated profile."""
+        """List conversations for the authenticated profile.
+
+        Optional filters: ``?channel_id=`` (uuid) or ``?channel_type=`` (e.g.
+        ``main``, ``telegram``). When both are provided ``channel_id`` wins.
+        """
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
@@ -36,8 +40,13 @@ def get_conversation_routes(
 
         limit = int(request.query_params.get("limit", "50"))
         offset = int(request.query_params.get("offset", "0"))
+        channel_id = request.query_params.get("channel_id") or None
+        channel_type = request.query_params.get("channel_type") or None
 
-        conversations = await conversation_storage.list_conversations(profile, limit=limit, offset=offset)
+        conversations = await conversation_storage.list_conversations(
+            profile, limit=limit, offset=offset,
+            channel_id=channel_id, channel_type=channel_type,
+        )
         return JSONResponse({"conversations": conversations})
 
     async def handle_create_conversation(request: Request) -> JSONResponse:
@@ -47,6 +56,12 @@ def get_conversation_routes(
         ``/api/conversations/{id}/messages`` so message-send and stream-
         subscribe always operate on a real conversation id (no temp-id
         migration dance).
+
+        New conversations are always created under the profile's ``main``
+        channel — external channels (Telegram, etc.) only ever spawn
+        conversations from inbound platform messages, not from a UI/CLI
+        ``POST``. If a caller passes ``channel_id`` for a non-``main``
+        channel, the request is rejected.
         """
         unauth = _require_auth(request)
         if unauth is not None:
@@ -58,7 +73,35 @@ def get_conversation_routes(
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
-        title = (body.get("title") or "Untitled Chat") if isinstance(body, dict) else "Untitled Chat"
+        if not isinstance(body, dict):
+            body = {}
+        title = body.get("title") or "Untitled Chat"
+
+        # If the caller specified a channel, validate it resolves to the
+        # profile's main channel. Anything else is rejected (defence in
+        # depth — the storage layer already defaults to main on omission,
+        # but a buggy/malicious caller could otherwise sneak a channel_id
+        # for an external channel into the body).
+        requested_channel_id = body.get("channel_id")
+        if requested_channel_id:
+            channel = await conversation_storage.get_channel(requested_channel_id)
+            if (
+                channel is None
+                or channel.get("profile") != profile
+                or channel.get("channel_type") != "main"
+            ):
+                return JSONResponse(
+                    {
+                        "error": "Read-only channel",
+                        "message": (
+                            "New conversations may only be created under the "
+                            "main channel. External channels (Telegram, etc.) "
+                            "spawn conversations from inbound platform messages."
+                        ),
+                    },
+                    status_code=403,
+                )
+
         conv = await conversation_storage.create_conversation(
             profile=profile, title=title,
         )
@@ -135,6 +178,27 @@ def get_conversation_routes(
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
         if conv.get("profile") != profile:
             return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        # External channels are inbound-only: the platform's user types into
+        # the platform, the bot replies, and the OpenPA UI/CLI render the
+        # stream read-only. Reject web/CLI POSTs onto a non-main conversation
+        # so a buggy filter switch (or a curious caller) can't inject a
+        # message from outside the platform.
+        channel_id = conv.get("channel_id")
+        if channel_id:
+            channel = await conversation_storage.get_channel(channel_id)
+            if channel and channel.get("channel_type") != "main":
+                return JSONResponse(
+                    {
+                        "error": "Read-only channel",
+                        "message": (
+                            f"Conversations on the {channel['channel_type']!r} "
+                            "channel are read-only — messages can only flow "
+                            "inbound from the platform."
+                        ),
+                    },
+                    status_code=403,
+                )
 
         # Build chat history for the agent from the persisted conversation
         # (mirrors what OpenPAAgentExecutor does in the legacy A2A path).

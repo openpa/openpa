@@ -7,6 +7,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from app.api._auth import require_auth_or_setup_mode
 from app.config import load_all_provider_catalogs, load_provider_catalog
 from app.config.provider_auth import normalize_provider_auth_methods
 from app.storage.dynamic_config_storage import DynamicConfigStorage
@@ -28,10 +29,14 @@ def _require_auth(request: Request):
 def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
     async def handle_list_providers(request: Request) -> JSONResponse:
-        """List all available LLM providers with their config status."""
-        unauth = _require_auth(request)
-        if unauth is not None:
-            return unauth
+        """List all available LLM providers with their config status.
+
+        Open during first-run setup so the wizard can show provider
+        choices before any JWT exists; gated post-setup.
+        """
+        denied = require_auth_or_setup_mode(request, config_storage)
+        if denied is not None:
+            return denied
         profile = getattr(request.user, "username", "") or ""
         catalogs = load_all_provider_catalogs()
         providers = []

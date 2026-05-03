@@ -10,9 +10,10 @@ from sqlalchemy.orm import class_mapper
 from a2a.server.models import Base
 
 from app.storage.models import (
-    AuthTokenModel, AutostartProcessModel, ConversationModel, LLMConfigModel,
-    MessageModel, ProfileModel, ProfileToolModel, ServerConfigModel,
-    SkillEventSubscriptionModel, ToolConfigModel, ToolModel, UserConfigModel,
+    AuthTokenModel, AutostartProcessModel, ChannelModel, ChannelSenderModel,
+    ConversationModel, LLMConfigModel, MessageModel, ProfileModel,
+    ProfileToolModel, ServerConfigModel, SkillEventSubscriptionModel,
+    ToolConfigModel, ToolModel, UserConfigModel,
 )
 from app.utils.logger import logger
 
@@ -65,12 +66,15 @@ class ConversationStorage:
             cursor.close()
 
         # Create tables. Order matters because of FK dependencies:
+        # profiles → channels → conversations → (messages, channel_senders)
         # profiles → tools → (profile_tools, tool_configs, auth_tokens)
         async with self.engine.begin() as conn:
             tables_to_create = []
             for model_class in [
                 ProfileModel,
+                ChannelModel,
                 ConversationModel, MessageModel,
+                ChannelSenderModel,
                 ServerConfigModel, LLMConfigModel, UserConfigModel,
                 ToolModel,
                 ProfileToolModel, ToolConfigModel, AuthTokenModel,
@@ -94,14 +98,100 @@ class ConversationStorage:
             except Exception:  # noqa: BLE001
                 pass
 
+            # Channels feature: add channel_id FK to existing conversations
+            # tables. SQLite enforces NOT NULL on ALTER TABLE only with a
+            # default, but our default is row-dependent (resolved per-profile),
+            # so the column is nullable in the schema and the storage layer
+            # populates it. Backfill happens lazily by ``_ensure_main_channel``.
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE conversations ADD COLUMN channel_id VARCHAR(36) "
+                    "REFERENCES channels(id) ON DELETE CASCADE"
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Mode rename: WhatsApp's old ``normal`` mode was renamed to
+            # ``userbot`` for cross-platform consistency (Telegram, Discord,
+            # Messenger, Slack now also declare a ``userbot`` mode). The
+            # catalog no longer accepts ``normal``, so existing rows would
+            # silently fall out of the validator on the next write. Idempotent
+            # — the second run no-ops because no rows match.
+            try:
+                await conn.execute(text(
+                    "UPDATE channels SET mode='userbot' "
+                    "WHERE channel_type='whatsapp' AND mode='normal'"
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+
             # Drop the old single-subscription unique index on dev DBs that
             # were initialized before multi-subscription support landed.
             await conn.execute(text(
                 "DROP INDEX IF EXISTS uq_skill_event_subs"
             ))
 
+        # Backfill: ensure every existing profile has a main channel and that
+        # every existing conversation points at it. Idempotent.
+        await self._backfill_main_channels()
+
         self._initialized = True
         logger.info(f"ConversationStorage initialized with database: {self.db_path}")
+
+    async def _backfill_main_channels(self) -> None:
+        """Ensure each profile has a ``main`` channel and back-fill ``channel_id``.
+
+        Called once at the end of ``initialize()``. Safe to run on a clean DB
+        (it's a no-op when there are no profiles yet).
+        """
+        async with self.async_session_maker.begin() as session:
+            profiles = (await session.execute(
+                select(ProfileModel.name)
+            )).scalars().all()
+            for profile_name in profiles:
+                main_id = await self._ensure_main_channel(session, profile_name)
+                # Back-fill conversations missing channel_id for this profile.
+                await session.execute(
+                    update(ConversationModel)
+                    .where(
+                        ConversationModel.profile == profile_name,
+                        ConversationModel.channel_id.is_(None),
+                    )
+                    .values(channel_id=main_id)
+                )
+
+    @staticmethod
+    async def _ensure_main_channel(session: AsyncSession, profile: str) -> str:
+        """Return the id of the ``main`` channel for ``profile``, creating it if needed.
+
+        Must run inside a caller-provided session/transaction so the create is
+        atomic with adjacent writes.
+        """
+        existing = (await session.execute(
+            select(ChannelModel.id).where(
+                ChannelModel.profile == profile,
+                ChannelModel.channel_type == "main",
+            )
+        )).scalar_one_or_none()
+        if existing:
+            return existing
+        now = time.time() * 1000
+        ch = ChannelModel(
+            id=str(uuid.uuid4()),
+            profile=profile,
+            channel_type="main",
+            mode="bot",
+            auth_mode="none",
+            response_mode="normal",
+            enabled=True,
+            config=None,
+            state=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(ch)
+        await session.flush()
+        return ch.id
 
     async def _ensure_initialized(self):
         if not self._initialized:
@@ -120,6 +210,11 @@ class ConversationStorage:
         )
         async with self.async_session_maker.begin() as session:
             session.add(profile)
+            await session.flush()
+            # Auto-create the profile's "main" channel in the same transaction
+            # so every conversation can resolve a channel_id without a special
+            # case for "freshly created profile, no channel yet".
+            await self._ensure_main_channel(session, name)
         return self._profile_to_dict(profile)
 
     async def get_profile(self, name: str) -> dict | None:
@@ -183,19 +278,24 @@ class ConversationStorage:
     async def create_conversation(
         self, profile: str, context_id: str | None = None,
         task_id: str | None = None, title: str = "Untitled Chat",
+        channel_id: str | None = None,
     ) -> dict:
+        """Create a conversation. If ``channel_id`` is omitted, the profile's
+        ``main`` channel is used (auto-created if missing)."""
         await self._ensure_initialized()
         now = time.time() * 1000
-        conv = ConversationModel(
-            id=str(uuid.uuid4()),
-            profile=profile,
-            context_id=context_id,
-            task_id=task_id,
-            title=title,
-            created_at=now,
-            updated_at=now,
-        )
         async with self.async_session_maker.begin() as session:
+            resolved_channel_id = channel_id or await self._ensure_main_channel(session, profile)
+            conv = ConversationModel(
+                id=str(uuid.uuid4()),
+                profile=profile,
+                channel_id=resolved_channel_id,
+                context_id=context_id,
+                task_id=task_id,
+                title=title,
+                created_at=now,
+                updated_at=now,
+            )
             session.add(conv)
         return self._conv_to_dict(conv)
 
@@ -220,10 +320,29 @@ class ConversationStorage:
             conv = result.scalar_one_or_none()
             return self._conv_to_dict(conv) if conv else None
 
-    async def list_conversations(self, profile: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    async def list_conversations(
+        self, profile: str, limit: int = 50, offset: int = 0,
+        channel_id: str | None = None, channel_type: str | None = None,
+    ) -> list[dict]:
+        """List conversations for a profile, optionally filtered by channel.
+
+        If both ``channel_id`` and ``channel_type`` are provided, ``channel_id``
+        wins. ``channel_type`` is resolved against the profile's channels;
+        an unknown type returns an empty list.
+        """
         await self._ensure_initialized()
         async with self.async_session_maker() as session:
-            # Subquery to count messages per conversation
+            resolved_channel_id = channel_id
+            if resolved_channel_id is None and channel_type is not None:
+                resolved_channel_id = (await session.execute(
+                    select(ChannelModel.id).where(
+                        ChannelModel.profile == profile,
+                        ChannelModel.channel_type == channel_type,
+                    )
+                )).scalar_one_or_none()
+                if resolved_channel_id is None:
+                    return []
+
             msg_count_subq = (
                 select(
                     MessageModel.conversation_id,
@@ -232,14 +351,16 @@ class ConversationStorage:
                 .group_by(MessageModel.conversation_id)
                 .subquery()
             )
-            result = await session.execute(
+            stmt = (
                 select(ConversationModel, msg_count_subq.c.message_count)
                 .outerjoin(msg_count_subq, ConversationModel.id == msg_count_subq.c.conversation_id)
                 .where(ConversationModel.profile == profile)
-                .order_by(ConversationModel.updated_at.desc())
-                .limit(limit)
-                .offset(offset)
             )
+            if resolved_channel_id is not None:
+                stmt = stmt.where(ConversationModel.channel_id == resolved_channel_id)
+            stmt = stmt.order_by(ConversationModel.updated_at.desc()).limit(limit).offset(offset)
+
+            result = await session.execute(stmt)
             rows = result.all()
             return [
                 {**self._conv_to_dict(conv), "message_count": count or 0}
@@ -386,6 +507,160 @@ class ConversationStorage:
             profile=profile, context_id=context_id, task_id=task_id,
         )
 
+    # ── Channel CRUD ──
+
+    async def list_channels(self, profile: str) -> list[dict]:
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(ChannelModel)
+                .where(ChannelModel.profile == profile)
+                .order_by(ChannelModel.created_at.asc())
+            )
+            return [self._channel_to_dict(c) for c in result.scalars().all()]
+
+    async def get_channel(self, channel_id: str) -> dict | None:
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(ChannelModel).where(ChannelModel.id == channel_id)
+            )
+            ch = result.scalar_one_or_none()
+            return self._channel_to_dict(ch) if ch else None
+
+    async def get_channel_by_type(self, profile: str, channel_type: str) -> dict | None:
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(ChannelModel).where(
+                    ChannelModel.profile == profile,
+                    ChannelModel.channel_type == channel_type,
+                )
+            )
+            ch = result.scalar_one_or_none()
+            return self._channel_to_dict(ch) if ch else None
+
+    async def create_channel(
+        self, profile: str, channel_type: str, *,
+        mode: str = "bot", auth_mode: str = "none",
+        response_mode: str = "normal", enabled: bool = True,
+        config: dict | None = None,
+    ) -> dict:
+        """Create a channel row. Raises if (profile, channel_type) already exists."""
+        await self._ensure_initialized()
+        now = time.time() * 1000
+        ch = ChannelModel(
+            id=str(uuid.uuid4()),
+            profile=profile,
+            channel_type=channel_type,
+            mode=mode,
+            auth_mode=auth_mode,
+            response_mode=response_mode,
+            enabled=enabled,
+            config=config,
+            state=None,
+            created_at=now,
+            updated_at=now,
+        )
+        async with self.async_session_maker.begin() as session:
+            session.add(ch)
+        return self._channel_to_dict(ch)
+
+    async def update_channel(self, channel_id: str, **fields) -> dict | None:
+        await self._ensure_initialized()
+        if not fields:
+            return await self.get_channel(channel_id)
+        fields["updated_at"] = time.time() * 1000
+        async with self.async_session_maker.begin() as session:
+            await session.execute(
+                update(ChannelModel)
+                .where(ChannelModel.id == channel_id)
+                .values(**fields)
+            )
+        return await self.get_channel(channel_id)
+
+    async def delete_channel(self, channel_id: str) -> bool:
+        """Delete a channel. ``main`` is rejected upstream (in the API layer)."""
+        await self._ensure_initialized()
+        async with self.async_session_maker.begin() as session:
+            result = await session.execute(
+                delete(ChannelModel).where(ChannelModel.id == channel_id)
+            )
+            return result.rowcount > 0
+
+    async def list_enabled_external_channels(self) -> list[dict]:
+        """Channels to start at server boot — enabled and not ``main``."""
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(ChannelModel).where(
+                    ChannelModel.enabled.is_(True),
+                    ChannelModel.channel_type != "main",
+                )
+            )
+            return [self._channel_to_dict(c) for c in result.scalars().all()]
+
+    # ── Channel sender CRUD ──
+
+    async def get_or_create_sender(
+        self, channel_id: str, sender_id: str, display_name: str | None = None,
+    ) -> dict:
+        """Return the sender row (creating it if absent). Refreshes display_name."""
+        await self._ensure_initialized()
+        now = time.time() * 1000
+        async with self.async_session_maker.begin() as session:
+            row = (await session.execute(
+                select(ChannelSenderModel).where(
+                    ChannelSenderModel.channel_id == channel_id,
+                    ChannelSenderModel.sender_id == sender_id,
+                )
+            )).scalar_one_or_none()
+            if row is None:
+                row = ChannelSenderModel(
+                    id=str(uuid.uuid4()),
+                    channel_id=channel_id,
+                    sender_id=sender_id,
+                    display_name=display_name,
+                    authenticated=False,
+                    pending_otp=None,
+                    pending_otp_expires_at=None,
+                    conversation_id=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+                await session.flush()
+            elif display_name and row.display_name != display_name:
+                row.display_name = display_name
+                row.updated_at = now
+            return self._sender_to_dict(row)
+
+    async def list_senders(self, channel_id: str) -> list[dict]:
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(ChannelSenderModel)
+                .where(ChannelSenderModel.channel_id == channel_id)
+                .order_by(ChannelSenderModel.created_at.asc())
+            )
+            return [self._sender_to_dict(s) for s in result.scalars().all()]
+
+    async def update_sender(self, sender_row_id: str, **fields) -> dict | None:
+        await self._ensure_initialized()
+        if not fields:
+            return None
+        fields["updated_at"] = time.time() * 1000
+        async with self.async_session_maker.begin() as session:
+            await session.execute(
+                update(ChannelSenderModel)
+                .where(ChannelSenderModel.id == sender_row_id)
+                .values(**fields)
+            )
+            row = (await session.execute(
+                select(ChannelSenderModel).where(ChannelSenderModel.id == sender_row_id)
+            )).scalar_one_or_none()
+            return self._sender_to_dict(row) if row else None
+
     # ── Message CRUD ──
 
     async def add_message(
@@ -466,11 +741,43 @@ class ConversationStorage:
         return {
             "id": conv.id,
             "profile": conv.profile,
+            "channel_id": conv.channel_id,
             "context_id": conv.context_id,
             "task_id": conv.task_id,
             "title": conv.title,
             "created_at": conv.created_at,
             "updated_at": conv.updated_at,
+        }
+
+    @staticmethod
+    def _channel_to_dict(ch: ChannelModel) -> dict:
+        return {
+            "id": ch.id,
+            "profile": ch.profile,
+            "channel_type": ch.channel_type,
+            "mode": ch.mode,
+            "auth_mode": ch.auth_mode,
+            "response_mode": ch.response_mode,
+            "enabled": bool(ch.enabled),
+            "config": ch.config or {},
+            "state": ch.state or {},
+            "created_at": ch.created_at,
+            "updated_at": ch.updated_at,
+        }
+
+    @staticmethod
+    def _sender_to_dict(s: ChannelSenderModel) -> dict:
+        return {
+            "id": s.id,
+            "channel_id": s.channel_id,
+            "sender_id": s.sender_id,
+            "display_name": s.display_name,
+            "authenticated": bool(s.authenticated),
+            "pending_otp": s.pending_otp,
+            "pending_otp_expires_at": s.pending_otp_expires_at,
+            "conversation_id": s.conversation_id,
+            "created_at": s.created_at,
+            "updated_at": s.updated_at,
         }
 
     @staticmethod

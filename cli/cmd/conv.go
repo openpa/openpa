@@ -37,6 +37,7 @@ func newConvCmd() *cobra.Command {
 
 func newConvListCmd() *cobra.Command {
 	var limit, offset int
+	var channel string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List conversations for the active profile",
@@ -44,18 +45,19 @@ func newConvListCmd() *cobra.Command {
 			if err := requireToken(); err != nil {
 				return err
 			}
-			convs, err := state.Client.ListConversations(cmd.Context(), limit, offset)
+			convs, err := state.Client.ListConversations(cmd.Context(), limit, offset, channel)
 			if err != nil {
 				return err
 			}
 			if state.Output.JSON {
 				return output.PrintJSON(convs)
 			}
-			t := output.NewTable(state.Output, "ID", "TITLE", "CREATED_AT", "TASK_ID")
+			t := output.NewTable(state.Output, "ID", "TITLE", "CHANNEL", "CREATED_AT", "TASK_ID")
 			for _, c := range convs {
 				t.AddRow(
 					stringField(c, "id"),
 					stringField(c, "title"),
+					stringField(c, "channel_id"),
 					stringField(c, "created_at"),
 					stringField(c, "task_id"),
 				)
@@ -66,6 +68,7 @@ func newConvListCmd() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "Page size")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Offset for pagination")
+	cmd.Flags().StringVar(&channel, "channel", "", "Filter by channel_type (e.g. main, telegram)")
 	return cmd
 }
 

@@ -49,3 +49,40 @@ def load_all_provider_catalogs() -> dict[str, dict]:
     return catalogs
 
 
+def load_channel_catalog(channel_type: str) -> dict:
+    """Load a single channel's TOML config (auth modes, fields, instructions)."""
+    toml_path = _CONFIG_DIR / "channels" / f"{channel_type}.toml"
+    if not toml_path.exists():
+        return {}
+    with open(toml_path, "r", encoding="utf-8") as f:
+        return toml.load(f)
+
+
+def load_all_channel_catalogs() -> dict[str, dict]:
+    """Load every ``app/config/channels/*.toml``, keyed by channel type.
+
+    The loader validates that each file declares ``[channel]`` with
+    ``type``, ``display_name``, and at least one ``[[channel.modes]]`` entry.
+    Files that fail validation are skipped with a warning.
+    """
+    channels_dir = _CONFIG_DIR / "channels"
+    catalogs: dict[str, dict] = {}
+    if not channels_dir.exists():
+        return catalogs
+    for toml_file in channels_dir.glob("*.toml"):
+        try:
+            data = toml.load(toml_file)
+            channel_info = data.get("channel") or {}
+            channel_type = channel_info.get("type")
+            if not channel_type or not channel_info.get("display_name"):
+                continue
+            modes = channel_info.get("modes") or []
+            if not modes:
+                continue
+            catalogs[channel_type] = data
+        except Exception:  # noqa: BLE001
+            # Bad TOML shouldn't crash the server; skip and continue.
+            continue
+    return catalogs
+
+

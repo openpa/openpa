@@ -17,12 +17,17 @@ import (
 type Client struct {
 	cfg  *config.Config
 	http *http.Client
+	// streamHTTP is used for SSE / long-lived responses where the 60s
+	// Client.Timeout on the regular client would kill the connection
+	// mid-stream. Cancellation still flows via the request context.
+	streamHTTP *http.Client
 }
 
 func New(cfg *config.Config) *Client {
 	return &Client{
-		cfg:  cfg,
-		http: &http.Client{Timeout: 60 * time.Second},
+		cfg:        cfg,
+		http:       &http.Client{Timeout: 60 * time.Second},
+		streamHTTP: &http.Client{},
 	}
 }
 
@@ -32,8 +37,9 @@ func (c *Client) Server() string { return c.cfg.Server }
 // Token returns the bearer token. May be empty for unauthenticated calls.
 func (c *Client) Token() string { return c.cfg.Token }
 
-// HTTPClient exposes the underlying http.Client for callers that need streaming
-// (SSE, raw bodies). Auth headers are NOT injected — use NewRequest for those.
+// HTTPClient exposes the request-response http.Client (60s timeout). For
+// long-lived bodies (SSE), use Stream() — it routes through a separate
+// no-timeout client. Auth headers are NOT injected — use NewRequest.
 func (c *Client) HTTPClient() *http.Client { return c.http }
 
 // Endpoint joins the server base URL with a path.
@@ -123,6 +129,11 @@ func (c *Client) PostJSON(ctx context.Context, path string, body, out any) error
 // PutJSON marshals body to JSON, PUTs it to path, and decodes the response into out.
 func (c *Client) PutJSON(ctx context.Context, path string, body, out any) error {
 	return c.bodyJSON(ctx, http.MethodPut, path, body, out)
+}
+
+// PatchJSON marshals body to JSON, PATCHes it to path, and decodes the response into out.
+func (c *Client) PatchJSON(ctx context.Context, path string, body, out any) error {
+	return c.bodyJSON(ctx, http.MethodPatch, path, body, out)
 }
 
 // Delete performs DELETE <path>. If out is non-nil, the JSON body is decoded.

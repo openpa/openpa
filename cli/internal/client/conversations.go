@@ -10,13 +10,19 @@ import (
 // ListConversations returns paginated conversation summaries for the
 // authenticated profile (resolved server-side from the JWT). Each entry is a
 // loose map (id, title, task_id, created_at, …).
-func (c *Client) ListConversations(ctx context.Context, limit, offset int) ([]map[string]any, error) {
+//
+// channelType filters by ``channel_type`` (e.g. "main", "telegram"). Empty
+// string means no filter.
+func (c *Client) ListConversations(ctx context.Context, limit, offset int, channelType string) ([]map[string]any, error) {
 	q := url.Values{}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
 	if offset > 0 {
 		q.Set("offset", strconv.Itoa(offset))
+	}
+	if channelType != "" {
+		q.Set("channel_type", channelType)
 	}
 	path := "/api/conversations"
 	if len(q) > 0 {

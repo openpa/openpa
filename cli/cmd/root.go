@@ -76,6 +76,7 @@ func Execute() error {
 		newProcCmd(),
 		newSkillEventsCmd(),
 		newAgentsCmd(),
+		newChannelsCmd(),
 		newSetupCmd(),
 	)
 

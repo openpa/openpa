@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from app.api._auth import require_admin
 from app.config.settings import BaseConfig
 from app.storage.dynamic_config_storage import DynamicConfigStorage
 from app.storage.conversation_storage import ConversationStorage
@@ -87,13 +88,16 @@ def get_config_routes(
         return JSONResponse(result)
 
     async def handle_setup(request: Request) -> JSONResponse:
-        """Complete setup for a profile. No auth required.
+        """Complete setup for a profile.
 
-        For the first profile (admin): saves server config, LLM config, tool configs,
-        creates the profile, generates token, and marks setup complete.
+        First profile (admin): unauthenticated — this is the bootstrap
+        window before any JWT can possibly exist. Saves server config,
+        LLM config, tool configs, creates the profile, generates the
+        token, and marks setup complete.
 
-        For subsequent profiles: creates the profile, saves LLM and tool configs,
-        and generates token. Server-level config cannot be changed for non-first profiles.
+        Subsequent profiles: requires the admin profile's JWT. Creates
+        the profile, saves LLM and tool configs, and generates a token.
+        Server-level config cannot be changed for non-first profiles.
 
         Expects JSON body with:
         - profile: str (required) — the profile name to create
@@ -101,6 +105,16 @@ def get_config_routes(
         - llm_config: dict of LLM settings
         - tool_configs: dict of {tool_name: {key: value}}
         """
+        is_first_setup = not config_storage.is_setup_complete()
+
+        # Only the admin can onboard additional profiles. The first-run
+        # bootstrap is intentionally unauthenticated because no JWT can
+        # exist yet.
+        if not is_first_setup:
+            denied = require_admin(request)
+            if denied is not None:
+                return denied
+
         try:
             body = await request.json()
         except Exception:
@@ -112,8 +126,6 @@ def get_config_routes(
         validation_error = _validate_profile_name(profile_name)
         if validation_error:
             return JSONResponse({"error": validation_error}, status_code=400)
-
-        is_first_setup = not config_storage.is_setup_complete()
 
         # First setup must be 'admin'
         if is_first_setup and profile_name != "admin":

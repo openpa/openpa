@@ -71,41 +71,58 @@ JSON streaming renderer for `send` / `attach`.
 ### `opa conv list`
 
 **Purpose.** List conversations belonging to the active profile, with
-pagination.
+pagination and optional per-channel filtering.
 
 **Syntax.**
 
 ```bash
-opa conv list [--limit N] [--offset N]
+opa conv list [--limit N] [--offset N] [--channel <type>]
 ```
 
 **Flags.**
 
-| Flag        | Type | Default | Meaning              |
-|-------------|------|---------|----------------------|
-| `--limit`   | int  | `50`    | Page size.           |
-| `--offset`  | int  | `0`     | Offset for paging.   |
+| Flag        | Type   | Default | Meaning                                                                                       |
+|-------------|--------|---------|-----------------------------------------------------------------------------------------------|
+| `--limit`   | int    | `50`    | Page size.                                                                                    |
+| `--offset`  | int    | `0`     | Offset for paging.                                                                            |
+| `--channel` | string | `""`    | Filter by `channel_type` (e.g. `main`, `telegram`). Empty (default) returns every channel.    |
 
-**Behavior.** Prints a four-column table:
+**Behavior.** Prints a five-column table:
 
-| Column        | Source         | Meaning                                                       |
-|---------------|----------------|---------------------------------------------------------------|
-| `ID`          | `id`           | Conversation id (used by every other subcommand).             |
-| `TITLE`       | `title`        | Title (may be blank).                                         |
-| `CREATED_AT`  | `created_at`   | RFC 3339 creation timestamp.                                  |
-| `TASK_ID`     | `task_id`      | Active run id, if a run is in progress. Blank when idle.      |
+| Column        | Source         | Meaning                                                                                                              |
+|---------------|----------------|----------------------------------------------------------------------------------------------------------------------|
+| `ID`          | `id`           | Conversation id (used by every other subcommand).                                                                    |
+| `TITLE`       | `title`        | Title (may be blank).                                                                                                |
+| `CHANNEL`     | `channel_id`   | UUID of the channel this conversation belongs to. `main` for web/CLI conversations; non-`main` for external platforms. Use `opa channels list` to map id → type. |
+| `CREATED_AT`  | `created_at`   | RFC 3339 creation timestamp.                                                                                         |
+| `TASK_ID`     | `task_id`      | Active run id, if a run is in progress. Blank when idle.                                                             |
 
-With `--json`, returns the full array.
+With `--json`, returns the full array (including the raw
+`channel_id`).
 
-**Example.**
+**Examples.**
 
 ```bash
+# All conversations across every channel
 $ opa conv list --limit 5
-ID      TITLE                    CREATED_AT            TASK_ID
-c_82bc  Daily Brief              2026-05-02T08:00:00Z  t_19a8
-c_4d10  PR review #42            2026-05-01T15:30:00Z
-c_3a02  Refactor notes           2026-04-30T11:12:00Z
+ID      TITLE                    CHANNEL                                 CREATED_AT            TASK_ID
+c_82bc  Daily Brief              c1...main                               2026-05-02T08:00:00Z  t_19a8
+c_4d10  PR review #42            c1...main                               2026-05-01T15:30:00Z
+c_92bc  Lee Nguyen               e2e8...d4f1                             2026-05-03T00:30:00Z
+
+# Only web/CLI conversations
+$ opa conv list --channel main
+
+# Only conversations sourced from Telegram
+$ opa conv list --channel telegram
 ```
+
+**Note.** Conversations on non-`main` channels are read-only from
+the OpenPA side: `opa conv send` and the web UI's composer both
+return `403 Read-only channel` for those ids. Inbound messages flow
+through the platform's user; replies are forwarded automatically by
+the channel adapter. See [`opa channels`](./%5Bcli%5Dopa%20channels.md)
+for the model.
 
 ### `opa conv new`
 
@@ -129,6 +146,14 @@ opa conv new [-t <title>]
 are piping it), prints just the id on its own line so you can capture
 it directly. With `--json`, returns the full conversation object
 either way.
+
+**The new conversation is always created under the profile's `main`
+channel.** External channels (Telegram, Discord, etc.) only ever spawn
+conversations from inbound platform messages — there is no CLI flag
+to attach a new conversation to one, and the server rejects any such
+attempt over the API with `403 Read-only channel`. See
+[`opa channels`](./%5Bcli%5Dopa%20channels.md) for how those channels
+work.
 
 **Examples.**
 

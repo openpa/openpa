@@ -462,7 +462,7 @@ class ReasoningAgent:
         self.steps = []
         self.current_step_count = 0
         self.instruction = self._build_instruction()
-        logger.info(f"instruction: {self.instruction}")
+        # logger.info(f"instruction: {self.instruction}")
         self._append_input_step(input)
         async for item in self._loop(StepData(input=input)):
             yield item

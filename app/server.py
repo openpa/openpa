@@ -719,10 +719,26 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             stop_all_watchers()
         except Exception:  # noqa: BLE001
             logger.exception("Error stopping skill watchers during shutdown")
+        try:
+            from app.channels import get_channel_registry
+            await get_channel_registry().stop_all()
+        except Exception:  # noqa: BLE001
+            logger.exception("Error stopping channel adapters during shutdown")
+
+    async def _on_startup() -> None:
+        # Start in-process channel adapters for every enabled non-main channel.
+        # Runs after conversation_storage.initialize so the schema (and the
+        # auto-created main channels) is in place.
+        try:
+            from app.channels import get_channel_registry
+            await get_channel_registry(conversation_storage).start_all_enabled()
+        except Exception:  # noqa: BLE001
+            logger.exception("Error starting channel adapters during startup")
 
     app = Starlette(
         routes=routes,
         middleware=middleware_stack,
+        on_startup=[_on_startup],
         on_shutdown=[_on_shutdown],
     )
     config = uvicorn.Config(app, host=host, port=port)

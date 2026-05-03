@@ -7,8 +7,14 @@ profile-tool memberships, and per-profile tool configs.
 Tables
 ------
 - profiles            : tenant identity
-- conversations       : chat threads (FK profile, CASCADE)
+- channels            : per-profile messaging channels; one ``main`` row per
+                        profile is auto-created. UNIQUE(profile, channel_type).
+                        (FK profile, CASCADE)
+- conversations       : chat threads (FK profile CASCADE, FK channel CASCADE)
 - messages            : per-conversation messages (FK conversation, CASCADE)
+- channel_senders     : external sender state per channel — auth + per-sender
+                        conversation pointer (FK channel CASCADE,
+                        FK conversation SET NULL)
 - auth_tokens         : per-profile OAuth tokens for tools (FK profile, CASCADE)
 - tools               : global tool registry (one row per tool_id)
 - profile_tools       : M:N join for A2A and MCP tools per profile
@@ -39,12 +45,53 @@ class ProfileModel(Base):
     skill_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
 
 
+class ChannelModel(Base):
+    """Per-profile messaging channel.
+
+    Each profile has exactly one ``main`` channel (auto-created with the
+    profile) representing the built-in web/CLI conversations. External
+    channels (telegram/whatsapp/discord/messenger/slack) are added by the
+    user; ``UNIQUE(profile, channel_type)`` enforces one connection per type
+    per profile.
+
+    Secrets (bot tokens, passwords) are NOT stored in ``config`` — they go
+    into ``dynamic_config_storage`` keyed by ``("channels", f"{id}.{field}")``
+    with ``is_secret=True`` so existing redaction applies.
+    """
+
+    __tablename__ = "channels"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    profile: Mapped[str] = mapped_column(
+        String(128), ForeignKey("profiles.name", ondelete="CASCADE"), nullable=False, index=True
+    )
+    channel_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="bot")
+    auth_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    response_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="normal")
+    enabled: Mapped[bool] = mapped_column(Integer, nullable=False, default=1)
+    config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("profile", "channel_type", name="uq_channels_profile_type"),
+    )
+
+
 class ConversationModel(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: str(uuid.uuid4()))
     profile: Mapped[str] = mapped_column(
         String(128), ForeignKey("profiles.name", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Nullable in the SQLAlchemy model so existing rows pass the additive
+    # ALTER TABLE migration. New rows always populate this (storage layer
+    # resolves the profile's main channel when no channel_id is passed).
+    channel_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("channels.id", ondelete="CASCADE"), nullable=True, index=True
     )
     context_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -69,6 +116,36 @@ class MessageModel(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     ordering: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ChannelSenderModel(Base):
+    """External sender state for a channel — auth flag + per-sender conversation.
+
+    ``conversation_id`` uses ``ON DELETE SET NULL`` (instead of CASCADE) so
+    deleting a single conversation doesn't drop the sender's auth/OTP state.
+    Channel deletion still cascades both rows away via ``channel_id``.
+    """
+
+    __tablename__ = "channel_senders"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    channel_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sender_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    authenticated: Mapped[bool] = mapped_column(Integer, nullable=False, default=0)
+    pending_otp: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pending_otp_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(
+        String(128), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("channel_id", "sender_id", name="uq_channel_senders"),
+    )
 
 
 class AuthTokenModel(Base):

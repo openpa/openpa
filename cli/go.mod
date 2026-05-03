@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.2.4
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/jedib0t/go-pretty/v6 v6.6.5
+	github.com/mdp/qrterminal/v3 v3.2.0
 	github.com/spf13/cobra v1.8.1
 	golang.org/x/term v0.27.0
 )
@@ -30,4 +31,5 @@ require (
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
+	rsc.io/qr v0.2.0 // indirect
 )

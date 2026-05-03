@@ -30,6 +30,21 @@ export OPA_TOKEN="<your JWT>"
 During development you can skip the build step entirely with `go run .` —
 e.g. `go run . tools list`.
 
+### Windows / PowerShell
+
+If you manage Go versions with [`gvm-windows`](https://github.com/andrewkroh/gvm),
+activate the toolchain in the current shell with:
+
+```powershell
+gvm --format=powershell 1.25.4 | Invoke-Expression
+```
+
+PowerShell 5.1 strips inner double quotes from native-binary arguments,
+so flags that take JSON (e.g. `opa channels add --json '{"k":"v"}'`) tend
+to fail with `invalid character …`. The CLI exposes quote-safe
+alternatives where it matters — see `opa channels add --config k=v`
+below, or pipe via `--json-file -` on commands that support it.
+
 ## Configuration (environment variables)
 
 | Variable | Purpose | Default |
@@ -70,7 +85,7 @@ opa llm device-code poll <device_code>          Polls until complete
 
 opa config schema | get [<key>] | set <key> <value> | reset <key>
 
-opa conv list [--limit N] [--offset N]
+opa conv list [--limit N] [--offset N] [--channel <type>]
 opa conv new [--title "…"]
 opa conv get <id> [--detail]                    --detail replays the full thinking trace in a TUI
 opa conv history <id> [--limit N] [--offset N]
@@ -121,6 +136,17 @@ opa setup reset-orphaned                        Unauthenticated
 opa setup reconfigure                           Admin auth
 opa setup server-config get [<key>]
 opa setup server-config set KEY=VAL [KEY=VAL …]
+
+opa channels list                                Configured external channels (Telegram, etc.)
+opa channels add --type <kind> [--mode bot|userbot]
+                 [--auth-mode none|otp|password]
+                 [--response-mode normal|detail]
+                 [--enabled true|false]
+                 [--no-pair]                     Skip auto-launching pairing flow
+                 [--json '<config-object>' | --config key=value ...]
+opa channels pair <id>                           Interactive pairing (QR / code / 2FA password)
+opa channels delete <id>                         Cascades conversations + senders
+opa channels catalog                             Dynamic TOML catalog (per-platform fields)
 
 opa tools register-long-running <tool_id> [--force]
 ```
@@ -185,3 +211,99 @@ arrow keys, and resize events as if you'd typed them locally.
 The bearer token is sent via the `Sec-WebSocket-Protocol` header
 (`bearer, <token>`) — matching openpa-ui because browsers can't set
 `Authorization` on the native WebSocket constructor.
+
+## Channels
+
+The `opa channels` group manages external messaging platforms (Telegram,
+WhatsApp, Discord, Messenger, Slack). Each profile owns at most one
+channel per type, plus an implicit `main` channel that backs every web
+and CLI conversation and is not user-manageable.
+
+External channels are **inbound-only from the platform side**: a user on
+Telegram messages your bot, the OpenPA agent runs, and the reply is
+forwarded back through the adapter. The OpenPA side is read-only —
+`opa conv send` returns `403 Read-only channel` for any conversation
+whose `channel_id` resolves to a non-`main` channel. Use
+`opa conv list --channel <type>` to filter the conversation list to a
+specific platform, and `opa conv get <id> --detail` to replay the
+agent's reasoning trace.
+
+`opa channels add` takes platform-specific config either as a JSON blob
+via `--json '{...}'` or as repeatable `--config key=value` pairs (values
+treated as strings; mutually exclusive with `--json`). The expected
+fields per type live in `opa channels catalog` (sourced from
+`app/config/channels/*.toml`). Bot tokens, passwords, and other secrets
+are redacted to `***` in `opa channels list` / `--json` responses.
+
+On Windows PowerShell prefer `--config` — PowerShell strips inner
+double quotes from native-binary arguments, so
+`--json '{"phone":"+84..."}'` arrives as `--json {phone:+84...}` and
+fails to parse. `--config phone=+84...` (repeat for multiple keys)
+sidesteps quoting entirely.
+
+`opa channels delete <id>` **cascades** to every conversation that lived
+on that channel and every per-sender authentication row. To pause a
+channel without losing it, toggle `enabled=false` from the web UI
+(Settings → Channels) instead.
+
+Two modes per platform:
+
+- **`bot`** — a separate bot account replies (BotFather token for
+  Telegram, Bot Token for Discord, Page Access Token for Messenger,
+  xoxb- token for Slack).
+- **`userbot`** — your own user account auto-replies on your behalf,
+  similar to a forwarder. WhatsApp's `userbot` mode is the one shipping
+  today (linked-device pairing via QR). Telegram/Discord/Messenger/Slack
+  declare a `userbot` mode in the catalog as scaffolding but the adapter
+  implementations are not yet shipped — selecting them returns HTTP 400
+  with a "Mode not implemented" error.
+
+Note that user-account automation violates the TOS of Discord and
+Messenger and may get your account banned; the catalog instructions
+flag this. Telegram explicitly permits userbots (Telethon / Pyrogram);
+Slack permits user OAuth tokens but workspace admins can restrict them.
+
+Adapter implementation status today:
+
+- Telegram bot ✅
+- Telegram userbot ✅ (via Telethon — interactive code + 2FA pairing)
+- WhatsApp userbot ✅ (via Baileys sidecar)
+- Discord (both modes), Messenger (both modes), Slack (both modes) —
+  declared in the catalog, not yet implemented. Selecting them surfaces
+  `Mode not implemented` from the API and a "coming soon" tag in the
+  web UI's mode picker.
+
+Telegram userbot setup: visit https://my.telegram.org/auth, create an
+app to get an API ID and API Hash, then `opa channels add --type
+telegram --mode userbot --json '{"api_id":"...","api_hash":"...","phone":"+..."}'`.
+After save, open the web UI's Channels page (Settings → Channels) and
+enter the verification code Telegram sends through the Telegram app
+itself. If 2FA is enabled, you'll also be prompted for the cloud
+password. Session is stored at
+`<working_dir>/<profile>/telegram/<channel_id>/session.session`.
+
+`opa channels pair <id>` runs the same pairing flow directly in the
+terminal — handy when you don't have the web UI open. WhatsApp's
+linked-device QR is rendered as Unicode-block characters via
+`mdp/qrterminal`, scannable from your phone like any other QR; for
+Telegram userbot the command prompts for the verification code (and
+the cloud password if 2FA is on, typed without echo). Press Ctrl-C
+to abort. The QR refreshes itself every ~20s while waiting for a
+scan.
+
+`opa channels add` auto-launches the same pairing flow when the chosen
+mode declares interactive setup (WhatsApp, Telegram userbot) — so a
+single `opa channels add --type whatsapp --mode userbot --json '{...}'`
+both registers the channel and walks you through scanning the QR.
+Pass `--no-pair` to skip; root `--json` also suppresses auto-pairing
+because it implies a non-interactive caller.
+
+WhatsApp is integrated through a Node.js sidecar
+(`app/channels/sidecars/whatsapp/`) using
+[`@whiskeysockets/baileys`](https://github.com/WhiskeySockets/Baileys).
+Prereqs (one-time): Node 18+ on PATH, then `npm install` inside that
+directory. After `opa channels add --type whatsapp ...`, scan the QR
+that appears on the web UI's Channels page (Settings → Channels) with
+your phone's WhatsApp → Linked Devices. The paired session is stored
+under `<working_dir>/<profile>/whatsapp/<channel_id>/session/` so it
+survives server restarts.

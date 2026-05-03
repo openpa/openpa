@@ -32,6 +32,7 @@ class EventNotificationsBuffer:
         conversation_title: str,
         message_preview: str,
         kind: str = "completed",
+        extra: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         entry = {
             "id": str(uuid.uuid4()),
@@ -42,6 +43,8 @@ class EventNotificationsBuffer:
             "kind": kind,
             "created_at": time.time() * 1000,
         }
+        if extra:
+            entry.update(extra)
         with self._lock:
             bucket = self._by_profile.setdefault(profile, [])
             bucket.append(entry)
