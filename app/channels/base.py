@@ -598,6 +598,12 @@ class BaseChannelAdapter(ABC):
         )
         detail = self.response_mode == "detail"
         text_chunks: list[str] = []
+        # Action_Input of the most recent terminal-action ("Final Answer" /
+        # "Done") thinking step. Used by ``flush_final`` as a fallback when
+        # ``text_chunks`` is empty — which happens when the LLM produces a
+        # Final Answer Tool call that yields a degenerate ``DONE`` chunk with
+        # empty ``data`` (so stream_runner publishes no ``text`` event).
+        final_answer_fallback: str = ""
         current_step: dict | None = None
         step_index = 0
         seen_seqs: set[int] = set()
@@ -618,6 +624,14 @@ class BaseChannelAdapter(ABC):
 
         async def flush_final(text: str) -> None:
             text = text.strip()
+            if not text and final_answer_fallback:
+                logger.info(
+                    f"channels[{self.channel_type}]: flush_final using "
+                    f"Final-Answer fallback (text_chunks empty) "
+                    f"len={len(final_answer_fallback)} sender={sender_id} "
+                    f"conv={conversation_id}"
+                )
+                text = final_answer_fallback
             if not text:
                 logger.warning(
                     f"channels[{self.channel_type}]: flush_final empty "
@@ -633,7 +647,7 @@ class BaseChannelAdapter(ABC):
             await self._send_chunked(sender_id, prefix + text)
 
         async def absorb(event: dict) -> bool:
-            nonlocal current_step
+            nonlocal current_step, final_answer_fallback
             seq = event.get("seq")
             if seq in seen_seqs:
                 return False
@@ -660,18 +674,31 @@ class BaseChannelAdapter(ABC):
                 token = data.get("token")
                 if token:
                     text_chunks.append(token)
-            elif etype == "thinking" and detail:
-                # A new thinking event marks the start of a new step. Flush
-                # the previous step (with its observation now attached) so the
-                # user sees it before the next round of reasoning begins.
-                if current_step is not None:
-                    await flush_step(current_step)
-                current_step = {
-                    "thought": (data.get("Thought") or "").strip(),
-                    "action": (data.get("Action") or "").strip(),
-                    "action_input": data.get("Action_Input") or "",
-                    "observation": "",
-                }
+            elif etype == "thinking":
+                # Capture the Action_Input of the most recent terminal-action
+                # step as a fallback for ``flush_final`` — runs in both detail
+                # and normal modes so the fallback is available either way.
+                # The terminal-action set mirrors ``_format_step_markdown``.
+                action_lower = (data.get("Action") or "").strip().lower()
+                if action_lower in {"final answer", "done"}:
+                    ai_str = _stringify_action_input(
+                        data.get("Action_Input")
+                    ).strip()
+                    if ai_str:
+                        final_answer_fallback = ai_str
+
+                if detail:
+                    # A new thinking event marks the start of a new step. Flush
+                    # the previous step (with its observation now attached) so
+                    # the user sees it before the next round of reasoning begins.
+                    if current_step is not None:
+                        await flush_step(current_step)
+                    current_step = {
+                        "thought": (data.get("Thought") or "").strip(),
+                        "action": (data.get("Action") or "").strip(),
+                        "action_input": data.get("Action_Input") or "",
+                        "observation": "",
+                    }
             elif etype == "result" and detail and current_step is not None:
                 obs_parts = data.get("Observation") or []
                 current_step["observation"] = _format_observation_text(obs_parts)
