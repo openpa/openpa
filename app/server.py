@@ -701,7 +701,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     middleware_stack = [
         Middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=BaseConfig.CORS_ALLOWED_ORIGINS,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],

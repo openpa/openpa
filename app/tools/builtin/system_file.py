@@ -221,8 +221,11 @@ class SearchFilesTool(BuiltInTool):
             "path": {
                 "type": "string",
                 "description": (
-                    "Relative path within the data directory to start searching "
-                    "from. Defaults to the root of the data directory."
+                    "Optional sub-path **relative to the current working "
+                    "directory** to start searching from. Defaults to '.' "
+                    "(the current working directory itself). Do not repeat "
+                    "the working directory's own name here — e.g. if the "
+                    "cwd is '.../Lee', use '.' or omit, not 'Lee'."
                 ),
             },
             "pattern": {
@@ -358,8 +361,11 @@ class ListFilesTool(BuiltInTool):
             "path": {
                 "type": "string",
                 "description": (
-                    "Relative path within the data directory to list. "
-                    "Defaults to the root of the data directory."
+                    "Optional sub-path **relative to the current working "
+                    "directory** to list. Defaults to '.' (the current "
+                    "working directory itself). Do not repeat the working "
+                    "directory's own name here — e.g. if the cwd is "
+                    "'.../Lee', use '.' or omit, not 'Lee'."
                 ),
             },
             "pattern": {
@@ -925,8 +931,14 @@ TOOL_CONFIG: ToolConfig = {
     "default_model_group": "low",
     "llm_parameters": {
         "tool_instructions": (
-            "A file management assistant. "
-            "Operates within the user's profile-specific working directory."
+            "A file management assistant. Operates inside the conversation's "
+            "*current* working directory — which may have just been changed by "
+            "the `change_working_directory` tool. All `path` arguments are "
+            "interpreted relative to that current directory, never to a fixed "
+            "root. To act on the current directory itself, omit `path` (or "
+            "pass '.'). Never repeat the working directory's own name as a "
+            "`path` value: if the user says 'list files in the Lee folder' "
+            "and the cwd is already '.../Lee', call list_files with no path."
         ),
     },
     "required_config": {
@@ -968,6 +980,7 @@ TOOL_CONFIG: ToolConfig = {
 
 def _make_server_instructions(_data_dir: str) -> str:
     return (
-        "A file management assistant. "
-        "Operates within the user's profile-specific working directory."
+        "A file management assistant. Operates inside the conversation's "
+        "current working directory; all `path` arguments are relative to "
+        "that directory and default to '.' when omitted."
     )

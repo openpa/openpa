@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -66,6 +67,17 @@ func Run(ctx context.Context, cfg Config) error {
 
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// File-tree pump: listens on cwdCh for working-directory updates from
+	// terminal events and (re)opens the snapshot+watch on each new path.
+	// Replay mode is offline, so skip it there.
+	var cwdCh chan string
+	if cfg.Client != nil && cfg.Mode != ModeReplay {
+		cwdCh = make(chan string, 4)
+		m.cwdSink = cwdCh
+		go pumpFileTree(pumpCtx, prog, cfg.Client, cwdCh, cfg.ConversationID)
+	}
+
 	if cfg.Mode == ModeReplay {
 		go pumpReplay(pumpCtx, prog, cfg.Replay)
 	} else {
@@ -73,6 +85,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	_, err := prog.Run()
+	if cwdCh != nil {
+		close(cwdCh)
+	}
 	return err
 }
 
@@ -112,6 +127,12 @@ type model struct {
 
 	statusMsg string
 	errMsg    string
+
+	// fileTree holds the right-side workspace pane. cwdSink, when non-nil,
+	// receives cwd updates from terminal events; pumpFileTree consumes the
+	// channel and runs the listing + watch SSE on each new path.
+	fileTree fileTreeModel
+	cwdSink  chan<- string
 }
 
 func newModel(cfg Config) model {
@@ -135,6 +156,7 @@ func newModel(cfg Config) model {
 		theme:    cfg.Theme,
 		viewport: vp,
 		textarea: ta,
+		fileTree: newFileTreeModel(),
 	}
 }
 
@@ -246,6 +268,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.cancelRun()
 			}
 			return m, tea.Quit
+		case "ctrl+b":
+			// Toggle the file-tree pane.
+			m.fileTree.visible = !m.fileTree.visible
+			m.layout()
+			return m, nil
 		case "enter":
 			if m.cfg.Mode == ModeInteractive && m.textarea.Focused() && !m.streaming {
 				text := strings.TrimSpace(m.textarea.Value())
@@ -263,6 +290,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case evMsg:
 		ev := client.Event(msg)
+		// ``ready`` (initial cwd seed) and ``cwd`` (change_working_directory
+		// publishes) carry the agent's effective working directory. Forward
+		// it to the file-tree pump so the pane re-renders against the new
+		// path. Both event types use the same payload shape.
+		if (ev.Type == "ready" || ev.Type == "cwd") && m.cwdSink != nil {
+			var p struct {
+				Data struct {
+					WorkingDirectory string `json:"working_directory"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(ev.Raw, &p); err == nil && p.Data.WorkingDirectory != "" {
+				select {
+				case m.cwdSink <- p.Data.WorkingDirectory:
+				default:
+				}
+			}
+		}
 		if ev.Type == "ready" {
 			m.ready = true
 		}
@@ -320,6 +364,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusMsg = "stream closed; press ESC to exit"
 		}
+
+	case fileTreeListedMsg:
+		m.fileTree.applyListing(msg)
+
+	case fileTreeWatchMsg:
+		if m.fileTree.shouldRefetchOn(msg) && m.cfg.Client != nil {
+			cmds = append(cmds, refetchListingCmd(m.cfg.Client, m.fileTree.cwd, m.cfg.ConversationID))
+		}
+
+	case fileTreeReadyMsg:
+		// Handshake — nothing visible to do; logged for clarity.
 	}
 
 	var cmd tea.Cmd
@@ -351,7 +406,21 @@ func (m *model) layout() {
 	if vpH < 3 {
 		vpH = 3
 	}
-	m.viewport.Width = w
+
+	treeW := 0
+	// Reserve a column for the file tree only when the model wants it visible
+	// AND there's enough room left for the chat to remain usable. The +2
+	// covers the divider/border baked into TreePane.
+	if m.fileTree.visible && m.cfg.Client != nil && w >= fileTreeMinWidth*3 {
+		treeW = fileTreePreferredWidth
+		if treeW > w/3 {
+			treeW = w / 3
+		}
+	}
+	m.fileTree.width = treeW
+	m.fileTree.height = vpH
+
+	m.viewport.Width = w - treeW
 	m.viewport.Height = vpH
 	if m.cfg.Mode == ModeInteractive {
 		m.textarea.SetWidth(w - 2)
@@ -408,6 +477,12 @@ func (m *model) View() string {
 	statusBar := t.StatusBar.Width(m.width).Render(status)
 
 	body := m.viewport.View()
+	if m.fileTree.width > 0 {
+		tree := m.fileTree.View(t)
+		if tree != "" {
+			body = lipgloss.JoinHorizontal(lipgloss.Top, body, tree)
+		}
+	}
 
 	if m.cfg.Mode == ModeInteractive {
 		input := lipgloss.NewStyle().Width(m.width).Render(m.textarea.View())

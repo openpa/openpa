@@ -23,6 +23,13 @@ def _bool(val) -> bool:
     return str(val).lower() == "true"
 
 
+def _csv_list(val) -> list[str]:
+    """Parse a comma-separated env var into a list of trimmed, non-empty strings."""
+    if not val:
+        return []
+    return [item.strip() for item in val.split(",") if item.strip()]
+
+
 def _dynaconf_get(key: str, default=None):
     """Get a value from Dynaconf settings, with a fallback default."""
     try:
@@ -105,6 +112,7 @@ class BaseConfig:
     DEBUG = _bool(os.environ.get("DEBUG", "false"))
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
     DISABLE_LOG = _bool(os.environ.get("DISABLE_LOG", "false"))
+    CORS_ALLOWED_ORIGINS = _csv_list(os.environ.get("CORS_ALLOWED_ORIGINS", "")) or ["*"]
 
     # ── Application-level (TOML defaults, overridable via SQLite) ──
     SERVICE_NAME = _dynaconf_get("general.service_name", "openpa-agent")

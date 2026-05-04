@@ -5,17 +5,21 @@ import "github.com/charmbracelet/lipgloss"
 // Theme groups the lipgloss styles used by the chat view. It's a value type so
 // callers can hand it around without pointer-receiver footguns.
 type Theme struct {
-	Header    lipgloss.Style
-	StatusBar lipgloss.Style
-	UserMsg   lipgloss.Style
-	AssistMsg lipgloss.Style
-	Thinking  lipgloss.Style
-	Phase     lipgloss.Style
-	Section   lipgloss.Style
-	Box       lipgloss.Style
-	Err       lipgloss.Style
-	Dim       lipgloss.Style
-	Prompt    lipgloss.Style
+	Header     lipgloss.Style
+	StatusBar  lipgloss.Style
+	UserMsg    lipgloss.Style
+	AssistMsg  lipgloss.Style
+	Thinking   lipgloss.Style
+	Phase      lipgloss.Style
+	Section    lipgloss.Style
+	Box        lipgloss.Style
+	Err        lipgloss.Style
+	Dim        lipgloss.Style
+	Prompt     lipgloss.Style
+	TreePane   lipgloss.Style
+	TreeHeader lipgloss.Style
+	TreeDir    lipgloss.Style
+	TreeFile   lipgloss.Style
 }
 
 // DefaultTheme returns the colored theme.
@@ -56,6 +60,18 @@ func DefaultTheme() Theme {
 		Prompt: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("212")).
 			Bold(true),
+		TreePane: lipgloss.NewStyle().
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderLeft(true).
+			BorderForeground(lipgloss.Color("240")).
+			PaddingLeft(1),
+		TreeHeader: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("153")).
+			Bold(true),
+		TreeDir: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("75")),
+		TreeFile: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("250")),
 	}
 }
 
@@ -71,8 +87,12 @@ func MonochromeTheme() Theme {
 		Phase:     plain.Italic(true),
 		Section:   plain.Bold(true),
 		Box:       plain.Border(lipgloss.NormalBorder()),
-		Err:       plain.Bold(true),
-		Dim:       plain,
-		Prompt:    plain.Bold(true),
+		Err:        plain.Bold(true),
+		Dim:        plain,
+		Prompt:     plain.Bold(true),
+		TreePane:   plain.BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).PaddingLeft(1),
+		TreeHeader: plain.Bold(true),
+		TreeDir:    plain.Bold(true),
+		TreeFile:   plain,
 	}
 }

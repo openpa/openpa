@@ -34,10 +34,14 @@ from app.storage import (
     get_conversation_storage,
     get_event_subscription_storage,
 )
+from app.config.settings import get_user_working_directory
 from app.tools.builtin.exec_shell import publish_process_list_changed
 from app.tools.builtin.exec_shell_autostart import spawn_from_autostart
 from app.tools.builtin.register_skill_event import _resolve_skill_source
+from app.utils.context_storage import get_context
 from app.utils.logger import logger
+
+_WORKING_DIR_OVERRIDE_KEY = "_working_directory_override"
 
 
 # Default IMAP poll interval is 30s (see email-cli config). Heartbeat-based
@@ -352,7 +356,21 @@ def get_event_routes() -> list[Route]:
             try:
                 for ev in replay:
                     yield _frame(ev)
-                yield _frame({"type": "ready", "data": {"is_active": is_active}})
+                # Seed the conversation's effective working directory so
+                # clients can render the file-tree pane immediately without
+                # an extra round-trip. Falls back to the user default when
+                # the conversation hasn't called change_working_directory.
+                effective_cwd = (
+                    get_context(conversation_id, _WORKING_DIR_OVERRIDE_KEY)
+                    or get_user_working_directory()
+                )
+                yield _frame({
+                    "type": "ready",
+                    "data": {
+                        "is_active": is_active,
+                        "working_directory": effective_cwd,
+                    },
+                })
 
                 # Heartbeat so the client/proxy keeps the connection open
                 # during quiet periods (no events for a while).

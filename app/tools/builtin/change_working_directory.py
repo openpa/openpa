@@ -16,10 +16,12 @@ Allowed targets:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config.settings import BaseConfig, get_user_working_directory
+from app.events import get_event_stream_bus
 from app.skills.sync import profile_skills_dir
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig
@@ -36,7 +38,7 @@ LOADED_SKILLS_KEY = "_loaded_skill_ids"
 
 SERVER_NAME = "Change Working Directory"
 
-_TARGETS = ("user_working", "skills", "documents")
+_TARGETS = ("user_working", "skills", "documents", "custom")
 
 
 def _looks_like_skill_id(target: str) -> bool:
@@ -68,13 +70,21 @@ def _resolve_skill_dir(target: str) -> Optional[Path]:
     return Path(source)
 
 
-def _resolve_target(target: str, profile: str) -> Optional[Path]:
+def _resolve_target(
+    target: str,
+    profile: str,
+    custom_path: Optional[str] = None,
+) -> Optional[Path]:
     if target == "skills":
         return profile_skills_dir(profile)
     if target == "documents":
         return Path(BaseConfig.OPENPA_WORKING_DIR) / profile / "documents"
     if target == "user_working":
         return Path(get_user_working_directory())
+    if target == "custom":
+        if not custom_path:
+            return None
+        return Path(custom_path).expanduser().resolve()
     if _looks_like_skill_id(target):
         return _resolve_skill_dir(target)
     return None
@@ -93,7 +103,11 @@ TOOL_CONFIG: ToolConfig = {
             "documents and skills, it can be skills or skill name "
             "strings (e.g. 'my weather skill' to switch to a "
             "specific skill's source dir). \n"
-            "E.g. 'change to user working directory', 'switch to documents folder', 'change to my weather skill' (if 'my weather skill' is a loaded skill)."
+            "If the user names an arbitrary directory (e.g. 'switch to "
+            "C:\\\\Code\\\\foo' or '~/projects/acme'), call with "
+            "target='custom' and path=<absolute path>. The path must already "
+            "exist; it will not be auto-created.\n"
+            "E.g. 'change to user working directory', 'switch to documents folder', 'change to my weather skill' (if 'my weather skill' is a loaded skill), 'change to C:\\\\Users\\\\me\\\\projects\\\\acme'."
         ),
         "system_prompt": (
             "Don't answer any questions or provide any information. "
@@ -112,10 +126,18 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
                 "type": "string",
                 "enum": list(_TARGETS),
                 "description": (
-                    "Which directory to switch to: user working' (profile "
-                    "default; clears any override), 'documents' and skills"
+                    "Which directory to switch to: 'user_working' (profile "
+                    "default; clears any override), 'documents', 'skills', "
+                    "or 'custom' for an arbitrary user-supplied directory."
                 ),
-            }
+            },
+            "path": {
+                "type": "string",
+                "description": (
+                    "Required when target='custom'. Absolute directory "
+                    "path the agent should operate in. Must already exist."
+                ),
+            },
         },
         "required": ["target"],
         "additionalProperties": False,
@@ -139,6 +161,7 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
             )
 
         profile = arguments.get("_profile") or "default"
+        custom_path = arguments.get("path")
 
         # Reject unknown skill IDs (defense in depth — even if the inner LLM
         # hallucinates a skill_id outside the dynamic enum, only currently
@@ -153,11 +176,30 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
                     )}]
                 )
 
+        # Up-front validation for the custom branch: the LLM must supply an
+        # absolute path that already exists. We deliberately do NOT mkdir
+        # here — auto-creating arbitrary user-supplied paths would silently
+        # materialise typos (`C:\Codee` instead of `C:\Code`).
+        if target == "custom":
+            if not isinstance(custom_path, str) or not custom_path.strip():
+                return BuiltInToolResult(
+                    content=[{"type": "text", "text": (
+                        "target='custom' requires a non-empty 'path' argument."
+                    )}]
+                )
+            expanded = os.path.expanduser(custom_path)
+            if not os.path.isabs(expanded):
+                return BuiltInToolResult(
+                    content=[{"type": "text", "text": (
+                        f"path '{custom_path}' must be an absolute directory path."
+                    )}]
+                )
+
         previous = (
             get_context(context_id, OVERRIDE_KEY)
             or get_user_working_directory()
         )
-        new_path = _resolve_target(target, profile)
+        new_path = _resolve_target(target, profile, custom_path=custom_path)
         if new_path is None:
             return BuiltInToolResult(
                 content=[{"type": "text", "text": (
@@ -167,11 +209,32 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
 
         if target == "user_working":
             clear_context(context_id, OVERRIDE_KEY)
+        elif target == "custom":
+            if not new_path.exists() or not new_path.is_dir():
+                return BuiltInToolResult(
+                    content=[{"type": "text", "text": (
+                        f"Custom path '{new_path}' does not exist or is not a directory."
+                    )}]
+                )
+            set_context(context_id, OVERRIDE_KEY, str(new_path))
         else:
             new_path.mkdir(parents=True, exist_ok=True)
             set_context(context_id, OVERRIDE_KEY, str(new_path))
 
         new_str = str(new_path)
+
+        # Broadcast the cwd change on the conversation's SSE stream so any
+        # subscribed UI (Vue file-tree pane, Go CLI tree) re-renders against
+        # the new directory. ``context_id`` is the conversation_id here.
+        try:
+            await get_event_stream_bus().publish(
+                context_id,
+                "cwd",
+                {"working_directory": new_str},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to publish cwd change for %s", context_id)
+
         return BuiltInToolResult(
             content=[{
                 "type": "text",

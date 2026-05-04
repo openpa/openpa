@@ -261,7 +261,7 @@ class BuiltInToolAdapter:
                 f"reasoning_effort={getattr(self._llm, 'default_reasoning_effort', None)}, "
                 f"full_reasoning={self._full_reasoning}"
             )
-            logger.debug(f"Available tools for LLM: {available_tools}")
+            # logger.debug(f"Available tools for LLM: {available_tools}")
             try:
                 async for response in self._llm.chat_completion(
                     messages=messages,
