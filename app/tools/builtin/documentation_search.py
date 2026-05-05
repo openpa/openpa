@@ -66,23 +66,11 @@ NO_RESULT_MESSAGE = "no relevant result found"
 
 
 _DOC_TOOL_INSTRUCTIONS = (
-    "Document search tool. Use this when the user asks how to do "
-    "something in OpenPA, requests an example, or refers to a feature "
-    "whose details are documented (skills, hooks, settings, CLI "
-    "commands, etc.). Phrase the `query` argument as a concise "
-    "natural-language description of what the user is trying to learn "
-    "or build.\n"
-    "\n"
-    "After the search returns a document: if the document shows an "
-    "`opa ...` (or other shell) command that directly answers the "
-    "user's request -- e.g. the user asked to *list*, *show*, *get*, "
-    "or *check* something and the doc gives the exact command for it "
-    "-- DO NOT relay the documentation as the final answer. Instead, "
-    "call `exec_shell` next to run that command, then base the final "
-    "answer on the command's actual output. Only fall back to "
-    "describing the command in prose when the request is genuinely a "
-    "*how-to* / *explain* question (e.g. \"how do I write a skill\"), "
-    "or when the doc has no runnable command for the request."
+    "When a user submits a request (not a casual chat), if you cannot "
+    "find a relevant tool to handle it, you can search for it using the "
+    "**“Documentation Search”** tool. This tool is used to look up "
+    "documentation and guides, and can be considered a **knowledge base "
+    "for documents**."
 )
 
 _JUDGE_SYSTEM_PROMPT = (

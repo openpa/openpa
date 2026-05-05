@@ -41,7 +41,8 @@ TOOL_CONFIG: ToolConfig = {
             "\"when a python file changes in the 'MyDocs' directory, notify me\" "
             "or \"watch ~/Documents/inbox for new PDFs and summarize them\". "
             "Relative paths are resolved against the user's working directory. "
-            "Absolute paths are used as-is."
+            "Absolute paths are used as-is.\n"
+            "To list and remove watcher, please find 'opa file-watchers' documentation."
         ),
         "system_prompt": (
             "You convert a file-watch registration request into a structured "
