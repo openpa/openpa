@@ -41,28 +41,35 @@ def profile_skills_dir(profile: str) -> Path:
     return Path(BaseConfig.OPENPA_WORKING_DIR) / profile / "skills"
 
 
-def sync_builtin_skills_into_profile(profile: str) -> None:
+def sync_builtin_skills_into_profile(profile: str) -> list[str]:
     """Copy every builtin skill directory into the profile's skills dir.
 
     Built-in-named skill directories are overwritten on every call so that
     accidental deletions and tampering are repaired. Directories in the
     profile's skills folder that do NOT correspond to a builtin are left
     untouched (those are user-authored skills).
+
+    Returns the list of skill directory names that did not exist in the
+    profile before this call (i.e. first-time installs for this profile).
     """
     target_root = profile_skills_dir(profile)
     target_root.mkdir(parents=True, exist_ok=True)
 
     if not BUILTIN_SKILLS_DIR.is_dir():
         logger.warning(f"Builtin skills dir missing: {BUILTIN_SKILLS_DIR}")
-        return
+        return []
 
+    newly_added: list[str] = []
     for src in BUILTIN_SKILLS_DIR.iterdir():
         if not src.is_dir():
             continue
         dst = target_root / src.name
+        if not dst.exists():
+            newly_added.append(src.name)
         shutil.copytree(src, dst, dirs_exist_ok=True)
 
     logger.info(f"Synced builtin skills into {target_root}")
+    return newly_added
 
 
 async def initialize_profile_skills(
@@ -80,13 +87,14 @@ async def initialize_profile_skills(
 
     Returns the watcher handle (``None`` if the directory could not be set up).
     """
-    sync_builtin_skills_into_profile(profile)
+    newly_added_dirs = sync_builtin_skills_into_profile(profile)
     skills_dir = profile_skills_dir(profile)
     if not skills_dir.is_dir():
         logger.warning(f"Skills dir not ready for '{profile}': {skills_dir}")
         return None
 
     skills = scan_skills(skills_dir)
+    _notify_first_add_long_running(profile, skills, newly_added_dirs)
     await registry.sync_skills(
         profile=profile,
         current=skills,
@@ -176,3 +184,52 @@ def _stop_watcher(profile: str) -> None:
         watcher.stop()
     except Exception:  # noqa: BLE001
         logger.exception(f"Error stopping watcher for '{profile}'")
+
+
+def _notify_first_add_long_running(
+    profile: str,
+    skills: dict[str, SkillInfo],
+    newly_added_dirs: list[str],
+) -> None:
+    """Push a 'register required' notification for newly-added long-running skills.
+
+    Fires once per skill, only the first time it lands in this profile's skills
+    directory. Reboots that re-validate already-present skills do not re-fire.
+    """
+    if not newly_added_dirs:
+        return
+    try:
+        from app.events.notifications_buffer import get_event_notifications
+    except ImportError:
+        return
+
+    by_dir = {info.dir_path.name: info for info in skills.values()}
+    buffer = get_event_notifications()
+
+    for dir_name in newly_added_dirs:
+        info = by_dir.get(dir_name)
+        if info is None:
+            continue
+        lra = info.metadata.get("long_running_app") if isinstance(info.metadata, dict) else None
+        if not isinstance(lra, dict):
+            continue
+        command = lra.get("command")
+        if not isinstance(command, str) or not command.strip():
+            continue
+        try:
+            buffer.push(
+                profile=profile,
+                conversation_id="",
+                conversation_title=f"Set up {info.name}",
+                message_preview=f"Click to register the {info.name} background process.",
+                kind="skill_register_required",
+                priority="high",
+                extra={"skill_id": info.name, "skill_name": info.name},
+            )
+            logger.info(
+                f"Notified profile '{profile}' to register long-running skill '{info.name}'"
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                f"Failed to emit skill_register_required notification for '{info.name}'"
+            )

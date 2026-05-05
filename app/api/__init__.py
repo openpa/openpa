@@ -5,6 +5,7 @@ from app.api.channels import get_channel_routes
 from app.api.config import get_config_routes
 from app.api.conversations import get_conversation_routes
 from app.api.events import get_event_routes
+from app.api.file_watchers import get_file_watcher_routes
 from app.api.files import get_file_routes
 from app.api.llm import get_llm_routes
 from app.api.oauth2 import get_oauth2_routes
@@ -71,4 +72,5 @@ def get_api_routes(
     ))
     routes.extend(get_process_routes())
     routes.extend(get_event_routes())
+    routes.extend(get_file_watcher_routes())
     return routes

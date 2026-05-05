@@ -495,6 +495,7 @@ async def run_agent_to_bus(
                     conversation_title=title,
                     message_preview=_trim(final_text),
                     kind="error" if errored else "completed",
+                    priority="high" if errored else "normal",
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("stream_runner: failed to push notification")

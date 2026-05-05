@@ -11,12 +11,14 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 from app.events.notifications_bus import get_notifications_stream_bus
 
 
 _MAX_PER_PROFILE = 100
+
+Priority = Literal["high", "normal"]
 
 
 class EventNotificationsBuffer:
@@ -32,6 +34,7 @@ class EventNotificationsBuffer:
         conversation_title: str,
         message_preview: str,
         kind: str = "completed",
+        priority: Priority = "normal",
         extra: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         entry = {
@@ -41,6 +44,7 @@ class EventNotificationsBuffer:
             "conversation_title": conversation_title,
             "message_preview": message_preview,
             "kind": kind,
+            "priority": priority,
             "created_at": time.time() * 1000,
         }
         if extra:

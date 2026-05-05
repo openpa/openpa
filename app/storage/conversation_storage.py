@@ -11,9 +11,9 @@ from a2a.server.models import Base
 
 from app.storage.models import (
     AuthTokenModel, AutostartProcessModel, ChannelModel, ChannelSenderModel,
-    ConversationModel, LLMConfigModel, MessageModel, ProfileModel,
-    ProfileToolModel, ServerConfigModel, SkillEventSubscriptionModel,
-    ToolConfigModel, ToolModel, UserConfigModel,
+    ConversationModel, FileWatcherSubscriptionModel, LLMConfigModel,
+    MessageModel, ProfileModel, ProfileToolModel, ServerConfigModel,
+    SkillEventSubscriptionModel, ToolConfigModel, ToolModel, UserConfigModel,
 )
 from app.utils.logger import logger
 
@@ -80,6 +80,7 @@ class ConversationStorage:
                 ProfileToolModel, ToolConfigModel, AuthTokenModel,
                 AutostartProcessModel,
                 SkillEventSubscriptionModel,
+                FileWatcherSubscriptionModel,
             ]:
                 mapper = class_mapper(model_class)
                 for table in mapper.tables:
@@ -440,6 +441,11 @@ class ConversationStorage:
             await session.execute(
                 update(SkillEventSubscriptionModel)
                 .where(SkillEventSubscriptionModel.conversation_id == old_id)
+                .values(conversation_id=new_id)
+            )
+            await session.execute(
+                update(FileWatcherSubscriptionModel)
+                .where(FileWatcherSubscriptionModel.conversation_id == old_id)
                 .values(conversation_id=new_id)
             )
 

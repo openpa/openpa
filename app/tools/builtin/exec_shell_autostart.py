@@ -19,6 +19,7 @@ import uuid as _uuid
 from typing import Any, Dict, Optional, Tuple
 
 from app.config.settings import BaseConfig
+from app.config.system_vars import build_system_env
 from app.storage.autostart_storage import AutostartStorage
 from app.tools.builtin.exec_shell import (
     LogWriterState,
@@ -126,6 +127,13 @@ async def spawn_from_autostart(
     system = platform.system()
     shell, shell_flag = _shell_for(system)
 
+    # Inject the same system-vars block the agent's exec_shell uses, so
+    # autostart-spawned skills (e.g. file-watcher's event_listener.py) receive
+    # OPENPA_USER_WORKING_DIR / OPENPA_SKILL_DIR / OPENPA_SERVER / OPENPA_TOKEN
+    # exactly as a foreground exec_shell run would.
+    profile_for_env = row.get("profile") or None
+    extra_env = build_system_env(profile_for_env)
+
     if working_dir:
         try:
             os.makedirs(working_dir, exist_ok=True)
@@ -158,10 +166,14 @@ async def spawn_from_autostart(
 
         try:
             if is_pty:
-                proc = await _spawn_command_pty(command, working_dir, 100, 50, system)
+                proc = await _spawn_command_pty(
+                    command, working_dir, 100, 50, system,
+                    extra_env=extra_env,
+                )
             else:
                 proc = await _spawn_command(
                     command, working_dir, system, shell, shell_flag,
+                    extra_env=extra_env,
                 )
         except Exception as exc:  # noqa: BLE001
             last_error = f"spawn failed: {exc}"

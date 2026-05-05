@@ -45,6 +45,10 @@ _EVENT_INSTRUCTION = (
     "for this skill."
 )
 
+_EVENT_SKILL_CONTENT_BLOCK = (
+    "\n\nSKILL.md content for {skill_id}:\n{skill_content}"
+)
+
 
 async def classify_skill_request(
     *,
@@ -54,12 +58,17 @@ async def classify_skill_request(
     source: str,
     llm: LLMProvider,
     profile: str,
+    skill_content: str = "",
 ) -> Dict[str, Any]:
     """Classify ``action_input`` as either ``load`` or ``event``.
 
     Returns a payload with all five fields the reasoning agent needs to route
     the request. On any LLM/parse failure, defaults to ``load`` (the safer
     fallback — the skill simply gets loaded, the same as today's behavior).
+
+    When the verdict is ``event``, ``skill_content`` (typically the skill's
+    full ``SKILL.md`` text) is appended to the returned ``instruction`` so the
+    downstream ``register_skill_event`` call has full context about the skill.
     """
     user_text = (
         f"Skill: {skill_name}\n"
@@ -93,14 +102,14 @@ async def classify_skill_request(
             f"skill_classifier: LLM call failed for skill={skill_id}: {exc}. "
             f"Defaulting to 'load'."
         )
-        return _payload(skill_id, skill_name, source, "load")
+        return _payload(skill_id, skill_name, source, "load", skill_content)
 
     response_type = _extract_response_type(raw)
     logger.info(
         f"skill_classifier: skill={skill_id} response_type={response_type} "
         f"raw={raw!r}"
     )
-    return _payload(skill_id, skill_name, source, response_type)
+    return _payload(skill_id, skill_name, source, response_type, skill_content)
 
 
 def _extract_response_type(raw: str) -> str:
@@ -126,9 +135,21 @@ def _extract_response_type(raw: str) -> str:
     return "load"
 
 
-def _payload(skill_id: str, skill_name: str, source: str, response_type: str) -> Dict[str, Any]:
+def _payload(
+    skill_id: str,
+    skill_name: str,
+    source: str,
+    response_type: str,
+    skill_content: str = "",
+) -> Dict[str, Any]:
     if response_type == "event":
         instruction = _EVENT_INSTRUCTION
+        content = (skill_content or "").strip()
+        if content:
+            instruction += _EVENT_SKILL_CONTENT_BLOCK.format(
+                skill_id=skill_id,
+                skill_content=content,
+            )
     else:
         instruction = _LOAD_INSTRUCTION.format(skill_id=skill_id)
     return {

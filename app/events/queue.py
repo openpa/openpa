@@ -4,16 +4,18 @@ Runs for the same conversation are processed strictly sequentially: a worker
 awaits each agent run to completion before draining the next item. Different
 conversations run concurrently.
 
-Two run kinds share this queue:
+Three run kinds share this queue:
 
 * ``"skill_event"`` — synthesised events from a watched skill folder; the
   worker delegates to :func:`app.events.runner.run_event`.
+* ``"file_watcher_event"`` — filesystem events from a registered watch root;
+  the worker delegates to :func:`app.events.file_watcher_runner.run_event`.
 * ``"user_message"`` — user-typed messages POSTed to
   ``/api/conversations/{id}/messages``; the worker delegates to
   :func:`app.agent.stream_runner.run_agent_to_bus` directly.
 
-Sharing a single per-conversation queue means a user message and a
-skill-event-triggered run for the same conversation never interleave their
+Sharing a single per-conversation queue means a user message and an
+event-triggered run for the same conversation never interleave their
 mutations to storage or the stream bus's ring buffer.
 """
 
@@ -23,6 +25,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from app.events import runner as event_runner
+from app.events import file_watcher_runner
 from app.utils.logger import logger
 
 
@@ -47,6 +50,15 @@ async def _worker(conversation_id: str) -> None:
                     event_type=item["event_type"],
                     action=item["action"],
                     file_content=item["file_content"],
+                )
+            elif kind == "file_watcher_event":
+                await file_watcher_runner.run_event(
+                    conversation_id=conversation_id,
+                    profile=item["profile"],
+                    subscription_id=item["subscription_id"],
+                    watch_name=item["watch_name"],
+                    action=item["action"],
+                    payload=item["payload"],
                 )
             elif kind == "user_message":
                 # Lazy import: stream_runner pulls in app.events.notifications_buffer
@@ -122,6 +134,27 @@ async def enqueue(
         "event_type": event_type,
         "action": action,
         "file_content": file_content,
+    })
+
+
+async def enqueue_file_watcher_event(
+    *,
+    conversation_id: str,
+    profile: str,
+    subscription_id: str,
+    watch_name: str,
+    action: str,
+    payload: Dict[str, Any],
+) -> None:
+    """Add a file-watcher event to the conversation's queue."""
+    queue = _ensure_worker(conversation_id)
+    await queue.put({
+        "kind": "file_watcher_event",
+        "profile": profile,
+        "subscription_id": subscription_id,
+        "watch_name": watch_name,
+        "action": action,
+        "payload": payload,
     })
 
 

@@ -75,6 +75,7 @@ func Execute() error {
 		newChatCmd(),
 		newProcCmd(),
 		newSkillEventsCmd(),
+		newFileWatchersCmd(),
 		newAgentsCmd(),
 		newChannelsCmd(),
 		newSetupCmd(),

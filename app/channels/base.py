@@ -414,6 +414,7 @@ class BaseChannelAdapter(ABC):
                 conversation_title=sender.get("display_name") or sender["sender_id"],
                 message_preview=f"OTP {code} for {self.channel_type}",
                 kind="channel_otp",
+                priority="high",
                 extra={
                     "channel_id": self.channel_id,
                     "channel_type": self.channel_type,

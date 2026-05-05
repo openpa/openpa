@@ -116,6 +116,14 @@ opa skill-events events <skill>                      Events declared by the skil
 opa skill-events listener-status <skill>             Heartbeat-derived liveness
 opa skill-events listener-start <skill>              Spawn the listener daemon
 
+opa file-watchers list                               (alias: fw)
+opa file-watchers delete <id>
+opa file-watchers register --action "..." [--path <p>] [--name <n>]
+                           [--triggers created,modified,deleted,moved]
+                           [--target file|folder|any] [--ext .py,.md]
+                           [--recursive=true|false] [--conversation <id>]
+opa file-watchers stream                             Admin SSE snapshot
+
 opa agents list
 opa agents add --type a2a|mcp [--url …] [--json-config …]
               [--system-prompt …] [--description …]

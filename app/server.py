@@ -561,6 +561,15 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     except Exception:  # noqa: BLE001
         logger.exception("Failed to start skill event manager")
 
+    # 7e. File watcher manager: arm watchdog Observers for every persisted
+    #     file_watcher subscription. Re-uses ``event_runner.set_globals``
+    #     above (the file-watcher runner reads the same globals lazily).
+    try:
+        from app.events import get_file_watcher_manager
+        get_file_watcher_manager().start(loop)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to start file watcher manager")
+
     # 8. Agent card
     skill = AgentSkill(
         id=BaseConfig.AGENT_ID,

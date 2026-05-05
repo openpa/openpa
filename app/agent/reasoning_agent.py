@@ -371,7 +371,9 @@ class ReasoningAgent:
             f"- skill_name: \"{skill_name}\" (use this exact identifier — it "
             "is the same value you would pass as Action when invoking the "
             "skill).\n"
-            f"- trigger: one of [{names_csv}] — this fully captures the WHEN.\n"
+            f"- trigger: an array of one or more from [{names_csv}] — list "
+            "every event the user wants to subscribe to (deduplicated). "
+            "Each entry fully captures one WHEN.\n"
             "- action: only WHAT to do, written as a short imperative (e.g. "
             "\"Summarize the email content\"). DO NOT include the trigger "
             "condition — phrasings like \"when a new email arrives\", \"on "
@@ -1030,6 +1032,7 @@ class ReasoningAgent:
                         source=skill_source,
                         llm=self.llm,
                         profile=self.profile,
+                        skill_content=getattr(tool.info, "full_content", "") or "",  # type: ignore[attr-defined]
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(

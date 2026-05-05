@@ -72,17 +72,48 @@ TOOL_CONFIG: ToolConfig = {
     "default_model_group": "low",
     "llm_parameters": {
         "tool_instructions": (
-            "Subscribe the current conversation to a skill's filesystem event so a "
-            "saved instruction is run automatically whenever the event fires."
+            "This tool is for subscribing the current conversation to events emitted by a loaded skill."
         ),
         "system_prompt": (
-            "You convert a registration request into a structured tool call. "
-            "Always call register_skill_event with trigger and action. The "
-            "action must contain only the work to perform; never restate the "
-            "trigger condition. Do not produce any other output."
+            "You convert a registration request into a structured tool call.\n"
+            "Always call register_skill_event with trigger and action.\n"
+            "trigger is an array of one or more event names declared by the skill.\n"
+            "action is the string command to run when any of those events fire. "
+            "The action must only contain executable commands and must not include "
+            "any event-related information.\n"
+            "E.g. 'When a new email is received, please summarize it for me' -> "
+            "trigger: new email, action: 'summarize latest email'."
         ),
     },
 }
+
+
+def _normalize_triggers(raw: Any) -> List[str]:
+    """Coerce a trigger argument into a deduplicated list of trimmed names.
+
+    Accepts the canonical array shape and, for resilience, a bare string —
+    LLMs occasionally revert to the legacy single-trigger habit even with the
+    array schema in front of them.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items: List[Any] = [raw]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        s = item.strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
 
 
 def _read_events_metadata(source_dir: Path) -> List[Dict[str, Any]]:
@@ -124,19 +155,19 @@ def _read_events_metadata(source_dir: Path) -> List[Dict[str, Any]]:
 
 class RegisterSkillEventTool(BuiltInTool):
     name: str = "register_skill_event"
-    description: str = (
-        "Subscribe this conversation to a skill's filesystem event. The "
-        "skill must already be loaded and must declare metadata.events in "
-        "its SKILL.md."
-    )
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
             "trigger": {
-                "type": "string",
+                "description": "An array of one or more event names declared by the skill",
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "uniqueItems": True,
             },
             "action": {
                 "type": "string",
+                "description": "The string command to run when any of those events fire."
             },
         },
         "required": ["trigger", "action"],
@@ -148,7 +179,7 @@ class RegisterSkillEventTool(BuiltInTool):
         context_id: Optional[str] = arguments.get("_context_id")
         skill_id: str = (arguments.get("_skill_id") or "").strip()
         skill_source: str = (arguments.get("_skill_source") or "").strip()
-        trigger: str = (arguments.get("trigger") or "").strip()
+        triggers: List[str] = _normalize_triggers(arguments.get("trigger"))
         action: str = (arguments.get("action") or "").strip()
 
         if not profile:
@@ -171,8 +202,8 @@ class RegisterSkillEventTool(BuiltInTool):
                     f"Make sure the skill is installed and enabled."
                 )
             skill_source = looked_up
-        if not trigger:
-            return _err("trigger is required.")
+        if not triggers:
+            return _err("trigger is required (non-empty array of event names).")
         if not action:
             return _err("action is required.")
 
@@ -187,9 +218,10 @@ class RegisterSkillEventTool(BuiltInTool):
                 f"Skill '{canonical_skill_id}' does not declare any events in "
                 f"its metadata.events. Cannot register a trigger."
             )
-        if trigger not in valid_names:
+        invalid = [t for t in triggers if t not in valid_names]
+        if invalid:
             return _err(
-                f"trigger '{trigger}' is not declared by skill "
+                f"trigger(s) {invalid} are not declared by skill "
                 f"'{canonical_skill_id}'. Valid triggers: "
                 f"{', '.join(valid_names)}."
             )
@@ -216,39 +248,44 @@ class RegisterSkillEventTool(BuiltInTool):
         conversation_id = conv["id"]
 
         # Persist + watch using the canonical tool_id so every entry agrees
-        # regardless of the surface form the LLM happened to pass. Each call
-        # appends a new row — multiple subscriptions for the same
-        # (conversation, skill, trigger) run sequentially in registration
-        # order when the event fires.
+        # regardless of the surface form the LLM happened to pass. One row +
+        # one watcher per (conversation, skill, trigger). Multiple triggers in
+        # the same call become independent subscriptions that share an action.
         store = get_event_subscription_storage()
-        try:
-            row = store.insert(
-                conversation_id=conversation_id,
-                profile=profile,
-                skill_name=canonical_skill_id,
-                event_type=trigger,
-                action=action,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("register_skill_event: insert failed")
-            return _err(f"Failed to save subscription: {exc}")
+        rows: List[Dict[str, Any]] = []
+        for trigger in triggers:
+            try:
+                row = store.insert(
+                    conversation_id=conversation_id,
+                    profile=profile,
+                    skill_name=canonical_skill_id,
+                    event_type=trigger,
+                    action=action,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("register_skill_event: insert failed")
+                return _err(
+                    f"Failed to save subscription for trigger '{trigger}': {exc}"
+                )
+            rows.append(row)
 
-        try:
-            get_event_manager().ensure_watcher(
-                profile=profile,
-                skill_name=canonical_skill_id,
-                source_dir=source_dir_str,
-                event_type=trigger,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("register_skill_event: ensure_watcher failed")
-            return _err(
-                f"Subscription saved but the watcher could not start: {exc}. "
-                f"Check server logs."
-            )
+        watcher_failures: List[str] = []
+        for trigger in triggers:
+            try:
+                get_event_manager().ensure_watcher(
+                    profile=profile,
+                    skill_name=canonical_skill_id,
+                    source_dir=source_dir_str,
+                    event_type=trigger,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    f"register_skill_event: ensure_watcher failed for '{trigger}'"
+                )
+                watcher_failures.append(f"'{trigger}': {exc}")
 
-        # Push the new subscription to any open events-page SSE subscribers
-        # so the admin UI lights it up without a manual refresh. Imported
+        # Push the new subscriptions to any open events-page SSE subscribers
+        # so the admin UI lights them up without a manual refresh. Imported
         # locally to avoid pulling api.events into tool-import time.
         try:
             from app.api.events import publish_skill_events_admin_changed
@@ -256,15 +293,31 @@ class RegisterSkillEventTool(BuiltInTool):
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"register_skill_event: admin-bus publish failed: {exc}")
 
-        confirmation = (
-            f"Subscribed this conversation to the '{trigger}' event of skill "
-            f"'{canonical_skill_id}'. Whenever a new event arrives in "
-            f"{source_dir / 'events' / trigger}, I'll run: "
-            f"{action.strip()}."
-        )
+        if len(triggers) == 1:
+            t = triggers[0]
+            confirmation = (
+                f"Subscribed this conversation to the '{t}' event of skill "
+                f"'{canonical_skill_id}'. Whenever a new event arrives in "
+                f"{source_dir / 'events' / t}, I'll run: {action}."
+            )
+        else:
+            trig_list = ", ".join(f"'{t}'" for t in triggers)
+            confirmation = (
+                f"Subscribed this conversation to {len(triggers)} events of "
+                f"skill '{canonical_skill_id}': {trig_list}. Whenever any of "
+                f"these events fires (under {source_dir / 'events'}/<event_type>/), "
+                f"I'll run: {action}."
+            )
+        if watcher_failures:
+            confirmation += (
+                "\n\nNote: subscriptions were saved, but some watchers failed "
+                f"to start: {'; '.join(watcher_failures)}. Check server logs."
+            )
+
         logger.info(
-            f"register_skill_event: id={row['id']} conv={conversation_id} "
-            f"skill={canonical_skill_id} trigger={trigger}"
+            f"register_skill_event: conv={conversation_id} "
+            f"skill={canonical_skill_id} triggers={triggers} "
+            f"ids={[r['id'] for r in rows]}"
         )
         return BuiltInToolResult(
             content=[{"type": "text", "text": confirmation}]
@@ -320,8 +373,15 @@ def get_prepare_tools():
             props = params.get("properties") or {}
             trig = props.get("trigger")
             if isinstance(trig, dict):
-                trig["enum"] = enum_values
-                trig["description"] = "\n".join(desc_lines)
+                items_schema = trig.get("items")
+                if isinstance(items_schema, dict):
+                    items_schema["enum"] = enum_values
+                else:
+                    trig["items"] = {"type": "string", "enum": enum_values}
+                trig["description"] = (
+                    "Array of one or more event names this conversation should "
+                    "subscribe to. Available events:\n" + "\n".join(desc_lines)
+                )
             break
         return tools
 

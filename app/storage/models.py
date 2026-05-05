@@ -304,3 +304,35 @@ class SkillEventSubscriptionModel(Base):
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class FileWatcherSubscriptionModel(Base):
+    """Conversation-scoped subscription to a filesystem watch.
+
+    A row says: while the OpenPA server is running, watch ``root_path`` (with
+    optional recursion) for filesystem events of types listed in
+    ``event_types``; when one fires, build a synthetic trigger payload from
+    the watchdog event and run ``action`` in ``conversation_id``.
+
+    ``event_types`` and ``extensions`` use comma-separated strings to match
+    the existing storage convention (skill_event_subscriptions, channels) —
+    bounded enums/extensions, no JSON1 dependency, easy LIKE queries.
+
+    ``target_kind`` ∈ {"file", "folder", "any"} narrows which watchdog
+    events the handler dispatches.
+    """
+    __tablename__ = "file_watcher_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    profile: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    root_path: Mapped[str] = mapped_column(Text, nullable=False)
+    recursive: Mapped[bool] = mapped_column(Integer, nullable=False, default=1)
+    target_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="any")
+    event_types: Mapped[str] = mapped_column(String(128), nullable=False)
+    extensions: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
