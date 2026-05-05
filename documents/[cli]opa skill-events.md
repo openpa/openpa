@@ -55,7 +55,7 @@ Press Ctrl-C to exit cleanly; the server connection is dropped.
 ## Global flags
 
 All `opa skill-events` subcommands accept the root-level `--json`
-flag. `OPA_TOKEN` is required for every subcommand.
+flag. `OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 

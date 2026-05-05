@@ -1,11 +1,11 @@
 ---
-description: "Reference for the `opa me` CLI command — a one-shot identity probe that decodes the current `OPA_TOKEN` JWT and prints the profile, subject, issued-at and expires-at timestamps, and the server-side and user-scoped working directories. Useful for confirming which profile a CLI session is acting as, verifying that a token has not expired, and discovering the working directory the agent will use, all without making any state-changing calls."
+description: "Reference for the `opa me` CLI command — a one-shot identity probe that decodes the current `OPENPA_TOKEN` JWT and prints the profile, subject, issued-at and expires-at timestamps, and the server-side and user-scoped working directories. Useful for confirming which profile a CLI session is acting as, verifying that a token has not expired, and discovering the working directory the agent will use, all without making any state-changing calls."
 ---
 
 # `opa me` — Identity Info for the Current Token
 
 `opa me` is the simplest authenticated command in the CLI. It asks the
-server to decode the token in `OPA_TOKEN` and report what that token
+server to decode the token in `OPENPA_TOKEN` and report what that token
 authorizes: which profile it grants, when it expires, and which working
 directory the agent operates from. Because the rest of the CLI silently
 acts on the active profile resolved from this token, `opa me` is the
@@ -32,7 +32,7 @@ opa me --json
 ```
 
 It also obeys the standard CLI environment variables — most importantly
-`OPA_TOKEN` (required) and `OPA_SERVER` (default
+`OPENPA_TOKEN` (required) and `OPENPA_SERVER` (default
 `http://localhost:10000`).
 
 ## Behavior
@@ -86,8 +86,8 @@ $ opa me --json | jq -r '.expires_at | todate'
 
 ## Troubleshooting
 
-**`OPA_TOKEN is required`** — The CLI cannot mint tokens. Either export
-a token you already have (`export OPA_TOKEN=<jwt>`), or run
+**`OPENPA_TOKEN is required`** — The CLI cannot mint tokens. Either export
+a token you already have (`export OPENPA_TOKEN=<jwt>`), or run
 `opa setup complete` to mint one for the first profile.
 
 **`401 Unauthorized` / `token expired`** — The token has passed its

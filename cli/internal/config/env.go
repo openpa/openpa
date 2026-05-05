@@ -21,8 +21,8 @@ type Config struct {
 }
 
 const (
-	EnvServer  = "OPA_SERVER"
-	EnvToken   = "OPA_TOKEN"
+	EnvServer  = "OPENPA_SERVER"
+	EnvToken   = "OPENPA_TOKEN"
 	EnvOutput  = "OPA_OUTPUT"
 	EnvNoColor = "OPA_NO_COLOR"
 

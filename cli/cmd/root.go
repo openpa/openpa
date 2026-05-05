@@ -50,11 +50,11 @@ LLM providers, conversations (with streamed thinking), processes, skill
 events, and user config.
 
 ENVIRONMENT VARIABLES
-  OPA_TOKEN     JWT bearer token for the OpenPA server (required). Obtain it
+  OPENPA_TOKEN     JWT bearer token for the OpenPA server (required). Obtain it
                 from your OpenPA admin or from openpa-ui — the CLI cannot mint
                 tokens. The active profile is resolved server-side from the
                 token's claims, so no profile env var is needed.
-  OPA_SERVER    Server base URL (default: http://localhost:10000).
+  OPENPA_SERVER    Server base URL (default: http://localhost:10000).
   OPA_OUTPUT    'table' (default) or 'json'.
   OPA_NO_COLOR  When set, ANSI colors and table borders are disabled.
 `
@@ -78,6 +78,7 @@ func Execute() error {
 		newAgentsCmd(),
 		newChannelsCmd(),
 		newSetupCmd(),
+		newSystemVarsCmd(),
 	)
 
 	return rootCmd.Execute()
@@ -90,7 +91,7 @@ func register(cmds ...*cobra.Command) {
 }
 
 // requireToken is a helper for command RunE funcs that need an authenticated
-// client. It returns nil if OPA_TOKEN is set, else a friendly error.
+// client. It returns nil if OPENPA_TOKEN is set, else a friendly error.
 func requireToken() error {
 	return state.Cfg.RequireToken()
 }

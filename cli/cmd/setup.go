@@ -87,7 +87,7 @@ The JSON payload mirrors the openpa-ui wizard:
 Pass it via --json '<inline>', --json-file <path>, or stdin. --profile
 optionally overrides the "profile" field. The first profile must be 'admin'.
 
-The server returns a JWT token; export it as OPA_TOKEN to use the rest of
+The server returns a JWT token; export it as OPENPA_TOKEN to use the rest of
 the CLI.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := readSetupPayload(jsonBody, jsonFile)
@@ -114,7 +114,7 @@ the CLI.`,
 			})
 			fmt.Fprintln(os.Stderr, "")
 			fmt.Fprintln(os.Stderr, "Export the token to use the CLI:")
-			fmt.Fprintln(os.Stderr, "  export OPA_TOKEN="+resp.Token)
+			fmt.Fprintln(os.Stderr, "  export OPENPA_TOKEN="+resp.Token)
 			return nil
 		},
 	}

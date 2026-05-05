@@ -12,7 +12,7 @@ import (
 func newMeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "me",
-		Short: "Show identity info for the current OPA_TOKEN",
+		Short: "Show identity info for the current OPENPA_TOKEN",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireToken(); err != nil {
 				return err

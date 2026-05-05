@@ -7,7 +7,7 @@ description: "Complete reference for the `opa conv` CLI command (alias `opa conv
 `opa conv` (alias `opa conversation`) is the CLI for managing
 conversations — the persistent units of agent dialogue — and for
 streaming agent runs inside them. Each conversation is owned by the
-active profile (resolved server-side from `OPA_TOKEN`).
+active profile (resolved server-side from `OPENPA_TOKEN`).
 
 The group splits into three concerns:
 
@@ -64,7 +64,7 @@ All `opa conv` subcommands accept the root-level `--json` flag, which
 both forces JSON output for non-streaming subcommands *and* selects the
 JSON streaming renderer for `send` / `attach`.
 
-`OPA_TOKEN` is required for every subcommand.
+`OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 

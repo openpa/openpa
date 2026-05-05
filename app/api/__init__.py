@@ -10,6 +10,7 @@ from app.api.llm import get_llm_routes
 from app.api.oauth2 import get_oauth2_routes
 from app.api.processes import get_process_routes
 from app.api.profiles import get_profile_routes
+from app.api.system_vars import get_system_vars_routes
 from app.api.tokens import get_token_routes
 from app.api.tools import get_tool_routes
 from app.api.user_config import get_user_config_routes
@@ -50,6 +51,7 @@ def get_api_routes(
         drop_profile_embeddings=drop_profile_embeddings,
     ))
     routes.extend(get_token_routes())
+    routes.extend(get_system_vars_routes())
     routes.extend(get_file_routes())
     if conversation_storage:
         routes.extend(get_conversation_routes(

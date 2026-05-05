@@ -39,7 +39,7 @@ the TUI always renders interactively and ignores `--json`. For
 machine-readable streams use `opa conv send --json` or
 `opa conv attach --json`.
 
-`OPA_TOKEN` is required.
+`OPENPA_TOKEN` is required.
 
 ## Syntax
 
@@ -179,7 +179,7 @@ when Ctrl+C is delivered before the TUI has wired up its run-cancel
 hook (typically only at the very start of a session). Use
 `opa conv cancel <run_id>` to stop the run from another shell.
 
-**`chat` exits immediately with an auth error** — `OPA_TOKEN` is
+**`chat` exits immediately with an auth error** — `OPENPA_TOKEN` is
 either missing or expired. Run `opa me` to confirm.
 
 **Cannot create a new conversation** — Title-only failures are rare;
@@ -189,5 +189,5 @@ the most common cause is a missing or invalid token. Try
 **Wrong conversation opens** — `chat <id>` does not validate the id
 matches the current profile beyond what the server enforces. If a
 conversation id you remember does not appear in `opa conv list`, it
-likely belongs to a different profile — switch tokens (`OPA_TOKEN`)
+likely belongs to a different profile — switch tokens (`OPENPA_TOKEN`)
 and try again.

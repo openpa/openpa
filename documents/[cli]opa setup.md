@@ -1,5 +1,5 @@
 ---
-description: "Complete reference for the `opa setup` CLI command — the headless equivalent of the OpenPA first-run wizard — covering how to check setup status, mint the very first admin JWT (`opa setup complete`), recover from an orphaned half-setup (`reset-orphaned`), trigger a re-run of the wizard (`reconfigure`), and read or write server-wide non-secret config (`server-config get/set`). Spells out which subcommands need an `OPA_TOKEN` and which are deliberately unauthenticated, documents the JSON payload schema accepted by `setup complete`, and gives admin-friendly examples for scripted bootstrap and reconfiguration."
+description: "Complete reference for the `opa setup` CLI command — the headless equivalent of the OpenPA first-run wizard — covering how to check setup status, mint the very first admin JWT (`opa setup complete`), recover from an orphaned half-setup (`reset-orphaned`), trigger a re-run of the wizard (`reconfigure`), and read or write server-wide non-secret config (`server-config get/set`). Spells out which subcommands need an `OPENPA_TOKEN` and which are deliberately unauthenticated, documents the JSON payload schema accepted by `setup complete`, and gives admin-friendly examples for scripted bootstrap and reconfiguration."
 ---
 
 # `opa setup` — First-Run Setup and Server Configuration
@@ -13,14 +13,14 @@ that can be scripted into infrastructure automation.
 The group has two halves with different auth requirements:
 
 - **Unauthenticated bootstrap** — `status`, `complete`, `reset-orphaned`.
-  These do **not** require `OPA_TOKEN` because they are how you obtain
+  These do **not** require `OPENPA_TOKEN` because they are how you obtain
   one in the first place.
 - **Admin-authenticated maintenance** — `reconfigure`,
   `server-config get`, `server-config set`. These need a valid
-  `OPA_TOKEN` from an admin profile.
+  `OPENPA_TOKEN` from an admin profile.
 
 A typical first-run flow is: `opa setup status` → `opa setup complete`
-(which prints a JWT) → `export OPA_TOKEN=...` → use the rest of the CLI.
+(which prints a JWT) → `export OPENPA_TOKEN=...` → use the rest of the CLI.
 
 ## Finding this in the web UI
 
@@ -42,11 +42,11 @@ exposes a "Reset setup" action that mirrors `opa setup reconfigure`.
 All `opa setup` subcommands respect the root-level `--json` flag.
 
 Unlike most CLI commands, `status`, `complete`, and `reset-orphaned`
-are deliberately **unauthenticated** — they ignore `OPA_TOKEN`. The
+are deliberately **unauthenticated** — they ignore `OPENPA_TOKEN`. The
 remaining subcommands (`reconfigure`, `server-config *`) **require**
-`OPA_TOKEN` to belong to an admin-capable profile.
+`OPENPA_TOKEN` to belong to an admin-capable profile.
 
-`OPA_SERVER` (default `http://localhost:10000`) controls which server
+`OPENPA_SERVER` (default `http://localhost:10000`) controls which server
 the CLI talks to.
 
 ## Subcommands
@@ -141,7 +141,7 @@ either inside the JSON or via `--profile`.
 
 **Behavior.** On success, prints a key-value table to stdout containing
 `profile`, `expires_at`, and `token`, then writes the recommended
-`export OPA_TOKEN=...` line to **stderr** so users can copy/paste it.
+`export OPENPA_TOKEN=...` line to **stderr** so users can copy/paste it.
 With `--json`, the full response object is emitted to stdout instead.
 
 **Examples.**
@@ -154,13 +154,13 @@ expires_at  2026-06-01T14:00:00Z
 token       eyJhbGciOi...
 
 Export the token to use the CLI:
-  export OPA_TOKEN=eyJhbGciOi...
+  export OPENPA_TOKEN=eyJhbGciOi...
 
 # From a file, with a profile override
 $ opa setup complete --profile admin --json-file ./bootstrap.json
 
 # Capture the token directly
-$ export OPA_TOKEN=$(opa setup complete --json-file ./bootstrap.json --json | jq -r .token)
+$ export OPENPA_TOKEN=$(opa setup complete --json-file ./bootstrap.json --json | jq -r .token)
 ```
 
 ### `opa setup reset-orphaned`
@@ -290,7 +290,7 @@ $ cat > bootstrap.json <<'EOF'
   "llm_config":    { "anthropic.api_key": "sk-...", "auth_method": "anthropic" }
 }
 EOF
-$ export OPA_TOKEN=$(opa setup complete --json-file bootstrap.json --json | jq -r .token)
+$ export OPENPA_TOKEN=$(opa setup complete --json-file bootstrap.json --json | jq -r .token)
 
 # 3. Verify identity is now usable
 $ opa me
@@ -302,7 +302,7 @@ profile  admin
 
 ```bash
 $ opa setup reconfigure        # invalidates setup_complete
-$ unset OPA_TOKEN              # no longer needed
+$ unset OPENPA_TOKEN              # no longer needed
 $ opa setup complete --json-file bootstrap.json
 ```
 
@@ -325,7 +325,7 @@ for the payload. To read from stdin, omit both flags or pass
 `--json-file -`.
 
 **`401 Unauthorized` on `reconfigure` / `server-config`** — These
-subcommands require admin auth. Make sure `OPA_TOKEN` belongs to an
+subcommands require admin auth. Make sure `OPENPA_TOKEN` belongs to an
 admin profile (`opa me` to confirm).
 
 **`setup complete` reports `setup already complete`** — The server has
@@ -340,4 +340,4 @@ Run `opa setup status` first to confirm.
 **Token printed to stdout but not exported** — `setup complete` cannot
 mutate your shell environment. Either copy the printed export line
 (emitted to stderr), or capture the token in a subshell:
-`export OPA_TOKEN=$(opa setup complete --json-file b.json --json | jq -r .token)`.
+`export OPENPA_TOKEN=$(opa setup complete --json-file b.json --json | jq -r .token)`.

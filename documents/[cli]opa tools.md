@@ -21,7 +21,7 @@ The group's surface area is small but covers every angle of tool config:
   long-running daemon and persist it as an autostart entry.
 
 Most subcommands act on the **active profile**, which is resolved
-server-side from your `OPA_TOKEN`. Built-in and intrinsic tools cannot
+server-side from your `OPENPA_TOKEN`. Built-in and intrinsic tools cannot
 be deleted, but their LLM and variable overrides are profile-scoped, so
 each profile can carry its own configuration.
 
@@ -54,7 +54,7 @@ expose a **Register long-running app** action that maps to
 ## Global flags
 
 All `opa tools` subcommands accept the root-level `--json` flag.
-`OPA_TOKEN` is required for every subcommand.
+`OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 

@@ -7,7 +7,7 @@ description: "Complete reference for the `opa profile` CLI command — the termi
 `opa profile` is the CLI for managing OpenPA profiles. A *profile*
 isolates a user's conversations, tool overrides, agent registrations,
 persona text, and skill mode. The active profile is resolved
-server-side from the JWT in `OPA_TOKEN`, so most other commands implicitly
+server-side from the JWT in `OPENPA_TOKEN`, so most other commands implicitly
 act on that profile; `opa profile` is the way to manage profiles
 themselves.
 
@@ -48,7 +48,7 @@ force JSON output instead of the default tables/key-value view:
 opa profile list --json
 ```
 
-`OPA_TOKEN` is required for every subcommand in this group.
+`OPENPA_TOKEN` is required for every subcommand in this group.
 
 ## Subcommands
 

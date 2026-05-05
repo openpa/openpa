@@ -8,7 +8,7 @@ description: "Complete reference for the `opa proc` CLI command (alias `opa proc
 long-running processes that OpenPA spawns on a profile's behalf —
 typically MCP servers, skill listener daemons, and skill
 `long_running_app` processes. Every process is owned by a profile; the
-active profile is resolved server-side from `OPA_TOKEN`.
+active profile is resolved server-side from `OPENPA_TOKEN`.
 
 The group covers four concerns:
 
@@ -50,7 +50,7 @@ Press Ctrl-C to exit cleanly.
 ## Global flags
 
 All `opa proc` subcommands accept the root-level `--json` flag.
-`OPA_TOKEN` is required for every subcommand.
+`OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 

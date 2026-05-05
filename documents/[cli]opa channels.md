@@ -88,7 +88,7 @@ sidebar's conversation-list channel selector mirrors `opa conv list
 ## Global flags
 
 All `opa channels` subcommands accept the root-level `--json` flag.
-`OPA_TOKEN` is required for every subcommand.
+`OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 

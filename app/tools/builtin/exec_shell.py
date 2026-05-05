@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from app.config.settings import BaseConfig
+from app.config.system_vars import build_system_env
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig
 from app.utils.context_storage import get_context, set_context
@@ -57,28 +58,6 @@ def _shell_for(system: str) -> tuple[str, str]:
     if system == "Windows":
         return "powershell.exe", "-Command"
     return "/bin/bash", "-c"
-
-
-def _load_opa_token(profile: Optional[str]) -> Optional[str]:
-    """Read the per-profile OPA_TOKEN from ``~/.openpa/tokens/<profile>.token``.
-
-    Returns the stripped token string, or None if the profile is unset, the
-    file is missing, or it cannot be read. Failure is non-fatal — callers
-    should simply omit OPA_TOKEN from the spawned env.
-    """
-    if not profile:
-        return None
-    token_path = os.path.join(BaseConfig.OPENPA_WORKING_DIR, "tokens", f"{profile}.token")
-    try:
-        with open(token_path, "r", encoding="utf-8") as f:
-            token = f.read().strip()
-        return token or None
-    except FileNotFoundError:
-        logger.warning(f"OPA token file missing for profile '{profile}': {token_path}")
-        return None
-    except OSError as e:
-        logger.warning(f"Could not read OPA token for profile '{profile}' ({token_path}): {e}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1315,17 +1294,13 @@ class ExecShellTool(BuiltInTool):
         use_pty = bool(pty_arg) if pty_arg is not None else False
         auto_retry_allowed = pty_arg is None
 
-        # Inject the per-profile OPA_TOKEN and the server's own loopback URL so
-        # the spawned shell can invoke the `opa` CLI against this server as the
-        # user owning this conversation. 127.0.0.1:PORT bypasses any external
-        # APP_URL / reverse proxy — the CLI runs on the same box as the server.
+        # Inject the system-variables env block (OPENPA_SERVER + OPENPA_TOKEN so the
+        # spawned shell can invoke the `opa` CLI against this server, plus the
+        # _OPENPA_WORKING_DIR_ / _USER_WORKING_DIR_ / _SKILL_DIR_ sentinels).
+        # 127.0.0.1:PORT bypasses any external APP_URL / reverse proxy — the
+        # CLI runs on the same box as the server. See app/config/system_vars.py.
         profile = arguments.get("_profile")
-        opa_token = _load_opa_token(profile)
-        extra_env: Dict[str, str] = {
-            "OPA_SERVER": f"http://127.0.0.1:{BaseConfig.PORT}",
-        }
-        if opa_token:
-            extra_env["OPA_TOKEN"] = opa_token
+        extra_env = build_system_env(profile)
 
         async def _spawn(pty_mode: bool):
             if pty_mode:

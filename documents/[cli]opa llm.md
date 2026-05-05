@@ -43,7 +43,7 @@ flow that `opa llm device-code start` runs.
 ## Global flags
 
 All `opa llm` subcommands accept the root-level `--json` flag.
-`OPA_TOKEN` is required for every subcommand in this group.
+`OPENPA_TOKEN` is required for every subcommand in this group.
 
 ## Subcommands
 

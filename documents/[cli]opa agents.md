@@ -55,7 +55,7 @@ opens a drawer with **OAuth** (matching `auth-url` / `unlink`) and
 ## Global flags
 
 All `opa agents` subcommands accept the root-level `--json` flag.
-`OPA_TOKEN` is required for every subcommand.
+`OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 
@@ -397,7 +397,7 @@ The CLI does not allow an empty patch.
 
 **`unlink` doesn't seem to do anything** — `unlink` is profile-scoped.
 If you are seeing the same agent's token under another profile, switch
-tokens (`OPA_TOKEN`) and unlink there as well.
+tokens (`OPENPA_TOKEN`) and unlink there as well.
 
 **Agent appears in `opa tools list` but not `opa agents list`** — Only
 `a2a` and `mcp` types are surfaced under `opa agents`. Built-in,

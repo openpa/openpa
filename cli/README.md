@@ -15,10 +15,10 @@ go mod tidy
 go build -o opa .
 
 # Provide credentials via an environment variable — the CLI does not mint tokens.
-# Get OPA_TOKEN from your OpenPA admin or from openpa-ui. The active profile
+# Get OPENPA_TOKEN from your OpenPA admin or from openpa-ui. The active profile
 # is resolved server-side from the token's claims, so no profile env var is
 # needed.
-export OPA_TOKEN="<your JWT>"
+export OPENPA_TOKEN="<your JWT>"
 
 # Sanity check
 ./opa me
@@ -49,8 +49,8 @@ below, or pipe via `--json-file -` on commands that support it.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `OPA_TOKEN` | JWT bearer token. Required. Obtain from your OpenPA admin or openpa-ui — the CLI does not mint tokens. The active profile is resolved server-side from the token's claims. | — |
-| `OPA_SERVER` | Server base URL. | `http://localhost:10000` |
+| `OPENPA_TOKEN` | JWT bearer token. Required. Obtain from your OpenPA admin or openpa-ui — the CLI does not mint tokens. The active profile is resolved server-side from the token's claims. | — |
+| `OPENPA_SERVER` | Server base URL. | `http://localhost:10000` |
 | `OPA_OUTPUT` | `table` (default) or `json`. | `table` |
 | `OPA_NO_COLOR` | Set to disable ANSI colors and table borders. | unset |
 
@@ -61,6 +61,7 @@ prevents it from leaking into shell history or `ps` output.
 
 ```
 opa me                                          Show identity from current token
+opa system-vars                                 List env vars OpenPA injects into exec_shell
 
 opa profile list | get <n> | create <n> | delete <n>
 opa profile persona get|set <n>                 Set reads from stdin
