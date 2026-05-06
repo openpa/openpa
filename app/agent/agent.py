@@ -274,6 +274,7 @@ class OpenPAAgent:
         context_id: str | None,
         profile: str,
         reasoning: bool = True,
+        triggered_by_event: bool = False,
     ) -> AsyncGenerator[ReasoningStreamResponseType, None]:
         logger.info(f"Running OpenPAAgent with query: {query} and profile: {profile}")
         runner = self._ensure_runner(profile)
@@ -287,6 +288,7 @@ class OpenPAAgent:
             context_id=context_id,
             reasoning=reasoning,
             allowed_skill_ids=allowed_skill_ids,
+            triggered_by_event=triggered_by_event,
         )
 
         async for result in reasoning_agent.run(query, task_history):

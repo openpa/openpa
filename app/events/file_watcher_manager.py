@@ -58,6 +58,14 @@ _IGNORE_PATTERNS: Tuple[str, ...] = (
 # 500 ms collapses them without losing meaningful change activity.
 _DEBOUNCE_SECONDS: float = 0.5
 
+# Window during which `created` + `modified` events for the same path are
+# merged into one payload (event_type becomes "created, modified"). Triggered
+# typically when a file is moved INTO a watched directory: watchdog emits a
+# created and a modified back-to-back. Coalescing prevents the agent from
+# being woken twice for the same interaction.
+_COALESCE_SECONDS: float = 0.5
+_COALESCEABLE: frozenset[str] = frozenset({"created", "modified"})
+
 
 def _normalize_path(p: str) -> str:
     """Return an absolute, normcased, normpath form of ``p``.
@@ -113,6 +121,11 @@ class _SharedHandler(FileSystemEventHandler):
         self._loop = loop
         self._debounce: Dict[Tuple[str, str], float] = {}
         self._debounce_lock = threading.Lock()
+        # Coalesce buffer for {created, modified} bursts on the same path.
+        # Touched only on the asyncio loop (via _coalesce_or_fan_out / _flush_key),
+        # so no extra lock is needed. Key: (target_kind, path).
+        self._pending: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._pending_timers: Dict[Tuple[str, str], asyncio.TimerHandle] = {}
 
     # watchdog dispatches to specific on_*; route them all through one path.
     def on_created(self, event: FileSystemEvent) -> None:
@@ -193,7 +206,7 @@ class _SharedHandler(FileSystemEventHandler):
 
         try:
             asyncio.run_coroutine_threadsafe(
-                self._fan_out(payload), self._loop,
+                self._coalesce_or_fan_out(payload), self._loop,
             )
         except Exception:  # noqa: BLE001
             logger.exception("FileWatcherManager: failed to schedule fan-out")
@@ -204,7 +217,12 @@ class _SharedHandler(FileSystemEventHandler):
         configured_events = {
             t.strip() for t in (sub.get("event_types") or "").split(",") if t.strip()
         }
-        if configured_events and payload["event_type"] not in configured_events:
+        # payload["event_type"] may be a comma-separated set after coalescing
+        # (e.g. "created, modified"); pass if any constituent type matches.
+        payload_events = {
+            t.strip() for t in payload["event_type"].split(",") if t.strip()
+        }
+        if configured_events and configured_events.isdisjoint(payload_events):
             return False
 
         # target_kind — "any" allows everything; otherwise must match exactly
@@ -224,6 +242,59 @@ class _SharedHandler(FileSystemEventHandler):
                 if payload["extension"] not in allowed:
                     return False
         return True
+
+    async def _coalesce_or_fan_out(self, payload: Dict[str, Any]) -> None:
+        """Buffer created/modified pairs for the same path; pass others through.
+
+        Watchdog emits both a created and a modified event when a file lands
+        in a watched directory (move-in, atomic-write rename, etc.). Holding
+        them for ``_COALESCE_SECONDS`` and merging into one payload avoids
+        waking the reasoning agent twice for the same interaction.
+        """
+        event_type = payload["event_type"]
+        key = (payload["target_kind"], payload["path"])
+
+        if event_type not in _COALESCEABLE:
+            # moved/deleted: flush any pending merge for this path first so
+            # ordering is preserved, then dispatch the new event normally.
+            await self._flush_key(key)
+            await self._fan_out(payload)
+            return
+
+        existing = self._pending.get(key)
+        if existing is None:
+            self._pending[key] = dict(payload)
+
+            def _fire() -> None:
+                # Schedule the async flush on the loop; call_later requires a
+                # plain callable.
+                asyncio.create_task(self._flush_key(key))
+
+            self._pending_timers[key] = self._loop.call_later(
+                _COALESCE_SECONDS, _fire,
+            )
+            return
+
+        # Merge: append this event_type to the existing payload's comma-list,
+        # preserving insertion order and de-duping. Keep the original
+        # detected_at — it represents when the activity started. Don't reset
+        # the timer; a sustained burst should still flush within the original
+        # window rather than starving the agent.
+        existing_types = [
+            t.strip() for t in existing["event_type"].split(",") if t.strip()
+        ]
+        if event_type not in existing_types:
+            existing_types.append(event_type)
+            existing["event_type"] = ", ".join(existing_types)
+
+    async def _flush_key(self, key: Tuple[str, str]) -> None:
+        """Drain a pending coalesced payload (if any) into ``_fan_out``."""
+        payload = self._pending.pop(key, None)
+        timer = self._pending_timers.pop(key, None)
+        if timer is not None:
+            timer.cancel()
+        if payload is not None:
+            await self._fan_out(payload)
 
     async def _fan_out(self, payload: Dict[str, Any]) -> None:
         try:

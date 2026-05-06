@@ -37,6 +37,7 @@ from app.constants import ChatCompletionTypeEnum
 from app.events.notifications_buffer import get_event_notifications
 from app.events.stream_bus import get_event_stream_bus
 from app.utils.logger import logger
+from app.utils.message_tokens import resolve_message_tokens
 from app.utils.task_context import current_task_id_var
 
 
@@ -304,13 +305,20 @@ async def run_agent_to_bus(
 
         # 2. Stream the agent loop, mirroring chunks to the bus and collecting
         #    enough state to persist the final assistant message verbatim.
+        #    The stored user message keeps the raw `$VAR` / `@profile` tokens
+        #    (so the UI can re-render them as editable chips); the agent only
+        #    ever sees the rendered plain text.
+        agent_query = await resolve_message_tokens(
+            query, profile=profile, conversation_storage=conversation_storage,
+        )
         try:
             async for chunk in openpa_agent.run(
-                query=query,
+                query=agent_query,
                 task_history=history_messages,
                 context_id=context_id,
                 profile=profile,
                 reasoning=reasoning,
+                triggered_by_event=trigger_event is not None,
             ):
                 ctype = chunk.get("type")
 

@@ -180,6 +180,7 @@ class ReasoningAgent:
         steps_length: Optional[int] = None,
         reasoning: bool = True,
         allowed_skill_ids: Optional[set[str]] = None,
+        triggered_by_event: bool = False,
     ):
         self.llm = llm
         self.registry = registry
@@ -205,6 +206,14 @@ class ReasoningAgent:
             tools = [
                 t for t in tools
                 if t.tool_type is not ToolType.SKILL or t.tool_id in allowed_skill_ids
+            ]
+        # Event-triggered runs must not register new watchers/events — that
+        # path leads to recursive event storms (event → reasoning → register →
+        # event → …). Drop both tools so the LLM can't see or select them.
+        if triggered_by_event:
+            tools = [
+                t for t in tools
+                if t.tool_id not in ("register_file_watcher", "register_skill_event")
             ]
         self._tools = tools
         self._tools_by_id = {t.tool_id: t for t in self._tools}

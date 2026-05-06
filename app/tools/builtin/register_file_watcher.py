@@ -36,13 +36,10 @@ TOOL_CONFIG: ToolConfig = {
     "default_model_group": "low",
     "llm_parameters": {
         "tool_instructions": (
-            "Use this tool when the user asks to be notified or to take action "
-            "whenever something happens to a file or folder on disk — e.g. "
-            "\"when a python file changes in the 'MyDocs' directory, notify me\" "
-            "or \"watch ~/Documents/inbox for new PDFs and summarize them\". "
-            "Relative paths are resolved against the user's working directory. "
-            "Absolute paths are used as-is.\n"
-            "To list and remove watcher, please find 'opa file-watchers' documentation."
+            "Use register_file_watcher when the user asks to be notified or "
+            "to take action whenever something happens to a file or folder "
+            "on disk. Use list_file_watchers to enumerate existing watchers, "
+            "and delete_file_watcher to remove one by id."
         ),
         "system_prompt": (
             "You convert a file-watch registration request into a structured "
@@ -62,6 +59,11 @@ TOOL_CONFIG: ToolConfig = {
             "  → path=\"MyDocs\", triggers=[\"modified\",\"created\"], "
             "target_kind=\"file\", extensions=[\".py\"], "
             "action=\"notify the user about the change\"\n"
+            "Use list_file_watchers when the user asks what watchers exist "
+            "(default scope=\"profile\"; use scope=\"conversation\" if they "
+            "scope the question to the current chat).\n"
+            "Use delete_file_watcher with the `id` returned by a prior "
+            "register/list call when they ask to remove or stop one.\n"
         ),
     },
 }
@@ -377,7 +379,17 @@ class RegisterFileWatcherTool(BuiltInTool):
         )
         return BuiltInToolResult(
             content=[{"type": "text", "text": confirmation}],
-            structured_content={"id": row["id"], "armed": armed},
+            structured_content={
+                "id": row["id"],
+                "name": name,
+                "path": resolved_path,
+                "recursive": recursive_flag,
+                "target_kind": target_kind,
+                "triggers": triggers,
+                "extensions": extensions,
+                "action": action,
+                "armed": armed,
+            },
         )
 
 
@@ -385,5 +397,219 @@ def _err(message: str) -> BuiltInToolResult:
     return BuiltInToolResult(content=[{"type": "text", "text": message}])
 
 
+def _format_subscription_line(idx: int, sub: Dict[str, Any]) -> str:
+    recursive_marker = " (recursive)" if sub.get("recursive") else " (non-recursive)"
+    triggers = sub.get("event_types") or ""
+    extensions = sub.get("extensions") or "all extensions"
+    target_kind = sub.get("target_kind") or "any"
+    armed_marker = "armed" if sub.get("armed") else "not armed"
+    title = sub.get("conversation_title")
+    title_part = f" [chat: {title}]" if title else ""
+    return (
+        f"{idx}. {sub.get('name')!r} (id: {sub.get('id')}){title_part}\n"
+        f"   path: {sub.get('root_path')}{recursive_marker}\n"
+        f"   triggers: {triggers}; target: {target_kind}; "
+        f"extensions: {extensions}; status: {armed_marker}\n"
+        f"   action: {sub.get('action')}"
+    )
+
+
+class ListFileWatchersTool(BuiltInTool):
+    name: str = "list_file_watchers"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["profile", "conversation"],
+                "description": (
+                    "'profile' (default) lists every file watcher owned by "
+                    "the current user. 'conversation' narrows to watchers "
+                    "registered in the current chat only."
+                ),
+            },
+        },
+        "additionalProperties": False,
+    }
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        profile: Optional[str] = arguments.get("_profile")
+        context_id: Optional[str] = arguments.get("_context_id")
+        scope_raw = arguments.get("scope") or "profile"
+        scope = str(scope_raw).strip().lower()
+
+        if not profile:
+            return _err(
+                "Internal error: profile not provided to list_file_watchers."
+            )
+        if scope not in ("profile", "conversation"):
+            return _err(
+                f"scope must be 'profile' or 'conversation', got {scope!r}."
+            )
+        if scope == "conversation" and not context_id:
+            return _err(
+                "Internal error: context_id not provided to list_file_watchers."
+            )
+
+        store = get_file_watcher_storage()
+        from app.storage import get_conversation_storage
+
+        conv_storage = get_conversation_storage()
+
+        if scope == "conversation":
+            try:
+                conv = await conv_storage.get_or_create_conversation(
+                    profile=profile, context_id=context_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "list_file_watchers: get_or_create_conversation failed"
+                )
+                return _err(f"Could not resolve the active conversation: {exc}")
+            if conv is None:
+                return _err("Could not resolve the active conversation.")
+            try:
+                subs = store.list_by_conversation(conv["id"])
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("list_file_watchers: list_by_conversation failed")
+                return _err(f"Failed to load file watchers: {exc}")
+        else:
+            try:
+                subs = store.list_by_profile(profile)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("list_file_watchers: list_by_profile failed")
+                return _err(f"Failed to load file watchers: {exc}")
+
+        manager = get_file_watcher_manager()
+        title_cache: Dict[str, str] = {}
+        enriched: List[Dict[str, Any]] = []
+        for sub in subs:
+            cid = sub["conversation_id"]
+            if cid not in title_cache:
+                try:
+                    conv_row = await conv_storage.get_conversation(cid)
+                except Exception:  # noqa: BLE001
+                    conv_row = None
+                title_cache[cid] = (conv_row or {}).get("title") or "Untitled Chat"
+            enriched.append(
+                {
+                    **sub,
+                    "armed": manager.is_armed(sub),
+                    "conversation_title": title_cache[cid],
+                }
+            )
+
+        if not enriched:
+            summary = (
+                "No file watchers registered in this conversation."
+                if scope == "conversation"
+                else "No file watchers registered."
+            )
+        else:
+            scope_label = (
+                "current conversation" if scope == "conversation" else "your profile"
+            )
+            header = (
+                f"{len(enriched)} file watcher"
+                f"{'s' if len(enriched) != 1 else ''} for {scope_label}:"
+            )
+            lines = [_format_subscription_line(i + 1, s) for i, s in enumerate(enriched)]
+            summary = header + "\n" + "\n".join(lines)
+
+        return BuiltInToolResult(
+            content=[{"type": "text", "text": summary}],
+            structured_content={
+                "count": len(enriched),
+                "scope": scope,
+                "subscriptions": enriched,
+            },
+        )
+
+
+class DeleteFileWatcherTool(BuiltInTool):
+    name: str = "delete_file_watcher"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "string",
+                "description": (
+                    "Subscription ID returned by register_file_watcher or "
+                    "list_file_watchers."
+                ),
+            },
+        },
+        "required": ["id"],
+        "additionalProperties": False,
+    }
+
+    async def run(self, arguments: Dict[str, Any]) -> BuiltInToolResult:
+        profile: Optional[str] = arguments.get("_profile")
+        sub_id_raw = arguments.get("id")
+        sub_id = str(sub_id_raw).strip() if isinstance(sub_id_raw, str) else ""
+
+        if not profile:
+            return _err(
+                "Internal error: profile not provided to delete_file_watcher."
+            )
+        if not sub_id:
+            return _err("id is required.")
+
+        store = get_file_watcher_storage()
+        try:
+            existing = store.get(sub_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("delete_file_watcher: store.get failed")
+            return _err(f"Failed to look up file watcher: {exc}")
+        if existing is None:
+            return _err(f"No file watcher with id {sub_id!r}.")
+        if existing["profile"] != profile:
+            return _err("That file watcher belongs to a different user.")
+
+        try:
+            store.delete(sub_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("delete_file_watcher: store.delete failed")
+            return _err(f"Failed to delete file watcher: {exc}")
+
+        try:
+            get_file_watcher_manager().disarm(existing)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "delete_file_watcher: disarm failed (subscription was deleted)"
+            )
+
+        try:
+            from app.api.file_watchers import publish_file_watchers_admin_changed
+            publish_file_watchers_admin_changed(profile)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                f"delete_file_watcher: admin-bus publish failed: {exc}"
+            )
+
+        logger.info(
+            f"delete_file_watcher: deleted id={sub_id} name={existing['name']!r} "
+            f"path={existing['root_path']!r} profile={profile}"
+        )
+
+        confirmation = (
+            f"Deleted file watcher '{existing['name']}' "
+            f"(id: {sub_id}) on {existing['root_path']}."
+        )
+        return BuiltInToolResult(
+            content=[{"type": "text", "text": confirmation}],
+            structured_content={
+                "id": sub_id,
+                "deleted": True,
+                "name": existing["name"],
+                "path": existing["root_path"],
+            },
+        )
+
+
 def get_tools(config: dict) -> list[BuiltInTool]:
-    return [RegisterFileWatcherTool()]
+    return [
+        RegisterFileWatcherTool(),
+        ListFileWatchersTool(),
+        DeleteFileWatcherTool(),
+    ]
