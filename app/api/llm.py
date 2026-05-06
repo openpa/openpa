@@ -204,6 +204,8 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
             str_value = value if isinstance(value, str) else json.dumps(value)
             config_storage.set("llm_config", full_key, str_value, is_secret=is_secret, profile=profile)
 
+        from app.events.settings_state_bus import publish_settings_state_changed
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True})
 
     async def handle_delete_provider(request: Request) -> JSONResponse:
@@ -222,6 +224,8 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
         deleted = config_storage.delete_by_prefix("llm_config", f"{provider_name}.", profile=profile)
         logger.info(f"Deleted {deleted} config key(s) for provider '{provider_name}' (profile={profile})")
+        from app.events.settings_state_bus import publish_settings_state_changed
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True, "deleted_keys": deleted})
 
     async def handle_get_model_groups(request: Request) -> JSONResponse:
@@ -291,6 +295,8 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         if default_provider:
             config_storage.set("llm_config", "default_provider", default_provider, profile=profile)
 
+        from app.events.settings_state_bus import publish_settings_state_changed
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True})
 
     async def handle_device_code_start(request: Request) -> JSONResponse:

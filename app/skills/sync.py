@@ -164,6 +164,13 @@ def _start_watcher(
             future.result(timeout=30)
         except Exception:  # noqa: BLE001
             logger.exception(f"Skill re-sync failed for profile '{profile}'")
+        # Notify the Settings page that the skills list / config schema may
+        # have changed (a SKILL.md was added, edited, or removed on disk).
+        try:
+            from app.events.settings_state_bus import publish_settings_state_changed
+            publish_settings_state_changed(profile)
+        except Exception:  # noqa: BLE001
+            logger.debug("settings-state publish failed", exc_info=True)
 
     watcher = SkillsWatcher(skills_dir, on_change=_on_change)
     watcher.start()

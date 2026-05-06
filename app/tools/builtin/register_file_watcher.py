@@ -36,10 +36,11 @@ TOOL_CONFIG: ToolConfig = {
     "default_model_group": "low",
     "llm_parameters": {
         "tool_instructions": (
-            "Use register_file_watcher when the user asks to be notified or "
+            "Use 'Register File Watcher' when the user asks to be notified or "
             "to take action whenever something happens to a file or folder "
-            "on disk. Use list_file_watchers to enumerate existing watchers, "
-            "and delete_file_watcher to remove one by id."
+            "on disk. Please pass the full user request into this tool so it "
+            "can analyze and process it, including both the **trigger** and "
+            "the **action** of the command."
         ),
         "system_prompt": (
             "You convert a file-watch registration request into a structured "

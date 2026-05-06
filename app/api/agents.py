@@ -29,6 +29,7 @@ from starlette.routing import Route
 
 from app.api._auth import require_auth_or_setup_mode
 from app.config.settings import BaseConfig
+from app.events.settings_state_bus import publish_settings_state_changed
 from app.lib.llm.factory import create_llm_provider
 from app.tools import ToolRegistry, ToolType
 from app.tools.a2a import A2ATool, build_a2a_stub, build_a2a_tool
@@ -290,6 +291,7 @@ def get_agent_routes(
                     status_code=400,
                 )
             await registry.register_a2a(tool, source=url, owner_profile=profile)
+            publish_settings_state_changed(profile)
             return JSONResponse(
                 {"success": True, "agent": _serialize_tool(tool, profile)},
                 status_code=201,
@@ -349,6 +351,7 @@ def get_agent_routes(
                 )
                 _bind_llm_factory(tool)
                 _persist_llm_scope(config_manager, tool.tool_id, profile, body)
+                publish_settings_state_changed(profile)
                 return JSONResponse(
                     {"success": True, "agent": _serialize_tool(tool, profile)},
                     status_code=201,
@@ -373,6 +376,7 @@ def get_agent_routes(
             config_manager.set_meta(tool.tool_id, profile, "system_prompt", system_prompt)
         if agent_description:
             config_manager.set_meta(tool.tool_id, profile, "description", agent_description)
+        publish_settings_state_changed(profile)
         return JSONResponse(
             {"success": True, "agent": _serialize_tool(tool, profile)},
             status_code=201,
@@ -399,6 +403,7 @@ def get_agent_routes(
             except Exception:  # noqa: BLE001
                 logger.exception(f"Failed cleaning up MCP connection for '{tool_id}'")
         await registry.unregister(tool_id)
+        publish_settings_state_changed(_profile_from_request(request))
         return JSONResponse({"success": True, "tool_id": tool_id})
 
     async def handle_toggle_enabled(request: Request) -> JSONResponse:
@@ -436,6 +441,7 @@ def get_agent_routes(
             if tool is not None and getattr(tool, "is_stub", False):
                 asyncio.create_task(connect_persisted_tool(tool_id))
 
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True, "enabled": bool(enabled)})
 
     async def handle_reconnect(request: Request) -> JSONResponse:
@@ -470,6 +476,7 @@ def get_agent_routes(
         if not success:
             logger.error(f"Reconnect failed for {tool_id}: {error}")
             return JSONResponse({"error": error or "Reconnect failed"}, status_code=400)
+        publish_settings_state_changed(_profile_from_request(request))
         return JSONResponse({"success": True, "tool_id": tool_id})
 
     async def handle_get_auth_url(request: Request) -> JSONResponse:
@@ -543,6 +550,7 @@ def get_agent_routes(
         if success and isinstance(tool, A2ATool) and tool.connection is not None:
             tool.connection.update_auth_header_for_profile(profile)
         if success:
+            publish_settings_state_changed(profile)
             return_url = pending_return_urls.pop((tool_id, profile), None)
             if return_url:
                 sep = "&" if "?" in return_url else "?"
@@ -575,6 +583,8 @@ def get_agent_routes(
         success = oauth_client.unlink_token(profile)
         if success and isinstance(tool, A2ATool) and tool.connection is not None:
             tool.connection.update_auth_header_for_profile(profile)
+        if success:
+            publish_settings_state_changed(profile)
         return JSONResponse({"success": bool(success)})
 
     async def handle_get_agent_config(request: Request) -> JSONResponse:
@@ -693,6 +703,7 @@ def get_agent_routes(
             if value is not _MISSING:
                 config_manager.set_meta(tool_id, profile, key, value)
 
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True})
 
     return [

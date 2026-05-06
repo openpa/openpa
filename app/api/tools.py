@@ -17,6 +17,7 @@ from starlette.routing import Route
 
 from app.api._auth import require_auth_or_setup_mode
 from app.config.settings import BaseConfig
+from app.events.settings_state_bus import publish_settings_state_changed
 from app.lib.llm.factory import create_llm_provider
 from app.storage import get_autostart_storage
 from app.tools import ToolRegistry, ToolType
@@ -184,6 +185,7 @@ def get_tool_routes(
         if tool and tool.tool_type is ToolType.SKILL:
             _write_skill_env_file(tool, config_manager, profile)
 
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True})
 
     async def handle_set_arguments(request: Request) -> JSONResponse:
@@ -203,6 +205,7 @@ def get_tool_routes(
         if not isinstance(arguments, dict):
             return JSONResponse({"error": "'arguments' must be an object"}, status_code=400)
         config_manager.set_arguments(tool_id, profile, arguments)
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True})
 
     async def handle_set_llm_params(request: Request) -> JSONResponse:
@@ -292,6 +295,7 @@ def get_tool_routes(
         if tool and "full_reasoning" in llm_params and hasattr(tool, "update_runtime_config"):
             tool.update_runtime_config(full_reasoning=bool(llm_params["full_reasoning"]))
 
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True})
 
     async def handle_reset_llm_params(request: Request) -> JSONResponse:
@@ -391,6 +395,7 @@ def get_tool_routes(
             if "description" in keys:
                 tool.update_runtime_config(description="")
 
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True})
 
     async def handle_set_enabled(request: Request) -> JSONResponse:
@@ -427,6 +432,7 @@ def get_tool_routes(
             if tool is not None and getattr(tool, "is_stub", False):
                 asyncio.create_task(connect_persisted_tool(tool_id))
 
+        publish_settings_state_changed(profile)
         return JSONResponse({"success": True, "enabled": bool(enabled)})
 
     async def handle_register_long_running_app(request: Request) -> JSONResponse:

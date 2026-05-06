@@ -11,6 +11,7 @@ from app.api.llm import get_llm_routes
 from app.api.oauth2 import get_oauth2_routes
 from app.api.processes import get_process_routes
 from app.api.profiles import get_profile_routes
+from app.api.settings_stream import get_settings_stream_routes
 from app.api.system_vars import get_system_vars_routes
 from app.api.tokens import get_token_routes
 from app.api.tools import get_tool_routes
@@ -73,4 +74,5 @@ def get_api_routes(
     routes.extend(get_process_routes())
     routes.extend(get_event_routes())
     routes.extend(get_file_watcher_routes())
+    routes.extend(get_settings_stream_routes())
     return routes

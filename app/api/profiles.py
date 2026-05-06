@@ -226,6 +226,8 @@ def get_profile_routes(
             updated = await conversation_storage.set_skill_mode(profile_name, mode)
             if not updated:
                 return JSONResponse({"error": f"Profile '{profile_name}' not found"}, status_code=404)
+            from app.events.settings_state_bus import publish_settings_state_changed
+            publish_settings_state_changed(profile_name)
             return JSONResponse({"success": True, "mode": mode})
         except Exception as e:
             logger.error(f"Error updating skill_mode for '{profile_name}': {e}")

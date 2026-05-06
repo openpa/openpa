@@ -287,6 +287,9 @@ def get_config_routes(
             except Exception as e:
                 logger.warning(f"Post-setup built-in tool initialization failed: {e}")
 
+        from app.events.settings_state_bus import publish_settings_state_changed
+        publish_settings_state_changed(profile_name)
+
         return JSONResponse({
             "success": True,
             "token": token,

@@ -487,6 +487,14 @@ async def run_agent_to_bus(
                 f"stream_runner: failed to update conversation row for {conversation_id}"
             )
 
+        # Notify the conversations-list SSE subscribers — title may have just
+        # changed, message count went up, and the row's updated_at advanced.
+        try:
+            from app.events.conversations_list_bus import publish_conversations_changed
+            publish_conversations_changed(profile)
+        except Exception:  # noqa: BLE001
+            logger.debug("conversations-list publish failed", exc_info=True)
+
         # 7. Terminal event so subscribers can flip isStreaming=false.
         await bus.publish(conversation_id, "complete", {
             "assistant_id": assistant_msg_id,

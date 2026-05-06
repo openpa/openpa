@@ -1,9 +1,19 @@
+import asyncio
+import json
+from typing import Any, Dict
+
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from app.agent.stream_runner import cancel_run, make_run_id
 from app.events import queue as event_queue
+from app.api.events import publish_skill_events_admin_changed
+from app.api.file_watchers import publish_file_watchers_admin_changed
+from app.events.conversations_list_bus import (
+    get_conversations_list_stream_bus,
+    publish_conversations_changed,
+)
 from app.events.stream_bus import get_event_stream_bus
 from app.storage.conversation_storage import ConversationStorage, is_valid_conversation_id
 from app.utils import logger
@@ -105,6 +115,7 @@ def get_conversation_routes(
         conv = await conversation_storage.create_conversation(
             profile=profile, title=title,
         )
+        publish_conversations_changed(profile)
         return JSONResponse({"conversation": conv}, status_code=201)
 
     async def handle_get_conversation(request: Request) -> JSONResponse:
@@ -225,6 +236,8 @@ def get_conversation_routes(
             update_title_from_query=True,
         )
 
+        publish_conversations_changed(profile)
+
         return JSONResponse(
             {"run_id": run_id, "conversation_id": conversation_id},
             status_code=202,
@@ -311,6 +324,7 @@ def get_conversation_routes(
                 await conversation_storage.update_conversation(new_id, **extra_fields)
                 renamed = await conversation_storage.get_conversation(new_id)
 
+            publish_conversations_changed(profile)
             return JSONResponse({"conversation": renamed})
 
         update_fields = {}
@@ -321,6 +335,7 @@ def get_conversation_routes(
 
         if update_fields:
             await conversation_storage.update_conversation(conversation_id, **update_fields)
+            publish_conversations_changed(profile)
 
         conv = await conversation_storage.get_conversation(conversation_id)
         return JSONResponse({"conversation": conv})
@@ -340,6 +355,9 @@ def get_conversation_routes(
         deleted = await conversation_storage.delete_conversation(conversation_id)
         if not deleted:
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
+        publish_conversations_changed(profile)
+        publish_skill_events_admin_changed(profile)
+        publish_file_watchers_admin_changed(profile)
         return JSONResponse({"success": True})
 
     async def handle_delete_all_conversations(request: Request) -> JSONResponse:
@@ -352,6 +370,9 @@ def get_conversation_routes(
             return JSONResponse({"error": "Profile is required"}, status_code=400)
 
         deleted_count = await conversation_storage.delete_all_conversations(profile)
+        publish_conversations_changed(profile)
+        publish_skill_events_admin_changed(profile)
+        publish_file_watchers_admin_changed(profile)
         return JSONResponse({"success": True, "deleted_count": deleted_count})
 
     async def handle_conversations_dispatch(request: Request) -> JSONResponse:
@@ -382,6 +403,75 @@ def get_conversation_routes(
             return await handle_post_message(request)
         return JSONResponse({"error": "Method not allowed"}, status_code=405)
 
+    async def _build_conversations_snapshot(
+        profile: str, channel_type: str | None,
+    ) -> Dict[str, Any]:
+        """Bundle the per-profile conversation list for the SSE snapshot.
+
+        Mirrors what ``handle_list_conversations`` returns. ``channel_type``
+        is the same filter the REST endpoint accepts; the ``all`` virtual
+        filter is normalized to ``None`` (no backend filter) before this
+        helper is reached.
+        """
+        conversations = await conversation_storage.list_conversations(
+            profile, limit=500, offset=0, channel_type=channel_type,
+        )
+        return {"conversations": conversations}
+
+    async def handle_conversations_stream(request: Request) -> Any:
+        """SSE endpoint pushing the live conversation list for the caller's profile.
+
+        On connect, sends a ``snapshot`` frame (full per-profile list,
+        optionally narrowed by ``?channel_type=``), followed by ``ready``.
+        Subsequent ``snapshot`` frames are emitted whenever a conversation
+        is created, updated, deleted, or has a new message posted.
+        """
+        unauth = _require_auth(request)
+        if unauth is not None:
+            return unauth
+        profile = _profile_from_request(request)
+        if not profile:
+            return JSONResponse({"error": "Profile is required"}, status_code=400)
+
+        # Mirror the REST endpoint's filter contract: the ``all`` virtual
+        # filter is sentinel for "no backend filter".
+        raw_channel_type = request.query_params.get("channel_type") or None
+        channel_type = None if raw_channel_type == "all" else raw_channel_type
+
+        bus = get_conversations_list_stream_bus()
+        queue = bus.subscribe(profile)
+
+        async def generator():
+            def _frame(payload: Dict[str, Any]) -> bytes:
+                return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
+
+            try:
+                snapshot = await _build_conversations_snapshot(profile, channel_type)
+                yield _frame({"type": "snapshot", "data": snapshot})
+                yield _frame({"type": "ready", "data": {}})
+
+                while True:
+                    if await request.is_disconnected():
+                        return
+                    try:
+                        await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield b": keepalive\n\n"
+                        continue
+                    snapshot = await _build_conversations_snapshot(profile, channel_type)
+                    yield _frame({"type": "snapshot", "data": snapshot})
+            finally:
+                bus.unsubscribe(profile, queue)
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        return StreamingResponse(
+            generator(), media_type="text/event-stream", headers=headers,
+        )
+
     async def handle_cancel_task(request: Request) -> JSONResponse:
         """Cancel an in-flight agent run. Idempotent.
 
@@ -403,6 +493,14 @@ def get_conversation_routes(
             "/api/conversations",
             endpoint=handle_conversations_dispatch,
             methods=["GET", "POST", "DELETE"],
+        ),
+        # Literal `/stream` must be registered before `{conversation_id}` so
+        # Starlette dispatches it to the SSE handler instead of trying to
+        # load a conversation with id "stream".
+        Route(
+            "/api/conversations/stream",
+            endpoint=handle_conversations_stream,
+            methods=["GET"],
         ),
         Route(
             "/api/conversations/{conversation_id}",
