@@ -31,11 +31,18 @@ max_llm_retries = 2
 reasoning_temperature = 1.0
 reasoning_max_tokens = 32768
 reasoning_retry = 3
-steps_length = 80
+steps_length = 20
 
 [history]
 max_tokens_total = 5000
 max_tokens_per_message = 500
+
+[tool_result]
+enabled = true
+max_tokens = 1000
+preserve_recent = 1
+head_tokens = 200
+tail_tokens = 200
 
 [skill_classifier]
 temperature = 0.0

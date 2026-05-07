@@ -44,6 +44,7 @@ from app.tools.builtin.exec_shell_pty import (
     _looks_like_tty_error,
     _spawn_command_pty,
 )
+from app.tools.builtin.exec_shell_rtk import maybe_rewrite_command
 from app.utils.logger import logger
 
 def _resolve_os(selected: Optional[str]) -> str:
@@ -187,6 +188,13 @@ class Var:
     # hasn't specified a size.
     TERMINAL_DEFAULT_COLS = "TERMINAL_DEFAULT_COLS"
     TERMINAL_DEFAULT_ROWS = "TERMINAL_DEFAULT_ROWS"
+    # RTK (Rust Token Killer) command-rewriter integration.  When enabled,
+    # supported commands like ``git status`` are silently rewritten to
+    # ``rtk git status`` before the shell spawns, compressing output by
+    # 60-90%.  The agent sees only the smaller output; the rewrite is
+    # transparent.  See app/tools/builtin/exec_shell_rtk.py.
+    RTK_ENABLED = "RTK_ENABLED"
+    RTK_BINARY_PATH = "RTK_BINARY_PATH"
 
 
 TOOL_CONFIG: ToolConfig = {
@@ -265,6 +273,29 @@ TOOL_CONFIG: ToolConfig = {
             "type": "number",
             "default": 24,
         },
+        Var.RTK_ENABLED: {
+            "description": (
+                "Route shell commands through RTK (Rust Token Killer) before "
+                "execution. When enabled, supported commands like 'git status' "
+                "or 'cargo test' are rewritten to 'rtk git status' / "
+                "'rtk cargo test' so their output is filtered and compressed, "
+                "saving 60-90% of LLM context tokens. Unsupported commands "
+                "pass through unchanged. Requires the 'rtk' binary on PATH "
+                "(see https://github.com/rtk-ai/rtk). Default: false."
+            ),
+            "type": "boolean",
+            "default": False,
+        },
+        Var.RTK_BINARY_PATH: {
+            "description": (
+                "Path to the 'rtk' binary used when RTK_ENABLED is true. "
+                "Defaults to 'rtk' (resolved via PATH). Set to an absolute "
+                "path (e.g. C:\\Users\\you\\.local\\bin\\rtk.exe) when the "
+                "spawned shell does not inherit your user PATH. Default: 'rtk'."
+            ),
+            "type": "string",
+            "default": "rtk",
+        },
     },
     "arguments": {
         "type": "object",
@@ -283,8 +314,12 @@ TOOL_CONFIG: ToolConfig = {
 async def _spawn_command(
     command: str, working_dir: str, system: str, shell: str, shell_flag: str,
     extra_env: Optional[Dict[str, str]] = None,
+    rtk_enabled: bool = False, rtk_binary: str = "rtk",
 ) -> asyncio.subprocess.Process:
     """Spawn a command as a standalone subprocess with piped stdin/stdout/stderr."""
+    command = await maybe_rewrite_command(
+        command, enabled=rtk_enabled, binary=rtk_binary,
+    )
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     if extra_env:
@@ -830,6 +865,7 @@ async def write_stdin_to_process(
     process_id: str,
     *,
     profile: str,
+    mode: Optional[str] = None,
     input_text: Optional[str] = None,
     keys: Optional[List[str]] = None,
     line_ending: Optional[str] = None,
@@ -841,6 +877,12 @@ async def write_stdin_to_process(
     tool result or a JSON response; errors are surfaced under an ``error``
     key rather than raised, so the agent's contract (always returns a
     structured result, never a 500) is preserved.
+
+    ``mode`` selects exactly one input channel: ``"input_text"``,
+    ``"navigation"``, or ``"action"``. Navigation and action are mutually
+    exclusive within a single call — the intended flow is to send
+    navigation, observe stdout to confirm cursor/selection, then send
+    a separate action call to commit.
     """
     if not process_id:
         return {
@@ -848,11 +890,51 @@ async def write_stdin_to_process(
             "message": "The 'process_id' parameter is required.",
         }
 
-    if (input_text is None) == (keys is None):
+    if mode not in (None, "input_text", "navigation", "action"):
         return {
             "error": "Invalid parameters",
-            "message": "Provide exactly one of 'input_text' or 'keys'.",
+            "message": (
+                f"'mode' must be one of 'input_text', 'navigation', "
+                f"'action'; got {mode!r}."
+            ),
         }
+
+    if mode is None:
+        if input_text is not None and keys is None:
+            mode = "input_text"
+        else:
+            return {
+                "error": "Missing parameter",
+                "message": (
+                    "'mode' is required when sending 'keys'. Use "
+                    "'navigation' for cursor movement (up, down, left, "
+                    "right, tab, space, backspace) or 'action' for "
+                    "execution/confirmation (enter, escape, ctrl+c)."
+                ),
+            }
+
+    if mode == "input_text":
+        if input_text is None:
+            return {
+                "error": "Invalid parameters",
+                "message": "mode='input_text' requires 'input_text'.",
+            }
+        if keys is not None:
+            return {
+                "error": "Invalid parameters",
+                "message": "mode='input_text' must not supply 'keys'.",
+            }
+    else:
+        if keys is None:
+            return {
+                "error": "Invalid parameters",
+                "message": f"mode={mode!r} requires 'keys'.",
+            }
+        if input_text is not None:
+            return {
+                "error": "Invalid parameters",
+                "message": f"mode={mode!r} must not supply 'input_text'.",
+            }
 
     try:
         info = _require_process(process_id, profile)
@@ -878,21 +960,25 @@ async def write_stdin_to_process(
         else:
             line_ending = "\n"
 
-    if keys is not None:
+    resolved_key_bytes: Optional[List[str]] = None
+    if mode in ("navigation", "action"):
         if not isinstance(keys, list) or not keys:
             return {
                 "error": "Invalid parameters",
                 "message": "'keys' must be a non-empty array.",
             }
-        unknown = [k for k in keys if k not in _KEY_NAME_TO_BYTES]
-        if unknown:
-            return {
-                "error": "Invalid parameters",
-                "message": (
-                    f"Unknown key name(s): {unknown}. Valid: "
-                    f"{sorted(_KEY_NAME_TO_BYTES.keys())}."
-                ),
-            }
+        group_map = _KEY_GROUPS[mode]
+        resolved_key_bytes = []
+        for idx, name in enumerate(keys):
+            if not isinstance(name, str) or name not in group_map:
+                return {
+                    "error": "Invalid parameters",
+                    "message": (
+                        f"keys[{idx}]={name!r} is not a valid {mode} key. "
+                        f"Valid {mode} keys: {sorted(group_map)}."
+                    ),
+                }
+            resolved_key_bytes.append(group_map[name])
         payload: Optional[str] = None
     else:
         if line_ending == "none":
@@ -914,8 +1000,8 @@ async def write_stdin_to_process(
         }
 
     try:
-        if keys is not None:
-            key_bytes = [_KEY_NAME_TO_BYTES[k].encode("utf-8") for k in keys]
+        if resolved_key_bytes is not None:
+            key_bytes = [s.encode("utf-8") for s in resolved_key_bytes]
             for i, chunk in enumerate(key_bytes):
                 process.stdin.write(chunk)
                 await process.stdin.drain()
@@ -1270,6 +1356,8 @@ class ExecShellTool(BuiltInTool):
         log_silence_threshold = float(variables.get(Var.LOG_SILENCE_THRESHOLD) or 3.0)
         cleanup_ttl_hours = float(variables.get(Var.CLEANUP_TTL_HOURS) or _DEFAULT_CLEANUP_TTL_HOURS)
         long_running_timeout = float(variables.get(Var.LONG_RUNNING_TIMEOUT) or _DEFAULT_LONG_RUNNING_TIMEOUT)
+        rtk_enabled = bool(variables.get(Var.RTK_ENABLED, False))
+        rtk_binary = str(variables.get(Var.RTK_BINARY_PATH) or "rtk")
 
         if not command:
             return BuiltInToolResult(
@@ -1307,10 +1395,12 @@ class ExecShellTool(BuiltInTool):
                 return await _spawn_command_pty(
                     command, shell_working_directory, cols, rows, system,
                     extra_env=extra_env,
+                    rtk_enabled=rtk_enabled, rtk_binary=rtk_binary,
                 )
             return await _spawn_command(
                 command, shell_working_directory, system, shell, shell_flag,
                 extra_env=extra_env,
+                rtk_enabled=rtk_enabled, rtk_binary=rtk_binary,
             )
 
         logger.debug(
@@ -1570,44 +1660,76 @@ class ExecShellTool(BuiltInTool):
             )
 
 
-_KEY_NAME_TO_BYTES: Dict[str, str] = {
+_NAV_KEY_TO_BYTES: Dict[str, str] = {
     "up": "\x1b[A",
     "down": "\x1b[B",
     "right": "\x1b[C",
     "left": "\x1b[D",
-    "enter": "\r",
     "tab": "\t",
     "space": " ",
-    "escape": "\x1b",
     "backspace": "\x7f",
+}
+
+_ACTION_KEY_TO_BYTES: Dict[str, str] = {
+    "enter": "\r",
+    "escape": "\x1b",
     "ctrl+c": "\x03",
+}
+
+_KEY_GROUPS: Dict[str, Dict[str, str]] = {
+    "navigation": _NAV_KEY_TO_BYTES,
+    "action": _ACTION_KEY_TO_BYTES,
 }
 
 # Inter-keystroke delay for `keys` mode. Some TUIs (menu selectors, npm init,
 # ConPTY apps) drop keys when they arrive back-to-back; a short human-scale
 # pause lets each one be processed before the next arrives.
-_KEYSTROKE_DELAY_SEC = 0.03
+_KEYSTROKE_DELAY_SEC = 0.1
 
 
 class ExecShellInputTool(BuiltInTool):
     name: str = "exec_shell_input"
     description: str = (
-        "Send input to a running process. Use this after exec_shell returns a "
-        "process_id. Writes to the process's stdin; use exec shell output to "
-        "read the response.\n"
-        "Two input modes — supply exactly one:\n"
-        "  1) input_text — plain text or raw bytes. You don't need to append "
-        "a line terminator; the right one is added automatically ('\\r' on "
-        "Windows PTY processes, '\\n' elsewhere).\n"
-        "  2) keys — array of symbolic key names, batched in one call.\n"
-        "Valid names: up, down, left, right, enter, tab, space, escape, "
-        "backspace, ctrl+c. Implies line_ending='none'.\n"
-        "For selection menus you can batch navigation in one call — e.g. "
-        '{"process_id":"708e9873","keys":["down","down","down","enter"]} — to '
-        "cut reasoning steps. Re-read output between bursts to confirm cursor "
-        "position on long menus.\n"
-        'Text example: {"process_id":"708e9873","input_text":"my input"}\n'
-        "Required: process_id, and one of (input_text, keys)"
+        "Send input to a running process. Use this after exec_shell returns "
+        "a process_id. Writes to the process's stdin; use exec shell output "
+        "to read the response.\n"
+        'Format input: [process_id: <id>]\n<mode and payload here>\n'
+        "Pick exactly one 'mode' per call:\n"
+        "  - input_text: send the 'input_text' field as text/raw bytes. "
+        "You don't need to append a line terminator; the right one is "
+        "added automatically ('\\r' on Windows PTY processes, '\\n' "
+        "elsewhere). Override with 'line_ending' if needed.\n"
+        "  - navigation: send the 'keys' field as cursor/focus movement "
+        "keystrokes. Allowed names: up, down, left, right, tab, space, "
+        "backspace. Use this to position the cursor or selection. No "
+        "side effects — nothing is committed.\n"
+        "  - action: send the 'keys' field as a single execution / "
+        "confirmation keystroke. Allowed names: enter, escape, ctrl+c. "
+        "These ARE side-effecting — enter submits, escape dismisses, "
+        "ctrl+c aborts.\n"
+        "Required flow: navigation and action are NEVER combined in one "
+        "call. The correct sequence is:\n"
+        "  1) call with mode='navigation' to position the cursor (you "
+        "can batch many keys in one call),\n"
+        "  2) call exec_shell output to verify the cursor/selection "
+        "actually landed where you expect,\n"
+        "  3) call again with mode='action' to commit (e.g. press enter).\n"
+        "Skipping step 2 risks committing in the wrong place.\n"
+        "Navigation example:\n"
+        '  [process_id: 708e9873]\n'
+        '  mode: "navigation"\n'
+        '  keys: ["down","down"]\n'
+        "Action example (after observing stdout):\n"
+        '  [process_id: 708e9873]\n'
+        '  mode: "action"\n'
+        '  keys: ["enter"]\n'
+        "Text example:\n"
+        '  [process_id: 708e9873]\n'
+        '  mode: "input_text"\n'
+        '  input_text: "my input"\n'
+        "Required: process_id, mode, and the field that mode selects "
+        "(input_text for mode='input_text', keys for mode='navigation' "
+        "or mode='action')."
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -1616,36 +1738,60 @@ class ExecShellInputTool(BuiltInTool):
                 "type": "string",
                 "description": "The process_id returned by exec_shell.",
             },
+            "mode": {
+                "type": "string",
+                "enum": ["input_text", "navigation", "action"],
+                "description": (
+                    "Selects the input channel for this call. "
+                    "'input_text' sends the 'input_text' field as "
+                    "text/raw bytes. 'navigation' sends the 'keys' "
+                    "field as cursor/focus movement (up, down, left, "
+                    "right, tab, space, backspace) — no side effects. "
+                    "'action' sends the 'keys' field as execution / "
+                    "confirmation (enter, escape, ctrl+c) — side-"
+                    "effecting. navigation and action are mutually "
+                    "exclusive: send navigation, observe stdout to "
+                    "verify cursor position, then send action."
+                ),
+            },
             "input_text": {
                 "type": "string",
                 "description": (
-                    "The text or raw bytes to send to the process's stdin. "
-                    "Mutually exclusive with 'keys'."
+                    "Text or raw bytes to send to stdin. Used when "
+                    "mode='input_text'; ignored otherwise."
                 ),
             },
             "keys": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                     "type": "string",
-                    "enum": list(_KEY_NAME_TO_BYTES.keys()),
+                    "enum": (
+                        list(_NAV_KEY_TO_BYTES.keys())
+                        + list(_ACTION_KEY_TO_BYTES.keys())
+                    ),
                 },
                 "description": (
-                    "Ordered list of symbolic key names to send in one call "
-                    "(e.g. ['down','down','enter']). Expanded to escape codes "
-                    "server-side; implies line_ending='none'. Mutually "
-                    "exclusive with 'input_text'."
+                    "Ordered list of symbolic key names. Required "
+                    "when mode='navigation' or mode='action'. With "
+                    "mode='navigation', items must be drawn from: "
+                    "up, down, left, right, tab, space, backspace. "
+                    "With mode='action', items must be drawn from: "
+                    "enter, escape, ctrl+c. Sent in order with a short "
+                    "inter-keystroke delay; implies line_ending='none'."
                 ),
             },
             "line_ending": {
                 "type": "string",
                 "enum": ["\n", "\r", "\r\n", "none"],
                 "description": (
-                    "Line terminator appended to input_text. Default is "
-                    "OS/mode-aware: '\\r' for Windows PTY processes (ConPTY "
-                    "treats '\\r' as Enter and ignores '\\n'), '\\n' otherwise. "
-                    "Use 'none' to send raw bytes (useful for control "
-                    "characters). Explicit values are never coerced. "
-                    "Ignored when 'keys' is provided."
+                    "Line terminator appended to input_text. Default "
+                    "is OS/mode-aware: '\\r' for Windows PTY processes "
+                    "(ConPTY treats '\\r' as Enter and ignores '\\n'), "
+                    "'\\n' otherwise. Use 'none' to send raw bytes "
+                    "(useful for control characters). Explicit values "
+                    "are never coerced. Ignored when mode is "
+                    "'navigation' or 'action'."
                 ),
             },
         },
@@ -1657,7 +1803,8 @@ class ExecShellInputTool(BuiltInTool):
         # Process Manager API so both entry points exercise the same code.
         process_id = arguments.get("process_id", "").strip()
         logger.debug(
-            f"exec_shell_input called with process_id={process_id!r}, "
+            f"exec_shell input called with process_id={process_id!r}, "
+            f"mode={arguments.get('mode')!r}, "
             f"input_text={arguments.get('input_text')!r}, "
             f"keys={arguments.get('keys')!r}, "
             f"line_ending={arguments.get('line_ending')!r}"
@@ -1665,6 +1812,7 @@ class ExecShellInputTool(BuiltInTool):
         result = await write_stdin_to_process(
             process_id,
             profile=arguments.get("_profile") or "",
+            mode=arguments.get("mode"),
             input_text=arguments.get("input_text"),
             keys=arguments.get("keys"),
             line_ending=arguments.get("line_ending"),
@@ -1705,8 +1853,9 @@ def _build_output_instruction(
             "either a symbolic `keys` array (preferred) or raw escape codes "
             "in `input_text` with `line_ending='none'`. You can batch multiple "
             "keystrokes in one call to reduce round-trips — e.g. "
-            "`keys: ['down','down','down','enter']`, or equivalently "
-            "`input_text: '\\x1b[B\\x1b[B\\x1b[B\\r'` with `line_ending='none'`. "
+            "`keys: ['down','down','down']`. Note: after making a selection and "
+            "before pressing 'enter', you should observe the output to verify "
+            "whether the selection has actually been applied.\n"
             "Valid key names: up, down, left, right, enter, tab, space, "
             "escape, backspace, ctrl+c. For long menus, re-read output "
             "between bursts to confirm the cursor position before confirming."

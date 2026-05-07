@@ -138,6 +138,7 @@ def get_process_routes() -> list:
         result = await write_stdin_to_process(
             pid,
             profile=profile,
+            mode=body.get("mode"),
             input_text=body.get("input_text"),
             keys=body.get("keys"),
             line_ending=body.get("line_ending"),

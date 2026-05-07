@@ -285,3 +285,89 @@ def truncate_messages(
             result.append(msg)
 
     return result
+
+
+# Mirror of the markers defined in app.agent.reasoning_agent. Re-declared here
+# to avoid a circular import (reasoning_agent imports from this module).
+_OBSERVATION_START_MARKER = "------------OBS-START------------"
+_OBSERVATION_END_MARKER = "------------OBS-END------------"
+_OBSERVATION_TRUNCATION_NOTICE = (
+    "[... content truncated, full result available in stored conversation ...]"
+)
+
+
+def truncate_old_observations(
+    steps: List[str],
+    *,
+    max_tokens: int,
+    preserve_recent: int = 1,
+    head_tokens: int = 200,
+    tail_tokens: int = 200,
+    model: str = "gpt-4o",
+) -> List[str]:
+    """Shorten older Observation blocks inside ReAct step strings.
+
+    Each step string may contain one or more Observation blocks delimited by
+    ``_OBSERVATION_START_MARKER`` / ``_OBSERVATION_END_MARKER``. The most recent
+    ``preserve_recent`` blocks (across the whole step list) are kept verbatim.
+    Any earlier block whose body exceeds ``max_tokens`` is rewritten to the
+    first ``head_tokens`` tokens, a truncation notice, then the last
+    ``tail_tokens`` tokens. The input list is not mutated.
+    """
+    if not steps:
+        return []
+
+    spans: list[tuple[int, int, int, str]] = []
+    for step_idx, step in enumerate(steps):
+        cursor = 0
+        while True:
+            start = step.find(_OBSERVATION_START_MARKER, cursor)
+            if start < 0:
+                break
+            body_start = start + len(_OBSERVATION_START_MARKER)
+            end = step.find(_OBSERVATION_END_MARKER, body_start)
+            if end < 0:
+                break
+            body = step[body_start:end]
+            spans.append((step_idx, body_start, end, body))
+            cursor = end + len(_OBSERVATION_END_MARKER)
+
+    if not spans:
+        return list(steps)
+
+    keep_from = max(len(spans) - preserve_recent, 0)
+    encoder = encoding_for_model(model)
+
+    rewritten_bodies: dict[tuple[int, int, int], str] = {}
+    for idx, (step_idx, body_start, end, body) in enumerate(spans):
+        if idx >= keep_from:
+            continue
+        tokens = encoder.encode(body)
+        if len(tokens) <= max_tokens:
+            continue
+        head = encoder.decode(tokens[:head_tokens]) if head_tokens > 0 else ""
+        tail = encoder.decode(tokens[-tail_tokens:]) if tail_tokens > 0 else ""
+        rewritten_bodies[(step_idx, body_start, end)] = (
+            f"{head}\n{_OBSERVATION_TRUNCATION_NOTICE}\n{tail}"
+        )
+
+    if not rewritten_bodies:
+        return list(steps)
+
+    by_step: dict[int, list[tuple[int, int, str]]] = {}
+    for (step_idx, body_start, end), new_body in rewritten_bodies.items():
+        by_step.setdefault(step_idx, []).append((body_start, end, new_body))
+
+    result: List[str] = []
+    for step_idx, step in enumerate(steps):
+        edits = by_step.get(step_idx)
+        if not edits:
+            result.append(step)
+            continue
+        edits.sort(key=lambda e: e[0], reverse=True)
+        rewritten = step
+        for body_start, end, new_body in edits:
+            rewritten = rewritten[:body_start] + new_body + rewritten[end:]
+        result.append(rewritten)
+
+    return result

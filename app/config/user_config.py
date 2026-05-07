@@ -75,12 +75,18 @@ class AgentRuntimeConfig:
     steps_length: int
     history_max_tokens_total: int
     history_max_tokens_per_message: int
+    tool_result_enabled: bool
+    tool_result_max_tokens: int
+    tool_result_preserve_recent: int
+    tool_result_head_tokens: int
+    tool_result_tail_tokens: int
 
 
 def resolve_agent_config(profile: str) -> AgentRuntimeConfig:
     """Build an :class:`AgentRuntimeConfig` for ``profile``."""
     agent = resolve_group("agent", profile)
     history = resolve_group("history", profile)
+    tool_result = resolve_group("tool_result", profile)
     return AgentRuntimeConfig(
         max_steps=int(agent["max_steps"]),
         max_llm_retries=int(agent["max_llm_retries"]),
@@ -90,6 +96,11 @@ def resolve_agent_config(profile: str) -> AgentRuntimeConfig:
         steps_length=int(agent["steps_length"]),
         history_max_tokens_total=int(history["max_tokens_total"]),
         history_max_tokens_per_message=int(history["max_tokens_per_message"]),
+        tool_result_enabled=bool(tool_result["enabled"]),
+        tool_result_max_tokens=int(tool_result["max_tokens"]),
+        tool_result_preserve_recent=int(tool_result["preserve_recent"]),
+        tool_result_head_tokens=int(tool_result["head_tokens"]),
+        tool_result_tail_tokens=int(tool_result["tail_tokens"]),
     )
 
 

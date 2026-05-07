@@ -24,6 +24,7 @@ import re
 import threading
 from typing import Optional
 
+from app.tools.builtin.exec_shell_rtk import maybe_rewrite_command
 from app.utils.logger import logger
 
 _SYSTEM = platform.system()
@@ -434,8 +435,12 @@ async def _spawn_command_pty(
     command: str, working_dir: str, cols: int = 80, rows: int = 24,
     system: Optional[str] = None,
     extra_env: Optional[dict[str, str]] = None,
+    rtk_enabled: bool = False, rtk_binary: str = "rtk",
 ) -> PtyProcess:
     system = system or _SYSTEM
+    command = await maybe_rewrite_command(
+        command, enabled=rtk_enabled, binary=rtk_binary,
+    )
     if system == "Windows":
         return await _spawn_windows_pty(command, working_dir, cols, rows, system, extra_env=extra_env)
     return await _spawn_unix_pty(command, working_dir, cols, rows, system, extra_env=extra_env)

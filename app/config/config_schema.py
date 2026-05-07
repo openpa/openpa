@@ -149,6 +149,41 @@ CONFIG_SCHEMA: dict[str, ConfigGroup] = {
             ),
         },
     ),
+    "tool_result": ConfigGroup(
+        label="Tool Result Truncation",
+        description="Limits applied to tool observations when re-sent to the reasoning LLM. The full result is always stored in the database and shown in the web UI.",
+        fields={
+            "enabled": Field(
+                type="boolean", default_toml="tool_result.enabled", default_fallback=True,
+                label="Enabled",
+                description="When on, older tool observations are shortened to a head/tail excerpt before being included in the next reasoning prompt.",
+            ),
+            "max_tokens": Field(
+                type="number", default_toml="tool_result.max_tokens", default_fallback=1000,
+                label="Per-observation token threshold",
+                description="An older observation longer than this many tokens is replaced with a head excerpt + truncation marker + tail excerpt.",
+                min=100, max=200000,
+            ),
+            "preserve_recent": Field(
+                type="number", default_toml="tool_result.preserve_recent", default_fallback=1,
+                label="Recent observations kept full",
+                description="The N most recent observations always pass through at full length, regardless of size.",
+                min=0, max=10,
+            ),
+            "head_tokens": Field(
+                type="number", default_toml="tool_result.head_tokens", default_fallback=200,
+                label="Head excerpt tokens",
+                description="Tokens kept from the beginning of a truncated observation.",
+                min=0, max=10000,
+            ),
+            "tail_tokens": Field(
+                type="number", default_toml="tool_result.tail_tokens", default_fallback=200,
+                label="Tail excerpt tokens",
+                description="Tokens kept from the end of a truncated observation.",
+                min=0, max=10000,
+            ),
+        },
+    ),
     "skill_classifier": ConfigGroup(
         label="Skill Classifier",
         description="Lightweight LLM that decides whether a request maps to a registered skill.",

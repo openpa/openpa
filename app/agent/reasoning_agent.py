@@ -48,7 +48,7 @@ from app.tools import (
 from app.tools.ids import slugify
 from app.skills.scanner import generate_dir_tree
 from app.types import ReasoningStreamResponseType
-from app.utils.common import limit_messages, truncate_messages
+from app.utils.common import limit_messages, truncate_messages, truncate_old_observations
 from app.utils.context_storage import clear_context, get_context, set_context
 from app.utils.logger import logger
 from app.utils.persona import read_persona_file
@@ -196,6 +196,11 @@ class ReasoningAgent:
         self._reasoning_retry = cfg.reasoning_retry
         self._history_max_tokens_total = cfg.history_max_tokens_total
         self._history_max_tokens_per_message = cfg.history_max_tokens_per_message
+        self._tool_result_enabled = cfg.tool_result_enabled
+        self._tool_result_max_tokens = cfg.tool_result_max_tokens
+        self._tool_result_preserve_recent = cfg.tool_result_preserve_recent
+        self._tool_result_head_tokens = cfg.tool_result_head_tokens
+        self._tool_result_tail_tokens = cfg.tool_result_tail_tokens
 
         # Snapshot the tool list available to this profile for this run.
         # When ``allowed_skill_ids`` is provided (automatic skill mode), skills
@@ -473,7 +478,7 @@ class ReasoningAgent:
         self.steps = []
         self.current_step_count = 0
         self.instruction = self._build_instruction()
-        # logger.info(f"instruction: {self.instruction}")
+        logger.info(f"instruction: {self.instruction}")
         self._append_input_step(input)
         async for item in self._loop(StepData(input=input)):
             yield item
@@ -504,14 +509,23 @@ class ReasoningAgent:
             return
 
         self.current_step_count += 1
-        input_section = template_input.format(steps="\n".join(self.steps))
+        steps_for_prompt = self.steps
+        if self._tool_result_enabled:
+            steps_for_prompt = truncate_old_observations(
+                self.steps,
+                max_tokens=self._tool_result_max_tokens,
+                preserve_recent=self._tool_result_preserve_recent,
+                head_tokens=self._tool_result_head_tokens,
+                tail_tokens=self._tool_result_tail_tokens,
+            )
+        input_section = template_input.format(steps="\n".join(steps_for_prompt))
 
         # Rebuild the system prompt every iteration so newly loaded skills are
         # appended (and re-invoked skills are filtered out of the Tools block).
         self.instruction = self._build_instruction()
 
         # logger.info(f"=== Instruction ===\n{self.instruction}")
-        # logger.info(f"=== Reasoning Step ===\n{input_section}")
+        logger.info(f"=== Reasoning Step ===\n{input_section}")
 
         # Action enum is the set of tool_ids, minus skills already folded into
         # the system prompt — this prevents the LLM from re-loading them.
