@@ -96,6 +96,13 @@ class ConversationModel(Base):
     context_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     title: Mapped[str] = mapped_column(String(256), default="Untitled Chat")
+    # Per-conversation override of the agent's working directory. Mirrors the
+    # value held in ContextStorage under ``_working_directory_override`` and
+    # survives server restarts (ContextStorage is in-memory only). Validated
+    # against the filesystem on conversation load — stale entries (path was
+    # deleted) are cleared and the conversation falls back to the user
+    # default. ``NULL`` means "no override, use the user default".
+    working_directory: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
 

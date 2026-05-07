@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import Table, delete, event, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import class_mapper
+from sqlalchemy.pool import NullPool
 
 from a2a.server.models import Base
 
@@ -41,9 +42,14 @@ class ConversationStorage:
         self.db_path = db_path
         # Ensure parent directory exists
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        # NullPool: open/close per session inside the calling task. Avoids the
+        # aiosqlite teardown race where the pool terminates a pooled connection
+        # under a foreign cancel scope (uvicorn request scope), which produced
+        # noisy CancelledError tracebacks on client disconnect.
         self.engine: AsyncEngine = create_async_engine(
             f"sqlite+aiosqlite:///{db_path}",
             echo=False,
+            poolclass=NullPool,
         )
         self.async_session_maker = async_sessionmaker(self.engine, expire_on_commit=False)
         self._initialized = False
@@ -131,6 +137,17 @@ class ConversationStorage:
             await conn.execute(text(
                 "DROP INDEX IF EXISTS uq_skill_event_subs"
             ))
+
+            # Per-conversation working-directory override persistence. The
+            # in-memory ContextStorage value is rehydrated from this column
+            # on conversation load.
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE conversations ADD COLUMN "
+                    "working_directory VARCHAR(1024)"
+                ))
+            except Exception:  # noqa: BLE001
+                pass
 
         # Backfill: ensure every existing profile has a main channel and that
         # every existing conversation points at it. Idempotent.
@@ -751,6 +768,7 @@ class ConversationStorage:
             "context_id": conv.context_id,
             "task_id": conv.task_id,
             "title": conv.title,
+            "working_directory": getattr(conv, "working_directory", None),
             "created_at": conv.created_at,
             "updated_at": conv.updated_at,
         }

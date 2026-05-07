@@ -75,7 +75,6 @@ When a user request targets a skill, just call the skill's tool with the user's 
 Current time: {current_time}
 Current OS: {current_os}
 Current User Working Directory: `{current_user_working_directory}`
-Current Skills Directory: `{current_skills_directory}`
 
 Tools:
 {tools}
@@ -410,7 +409,6 @@ class ReasoningAgent:
             current_time=f"{datetime.now().isoformat()}",
             current_os=platform.system(),
             current_working_directory=BaseConfig.OPENPA_WORKING_DIR,
-            current_skills_directory=self.current_skills_directory,
             current_user_working_directory=current_user_working_directory,
             tools=self._build_tools_block(),
             loaded_skills=self._build_loaded_skills_block(),

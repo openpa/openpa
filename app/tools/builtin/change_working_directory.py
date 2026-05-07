@@ -207,8 +207,14 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
                 )}]
             )
 
+        # ``persist_path`` is what we mirror to the durable
+        # ``conversations.working_directory`` column. ``None`` for
+        # ``user_working`` so reopening the conversation falls back to the
+        # live profile default rather than pinning today's resolved value.
+        persist_path: str | None
         if target == "user_working":
             clear_context(context_id, OVERRIDE_KEY)
+            persist_path = None
         elif target == "custom":
             if not new_path.exists() or not new_path.is_dir():
                 return BuiltInToolResult(
@@ -217,11 +223,28 @@ class ChangeWorkingDirectoryTool(BuiltInTool):
                     )}]
                 )
             set_context(context_id, OVERRIDE_KEY, str(new_path))
+            persist_path = str(new_path)
         else:
             new_path.mkdir(parents=True, exist_ok=True)
             set_context(context_id, OVERRIDE_KEY, str(new_path))
+            persist_path = str(new_path)
 
         new_str = str(new_path)
+
+        # Persist alongside the in-memory ContextStorage write so the
+        # override survives server restart. Failures are logged but don't
+        # abort the tool call — the in-memory value still drives the
+        # current run.
+        try:
+            from app.events.runner import get_conversation_storage
+            from app.utils.working_directory import persist_working_directory
+            await persist_working_directory(
+                context_id, persist_path, get_conversation_storage(),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to persist cwd override for %s", context_id
+            )
 
         # Broadcast the cwd change on the conversation's SSE stream so any
         # subscribed UI (Vue file-tree pane, Go CLI tree) re-renders against

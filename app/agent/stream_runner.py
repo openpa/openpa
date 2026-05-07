@@ -217,6 +217,20 @@ async def run_agent_to_bus(
                 f"stream_runner: failed to back-fill context_id for {conversation_id}"
             )
 
+    # Hydrate the per-conversation working-directory override into the
+    # in-memory ContextStorage so the reasoning agent's prompt-builder
+    # picks up the same cwd the user last selected (in the file tree or
+    # via change_working_directory) before the previous restart. A
+    # persisted path that has since been deleted is cleared and the run
+    # falls back to the user default.
+    try:
+        from app.utils.working_directory import hydrate_working_directory
+        await hydrate_working_directory(context_id, conversation_storage)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            f"stream_runner: failed to hydrate cwd for {conversation_id}"
+        )
+
     # Skill-event runs have no client-side POST, so the frontend never sets
     # the 'streaming' tracker that opens the per-conversation SSE. Push a
     # started notification on the global notifications stream so the sidebar

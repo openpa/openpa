@@ -34,14 +34,10 @@ from app.storage import (
     get_conversation_storage,
     get_event_subscription_storage,
 )
-from app.config.settings import get_user_working_directory
 from app.tools.builtin.exec_shell import publish_process_list_changed
 from app.tools.builtin.exec_shell_autostart import spawn_from_autostart
 from app.tools.builtin.register_skill_event import _resolve_skill_source
-from app.utils.context_storage import get_context
 from app.utils.logger import logger
-
-_WORKING_DIR_OVERRIDE_KEY = "_working_directory_override"
 
 
 # Default IMAP poll interval is 30s (see email-cli config). Heartbeat-based
@@ -358,11 +354,14 @@ def get_event_routes() -> list[Route]:
                     yield _frame(ev)
                 # Seed the conversation's effective working directory so
                 # clients can render the file-tree pane immediately without
-                # an extra round-trip. Falls back to the user default when
-                # the conversation hasn't called change_working_directory.
-                effective_cwd = (
-                    get_context(conversation_id, _WORKING_DIR_OVERRIDE_KEY)
-                    or get_user_working_directory()
+                # an extra round-trip. Hydrate from the persisted column
+                # first so reopening a conversation after a restart
+                # restores the user's last-chosen directory; if the
+                # persisted path no longer exists, the helper clears it
+                # and we fall back to the user default.
+                from app.utils.working_directory import hydrate_working_directory
+                effective_cwd = await hydrate_working_directory(
+                    conversation_id, get_conversation_storage(),
                 )
                 yield _frame({
                     "type": "ready",
