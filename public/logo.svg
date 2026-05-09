@@ -1,0 +1,21 @@
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="100" height="100" fill="#1E293B"/>
+
+  <g transform="translate(26, -10)">
+    <!-- Cloud Top -->
+    <g transform="translate(0, 15) scale(2.0)">
+      <path fill="#3B82F6" d="M6.5 20q-2.275 0-3.887-1.575T1 14.575q0-1.95 1.175-3.475T5.25 9.15q.625-2.3 2.5-3.725T12 4q2.925 0 4.963 2.038T19 11q1.725.2 2.863 1.488T23 15.5q0 1.875-1.312 3.188T18.5 20zm0-2h12q1.05 0 1.775-.725T21 15.5t-.725-1.775T18.5 13H17v-2q0-2.075-1.463-3.538T12 6T8.463 7.463T7 11h-.5q-1.45 0-2.475 1.025T3 14.5t1.025 2.475T6.5 18m5.5-6"/>
+    </g>
+
+    <!-- Text Middle -->
+    <text x="24" y="62" text-anchor="middle" font-family="Inter, sans-serif" font-weight="600" font-size="8" fill="#FFFFFF" letter-spacing="0.2">
+      Port2Internet
+    </text>
+
+    <!-- Line Bottom -->
+    <g transform="translate(0, 56) scale(2.0)">
+      <path fill="#FFFFFF" d="M5 20.5q-.213 0-.356-.144T4.5 20v-1.115h-1v-3.5q0-.213.144-.357T4 14.884h1.5V7q0-1.458 1.021-2.479T9 3.5t2.479 1.021T12.5 7v10q0 1.056.722 1.778T15 19.5t1.778-.722T17.5 17V9.116H16q-.213 0-.356-.144t-.144-.356v-3.5h1V4q0-.213.144-.356T17 3.5h2q.213 0 .356.144T19.5 4v1.116h1v3.5q0 .212-.144.356T20 9.116h-1.5V17q0 1.458-1.021 2.479T15 20.5t-2.479-1.021T11.5 17V7q0-1.056-.722-1.778T9 4.5t-1.778.722T6.5 7v7.885H8q.213 0 .356.143t.144.356v3.5h-1V20q0 .213-.144.356T7 20.5z"/>
+    </g>
+  </g>
+</svg>

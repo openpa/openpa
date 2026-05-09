@@ -1,0 +1,71 @@
+// @see - https://www.electron.build/configuration/configuration
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "openpa-ui.client",
+  "asar": true,
+  "productName": "OpenPA Web UI",
+  "directories": {
+    "output": "release/${version}"
+  },
+  "files": [
+    "dist",
+    "dist-electron"
+  ],
+  "mac": {
+    "target": [
+      "dmg"
+    ],
+    "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": true,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false
+  },
+  "linux": {
+    "target": [
+      "AppImage"
+    ],
+    "artifactName": "${productName}-Linux-${version}.${ext}"
+  },
+  // ──────────────────────────────────────────────────────────────────────
+  // Auto-update via electron-updater + GitHub Releases.
+  //
+  // ``publish`` here is what electron-builder writes into ``latest.yml``
+  // (and the macOS / Linux variants) at packaging time, and it's also
+  // what ``autoUpdater`` reads at runtime to discover the feed URL.
+  //
+  // ``releaseType: "draft"`` means each matrix job uploads its artifacts
+  // to a *draft* GitHub Release. A separate "publish" job in the release
+  // workflow promotes the draft to published only after all three matrix
+  // jobs succeed. Two reasons for this split:
+  //   1. Failed/partial builds never appear as a real release — bad
+  //      artifacts can't reach users, and we don't have to clean up.
+  //   2. ``electron-updater`` ignores drafts, so the live app keeps
+  //      using the previous version until promotion.
+  //
+  // The repo metadata MUST match the openpa-ui GitHub repo. If we
+  // ever rename or fork, update this in lockstep with any in-flight
+  // installs (electron-updater caches the feed URL per install).
+  // ──────────────────────────────────────────────────────────────────────
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "openpa",
+      "repo": "openpa-ui",
+      "releaseType": "draft"
+    }
+  ]
+}
