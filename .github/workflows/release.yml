@@ -1,0 +1,93 @@
+# Backend release workflow.
+#
+# Trigger: push a tag matching ``v*`` (e.g., ``v0.1.1``). On every such
+# push, this workflow:
+#   1. Builds the openpa-ui SPA via scripts/build_ui.sh (so the wheel
+#      includes the runtime web UI on app/static/ui/).
+#   2. Builds the wheel + sdist via hatch.
+#   3. Publishes to PyPI using the API token in repo secrets.
+#   4. Creates a GitHub Release at the tag, attaching the wheel + sdist.
+#      The release is what `app/upgrade/manifest.py` reads via the
+#      GitHub API to detect available upgrades.
+#
+# Required repo secrets:
+#   PYPI_API_TOKEN   — created at https://pypi.org/manage/account/token/.
+#                      Scope it to the openpa project once that exists,
+#                      otherwise account-wide for the very first release.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # ``workflow_dispatch`` lets you re-run a release manually from the
+  # Actions tab (e.g. if PyPI was down). It accepts the tag name so the
+  # build artifacts are versioned correctly.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.1)"
+        required: true
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed for creating the GitHub Release
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out openpa
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Build the SPA into app/static/ui/. By default scripts/build_ui.sh
+      # clones openpa-ui at OPENPA_UI_REF (main). To pin the SPA to the
+      # same release tag, set OPENPA_UI_REF here — but only after you've
+      # tagged openpa-ui with the same name, otherwise the clone fails.
+      - name: Build openpa-ui SPA
+        env:
+          OPENPA_UI_REF: ${{ vars.OPENPA_UI_REF || 'main' }}
+        run: bash scripts/build_ui.sh
+
+      - name: Install hatch
+        run: pip install --upgrade hatch
+
+      - name: Build wheel + sdist
+        run: hatch build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          generate_release_notes: true   # auto-fill from PR titles since last tag
+          files: |
+            dist/*.whl
+            dist/*.tar.gz

@@ -1,0 +1,160 @@
+# OpenPA-Desktop image — runs the OpenPA agent inside a VNC-accessible
+# XFCE desktop so the agent can use a real GUI (Chromium, file managers,
+# arbitrary apps) and the user can observe via noVNC at :6080.
+#
+# The image is intentionally self-contained: it bakes the desktop layer
+# (mirroring ubuntu-vnc-desktop) AND the OpenPA stack into one tag so
+# users only need ``docker compose up`` to get a working install.
+#
+# Three build args:
+#
+#   OPENPA_UI_REF      — git ref (branch/tag/sha) to build the SPA from.
+#                        Default tracks main; pin to a release tag in CI.
+#   OPENPA_PIP_SPEC    — what to ``pip install`` for the backend.
+#                        Default ``openpa[server]`` pulls latest from PyPI;
+#                        override to ``openpa[server]==X.Y.Z`` in CI for
+#                        deterministic image builds, or to ``-e /src`` if
+#                        you mount a checkout.
+#   RESOLUTION         — VNC framebuffer geometry (passed to vncserver).
+#                        Larger = higher network/CPU cost; 1920x1080 is
+#                        the comfort default.
+
+# ── Stage 1: build the openpa-ui SPA ──────────────────────────────────────
+FROM node:20-bookworm-slim AS spa-builder
+
+ARG OPENPA_UI_REF=main
+
+# git is the only build-time tooling we need on top of node — npm pulls
+# the rest. ``--depth 1`` keeps the clone tiny (we don't need history).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone --depth 1 --branch "$OPENPA_UI_REF" \
+        https://github.com/openpa/openpa-ui.git . \
+    && npm ci \
+    && npm run web:build
+
+# ``web:build`` outputs to ``dist-web/`` (per vite.config.web.ts). The
+# runtimeConfig helper resolves the agent URL from window.location at
+# runtime, so a single build works for both local and remote access —
+# no per-deploy ``VITE_AGENT_URL`` baking required.
+
+# ── Stage 2: desktop + python + openpa ────────────────────────────────────
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Desktop layer (XFCE + TigerVNC + noVNC + fonts + Chrome). Mirrors
+# ubuntu-vnc-desktop/Dockerfile so we don't depend on an unpublished
+# upstream tag.
+RUN apt-get update && apt-get install -y \
+        xfce4 xfce4-goodies \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tigervnc-standalone-server tigervnc-common tigervnc-tools \
+        novnc websockify \
+        autocutsel \
+        dbus-x11 sudo nano wget curl ca-certificates \
+        software-properties-common gpg \
+        fonts-liberation fonts-noto fonts-noto-cjk fonts-noto-color-emoji \
+        adwaita-icon-theme hicolor-icon-theme gnome-icon-theme \
+        elementary-xfce-icon-theme \
+        gtk2-engines-pixbuf gtk2-engines-murrine \
+        librsvg2-common dmz-cursor-theme \
+        netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends /tmp/chrome.deb \
+    && rm /tmp/chrome.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Patch Chrome's desktop entry so it launches as root inside the container.
+RUN sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --no-sandbox --disable-dev-shm-usage|g' \
+        /usr/share/applications/google-chrome.desktop
+
+RUN mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml && \
+    printf '%s\n' \
+        '<?xml version="1.0" encoding="UTF-8"?>' \
+        '<channel name="xsettings" version="1.0">' \
+        '  <property name="Net" type="empty">' \
+        '    <property name="IconThemeName" type="string" value="elementary-xfce-dark"/>' \
+        '    <property name="ThemeName" type="string" value="Adwaita-dark"/>' \
+        '  </property>' \
+        '</channel>' \
+        > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
+
+RUN mkdir -p /root/.vnc && \
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'unset SESSION_MANAGER' \
+        'unset DBUS_SESSION_BUS_ADDRESS' \
+        'export XKL_XMODMAP_DISABLE=1' \
+        'autocutsel -fork' \
+        'autocutsel -selection PRIMARY -fork' \
+        'exec dbus-launch --exit-with-session startxfce4' \
+        > /root/.vnc/xstartup && \
+    chmod +x /root/.vnc/xstartup
+
+# ── Python 3.13 from deadsnakes (Ubuntu 24.04 ships 3.12 by default) ──────
+RUN add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+           python3.13 python3.13-venv python3.13-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── OpenPA backend (server extra) ─────────────────────────────────────────
+ARG OPENPA_PIP_SPEC="openpa[server]"
+
+# Dedicated venv keeps the install isolated from any system Python and
+# from anything the user installs at the desktop level. /opt/openpa is
+# the canonical "application bytes" path (read-only at runtime), while
+# /root/.openpa is the writable working directory (mounted as a volume).
+RUN python3.13 -m venv /opt/openpa/venv \
+    && /opt/openpa/venv/bin/pip install --upgrade pip \
+    && /opt/openpa/venv/bin/pip install "$OPENPA_PIP_SPEC"
+
+ENV PATH="/opt/openpa/venv/bin:${PATH}"
+
+# Playwright pulls its own browser binaries on first use. Install the
+# Chromium runtime up-front so the agent doesn't have to download it on
+# the first request — a multi-minute stall the user would hit at the
+# worst possible moment.
+RUN /opt/openpa/venv/bin/python -m playwright install --with-deps chromium \
+    || echo "Playwright install best-effort; skipping on failure."
+
+# ── built SPA from stage 1 ────────────────────────────────────────────────
+COPY --from=spa-builder /build/dist-web/ /opt/openpa-ui/
+
+# ── entrypoint ────────────────────────────────────────────────────────────
+COPY install/desktop/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# ── runtime defaults ──────────────────────────────────────────────────────
+#
+# ``OPENPA_UI_DIR`` points ``opa serve`` at the SPA built in stage 1.
+# It overrides the wheel-bundled location, so this image always serves
+# the freshly-built SPA from this Dockerfile rather than whatever (if
+# anything) shipped inside the openpa wheel.
+ENV VNC_PASSWORD=changeme \
+    RESOLUTION=1920x1080 \
+    OPENPA_WORKING_DIR=/root/.openpa \
+    OPENPA_DB_PROVIDER=postgres \
+    OPENPA_UI_DIR=/opt/openpa-ui \
+    OPENPA_UI_PORT=1515 \
+    HOST=0.0.0.0 \
+    PORT=1112
+
+WORKDIR /root/.openpa
+
+# 1112 backend, 1515 SPA, 5900 raw VNC, 80 noVNC web. The compose file
+# maps 80 → 6080 on the host so it doesn't conflict with the host's
+# real port 80.
+EXPOSE 1112 1515 5900 80
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -1,0 +1,122 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openpa"
+dynamic = ["version"]
+description = "OpenPA — open personal assistant server and CLI"
+readme = "README.md"
+requires-python = ">=3.13.9"
+license = { text = "MIT" }
+authors = [{ name = "OpenPA contributors" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Communications :: Chat",
+    "Environment :: Console",
+]
+dependencies = [
+    # CLI baseline — installed by `pip install openpa`
+    "typer>=0.12",
+    "httpx[http2]>=0.27",
+    "httpx-sse>=0.4",
+    "websockets>=13.0",
+    "rich>=13",
+    "prompt_toolkit>=3.0.47",
+    "qrcode>=7",
+    "PyJWT>=2.8.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.1.1",
+    # Shared utilities used by both CLI and server during the migration.
+    # Audited at Phase 5 — anything CLI doesn't actually import can move to
+    # the [server] extra at that point.
+    "loguru>=0.7.3",
+    "pydantic>=2.12.3",
+    "jsonschema>=4.23.0",
+    "tenacity>=8.2.0",
+]
+
+[project.optional-dependencies]
+server = [
+    # Heavy server-only stack — installed by `pip install openpa[server]`
+    "starlette>=0.52.1",
+    "uvicorn>=0.41.0",
+    "python-multipart>=0.0.9",
+    "a2a-sdk[http-server,sql]>=0.3.10",
+    "fastmcp>=2.12.5",
+    "anthropic>=0.52.0",
+    "openai>=2.6.0",
+    "groq>=0.33.0",
+    "chromadb>=0.5.0",
+    "qdrant-client>=1.9.0",
+    "sentence-transformers>=3.0.0",
+    "playwright>=1.52.0",
+    "markitdown[all]>=0.1.0",
+    "pywinpty>=2.0 ; sys_platform == 'win32'",
+    "pandas>=3.0.1",
+    "tiktoken>=0.12.0",
+    "watchdog>=4.0.0",
+    "asyncpg>=0.29",
+    "psycopg[binary]>=3.1",
+    "aiosqlite>=0.21.0",
+    "alembic>=1.13.0",
+    "google-api-python-client>=2.0.0",
+    "google-auth>=2.0.0",
+    "python-telegram-bot>=21.0",
+    "telethon>=1.36.0",
+    "jinja2>=3.1.6",
+    "dynaconf>=3.2.0",
+    "toml>=0.10.2",
+]
+all = ["openpa[server]"]
+dev = [
+    "autopep8>=2.0.0",
+    "pre-commit>=3.6.0",
+]
+
+[project.scripts]
+opa = "app.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/openpa/openpa"
+Issues = "https://github.com/openpa/openpa/issues"
+
+[tool.hatch.version]
+path = "app/__version__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "app/",
+    "README.md",
+    "pyproject.toml",
+    "LICENSE",
+]
+exclude = [
+    "/cli/",
+    ".venv/",
+    "logs/",
+    "**/__pycache__",
+    "*.egg-info",
+    "dist/",
+    "build/",
+    ".pytest_cache/",
+]
+
+[tool.uv]
+package = true
+
+[tool.autopep8]
+max_line_length = 120
+aggressive = 4
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

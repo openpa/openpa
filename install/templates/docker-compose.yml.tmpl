@@ -1,0 +1,88 @@
+# OpenPA Docker bundle.
+#
+# Three services orchestrated together:
+#
+#   openpa    XFCE desktop + VNC + the OpenPA agent + the SPA static
+#             server. The agent runs under the desktop session so it
+#             can drive a real GUI; observe at http://<host>:6080/vnc.html.
+#   postgres  Application database. The schema is managed by Alembic
+#             inside the openpa container — this service just persists.
+#   qdrant    Vector store for embeddings.
+#
+# Variables come from the sibling ``.env`` file the installer wrote.
+# ``image:`` + ``build:`` together means: pull the published tag if it
+# exists, otherwise build locally from Dockerfile.desktop. Useful both
+# in CI (image is published) and during development (image isn't).
+
+services:
+  openpa:
+    image: openpa/openpa-desktop:${OPENPA_VERSION}
+    build:
+      context: ../..
+      dockerfile: Dockerfile.desktop
+      args:
+        OPENPA_PIP_SPEC: "openpa[server]==${OPENPA_VERSION}"
+        OPENPA_UI_REF: ${OPENPA_UI_REF:-main}
+    ports:
+      - "${API_PORT:-1112}:1112"
+      - "${SPA_PORT:-1515}:1515"
+      - "${NOVNC_PORT:-6080}:80"
+      - "${VNC_PORT:-5900}:5900"
+    environment:
+      ENV: production
+      HOST: 0.0.0.0
+      PORT: 1112
+      APP_URL: ${APP_URL}
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      DISABLE_LOG: "false"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      SETUP_WIZARD_ENV: ${SETUP_WIZARD_ENV:-local}
+      OPENPA_DB_PROVIDER: postgres
+      OPENPA_POSTGRES_HOST: postgres
+      OPENPA_POSTGRES_PORT: "5432"
+      OPENPA_POSTGRES_DATABASE: ${PG_DATABASE:-openpa}
+      OPENPA_POSTGRES_USER: ${PG_USER:-openpa}
+      OPENPA_POSTGRES_PASSWORD: ${PG_PASSWORD}
+      OPENPA_POSTGRES_SSLMODE: disable
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      VNC_PASSWORD: ${VNC_PASSWORD}
+      RESOLUTION: ${RESOLUTION:-1920x1080}
+    volumes:
+      - openpa-data:/root/.openpa
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-openpa}
+      POSTGRES_USER: ${PG_USER:-openpa}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      # ``pg_isready`` returns 0 once Postgres is accepting connections.
+      # ``service_healthy`` on the openpa side means we don't try to
+      # migrate against a half-booted DB.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.10.1
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  openpa-data:
+  pg-data:
+  qdrant-data:
