@@ -2,11 +2,6 @@
 
 Server-level vars (HOST, PORT, APP_URL, ENV, DEBUG, LOG_LEVEL) remain in .env.
 All other configuration reads from Dynaconf TOML defaults, overridable via SQLite dynamic config.
-
-The .env file is read from ``$OPENPA_WORKING_DIR/.env`` (default: ``~/.openpa/.env``),
-which is the canonical install location written by the installer. Source-checkout
-developers who want a repo-local .env should set ``OPENPA_WORKING_DIR=$PWD`` or
-place their .env at ``~/.openpa/.env``.
 """
 
 import os
@@ -16,11 +11,7 @@ from dotenv import load_dotenv
 
 from app.config import settings as dynaconf_settings
 
-_dotenv_working_dir = os.environ.get(
-    "OPENPA_WORKING_DIR",
-    os.path.join(os.path.expanduser("~"), ".openpa"),
-)
-dotenv_path = os.path.join(_dotenv_working_dir, ".env")
+dotenv_path = os.path.join("app/../.env")
 load_dotenv(dotenv_path)
 
 

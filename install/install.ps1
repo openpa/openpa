@@ -529,20 +529,6 @@ exit $LASTEXITCODE
 
 Write-Ok "Wrote shim $OpenpaCmd (-> venv\Scripts\openpa.exe)"
 
-# Drop a tiny activation script the user can dot-source from any
-# PowerShell session to add openpa to the current PATH without
-# restarting the terminal. Idempotent if sourced multiple times.
-$ActivateFile = Join-Path $OpenpaHome 'activate.ps1'
-$ActivateContent = @"
-# OpenPA activation. Dot-source (`. $ActivateFile`) or invoke this
-# file to put ``openpa`` on PATH in the current PowerShell session.
-# Safe to run repeatedly.
-if (-not (";`$(`$env:Path);" -like "*;$BinDir;*")) {
-    `$env:Path = "$BinDir;`$env:Path"
-}
-"@
-$ActivateContent | Set-Content -Path $ActivateFile -Encoding utf8
-
 function Add-OpenPAPathEntry {
     $current = [Environment]::GetEnvironmentVariable('Path', 'User')
     $target  = $BinDir
@@ -576,23 +562,6 @@ if ($NoModifyPath) {
     Add-OpenPAPathEntry
 }
 
-# Activation guidance — printed NOW (not at end-of-script) because a
-# later step crashing would otherwise swallow this message before the
-# user sees it. Add-OpenPAPathEntry already updated $env:Path for the
-# CURRENT session, so `openpa` works immediately here.
-Write-Host ""
-if (-not $NoModifyPath) {
-    Write-Host "``openpa`` is on PATH for this PowerShell session and any new shell." -ForegroundColor White
-    Write-Host ""
-    Write-Host "For already-open terminals (cmd, other PS sessions), either reopen them"
-    Write-Host "or dot-source the activation script:"
-    Write-Host "    . $ActivateFile" -ForegroundColor White
-} else {
-    Write-Host "To use ``openpa`` in this session, dot-source:" -ForegroundColor White
-    Write-Host "    . $ActivateFile"
-}
-Write-Host ""
-
 # ── env file ──────────────────────────────────────────────────────────────
 
 if (-not (Test-Path $EnvFile)) {
@@ -625,9 +594,18 @@ db_provider = "sqlite"
 
 # ── migrate ───────────────────────────────────────────────────────────────
 
-# Load .env into the process so HOST/PORT/OPENPA_* are honored by both
-# `openpa db upgrade` (some subcommands read settings during import) and
-# the subsequent `openpa serve`. Keys that look like KEY=VALUE are honored;
+Write-Info "Migrating database to current schema"
+& $VenvOpenpa db upgrade *>> $LogFile
+$Revision = '?'
+try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
+Write-Ok "Database at revision $Revision"
+
+# ── start the server ──────────────────────────────────────────────────────
+
+Write-Step "Starting OpenPA"
+
+# Load .env into the process so HOST/PORT propagate to the child without
+# us needing a TOML parser. Keys that look like KEY=VALUE are honored;
 # anything else is ignored.
 $ParsedEnv = @{}
 Get-Content $EnvFile | ForEach-Object {
@@ -641,29 +619,6 @@ Get-Content $EnvFile | ForEach-Object {
     }
 }
 
-Write-Info "Migrating database to current schema"
-& $VenvOpenpa db upgrade *>> $LogFile
-if ($LASTEXITCODE -ne 0) {
-    Write-Err2 "Database migration failed."
-    Write-Host ""
-    Write-Host "Last 20 lines of ${LogFile}:" -ForegroundColor DarkGray
-    if (Test-Path $LogFile) {
-        Get-Content -Path $LogFile -Tail 20 | ForEach-Object { Write-Host $_ }
-    }
-    Write-Host ""
-    Write-Host "Full log: $LogFile" -ForegroundColor White
-    Write-Host "Retry with: & `"$VenvOpenpa`" db upgrade" -ForegroundColor White
-    exit 1
-}
-$Revision = '?'
-try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
-Write-Ok "Database at revision $Revision"
-
-# ── start the server ──────────────────────────────────────────────────────
-
-Write-Step "Starting OpenPA"
-
-# .env was already parsed above (before migrate); HOST/PORT are in env.
 $ServerHost = if ($ParsedEnv.ContainsKey('HOST')) { $ParsedEnv['HOST'] } else { '127.0.0.1' }
 $ServerPort = if ($ParsedEnv.ContainsKey('PORT')) { $ParsedEnv['PORT'] } else { '1112' }
 
@@ -713,6 +668,9 @@ profile name, and tool preferences, then activates the server.
   Backend:    http://${ServerHost}:${ServerPort}
   Stop:       Stop-Process -Id (Get-Content $PidFile)
   Re-open:    openpa serve   (or: & "$VenvOpenpa" serve)
+
+  Tip: open a NEW terminal so ``openpa`` is on PATH (already-open
+       shells won't see the User PATH update).
 
 "@
 
