@@ -562,6 +562,20 @@ if ($NoModifyPath) {
     Add-OpenPAPathEntry
 }
 
+# Activation guidance — printed NOW (not at end-of-script) because a
+# later step crashing would otherwise swallow this message before the
+# user sees it. Add-OpenPAPathEntry already updated $env:Path for the
+# CURRENT session, so `openpa` works immediately here.
+Write-Host ""
+if (-not $NoModifyPath) {
+    Write-Host "``openpa`` is on PATH for this session and any new shell." -ForegroundColor White
+    Write-Host "Already-open terminals (cmd, other PS sessions) need to be reopened."
+} else {
+    Write-Host "To use ``openpa`` in this session, run:" -ForegroundColor White
+    Write-Host "    `$env:Path = `"`$env:Path;$BinDir`""
+}
+Write-Host ""
+
 # ── env file ──────────────────────────────────────────────────────────────
 
 if (-not (Test-Path $EnvFile)) {
@@ -594,18 +608,9 @@ db_provider = "sqlite"
 
 # ── migrate ───────────────────────────────────────────────────────────────
 
-Write-Info "Migrating database to current schema"
-& $VenvOpenpa db upgrade *>> $LogFile
-$Revision = '?'
-try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
-Write-Ok "Database at revision $Revision"
-
-# ── start the server ──────────────────────────────────────────────────────
-
-Write-Step "Starting OpenPA"
-
-# Load .env into the process so HOST/PORT propagate to the child without
-# us needing a TOML parser. Keys that look like KEY=VALUE are honored;
+# Load .env into the process so HOST/PORT/OPENPA_* are honored by both
+# `openpa db upgrade` (some subcommands read settings during import) and
+# the subsequent `openpa serve`. Keys that look like KEY=VALUE are honored;
 # anything else is ignored.
 $ParsedEnv = @{}
 Get-Content $EnvFile | ForEach-Object {
@@ -619,6 +624,29 @@ Get-Content $EnvFile | ForEach-Object {
     }
 }
 
+Write-Info "Migrating database to current schema"
+& $VenvOpenpa db upgrade *>> $LogFile
+if ($LASTEXITCODE -ne 0) {
+    Write-Err2 "Database migration failed."
+    Write-Host ""
+    Write-Host "Last 20 lines of ${LogFile}:" -ForegroundColor DarkGray
+    if (Test-Path $LogFile) {
+        Get-Content -Path $LogFile -Tail 20 | ForEach-Object { Write-Host $_ }
+    }
+    Write-Host ""
+    Write-Host "Full log: $LogFile" -ForegroundColor White
+    Write-Host "Retry with: & `"$VenvOpenpa`" db upgrade" -ForegroundColor White
+    exit 1
+}
+$Revision = '?'
+try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
+Write-Ok "Database at revision $Revision"
+
+# ── start the server ──────────────────────────────────────────────────────
+
+Write-Step "Starting OpenPA"
+
+# .env was already parsed above (before migrate); HOST/PORT are in env.
 $ServerHost = if ($ParsedEnv.ContainsKey('HOST')) { $ParsedEnv['HOST'] } else { '127.0.0.1' }
 $ServerPort = if ($ParsedEnv.ContainsKey('PORT')) { $ParsedEnv['PORT'] } else { '1112' }
 
@@ -668,9 +696,6 @@ profile name, and tool preferences, then activates the server.
   Backend:    http://${ServerHost}:${ServerPort}
   Stop:       Stop-Process -Id (Get-Content $PidFile)
   Re-open:    openpa serve   (or: & "$VenvOpenpa" serve)
-
-  Tip: open a NEW terminal so ``openpa`` is on PATH (already-open
-       shells won't see the User PATH update).
 
 "@
 

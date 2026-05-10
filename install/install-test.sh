@@ -617,6 +617,32 @@ else
     printf '    export PATH="%s:$PATH"\n' "$BIN_DIR"
 fi
 
+# Activation guidance — printed NOW (not at end-of-script) because bash
+# can't update the parent shell's PATH for us, and a later step crashing
+# would otherwise swallow this message before the user sees it.
+if [ "$MODIFY_PATH" -eq 1 ]; then
+    cat <<EOF
+
+${BOLD}To use \`openpa\` in this shell, run:${RESET}
+
+    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+
+(New terminals pick this up automatically from your shell rc.)
+
+EOF
+else
+    cat <<EOF
+
+${BOLD}To put \`openpa\` on your PATH, run:${RESET}
+
+    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+
+Add that line to your shell rc (e.g. ~/.bashrc, ~/.zshrc) to make it
+permanent.
+
+EOF
+fi
+
 # ── env file ──────────────────────────────────────────────────────────────
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -649,8 +675,23 @@ fi
 
 # ── migrate ───────────────────────────────────────────────────────────────
 
+# Source the .env file so any HOST/PORT/OPENPA_* overrides are honored by
+# both `openpa db upgrade` (some subcommands read settings during import)
+# and the subsequent `openpa serve`.
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
 info "Migrating database to current schema"
-"$VENV_DIR/bin/openpa" db upgrade >>"$LOG_FILE" 2>&1
+if ! "$VENV_DIR/bin/openpa" db upgrade >>"$LOG_FILE" 2>&1; then
+    err "Database migration failed."
+    printf '\n%sLast 20 lines of %s:%s\n' "$DIM" "$LOG_FILE" "$RESET" >&2
+    tail -n 20 "$LOG_FILE" >&2
+    printf '\n%sFull log:%s %s\n' "$BOLD" "$RESET" "$LOG_FILE" >&2
+    printf '%sRetry with:%s %s\n\n' "$BOLD" "$RESET" "$VENV_DIR/bin/openpa db upgrade" >&2
+    exit 1
+fi
 REVISION="$("$VENV_DIR/bin/openpa" db current 2>/dev/null || echo "?")"
 ok "Database at revision $REVISION"
 
@@ -662,10 +703,7 @@ SERVER_PID_FILE="$OPENPA_HOME/install.pid"
 if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE")" 2>/dev/null; then
     info "OpenPA is already running (pid $(cat "$SERVER_PID_FILE"))."
 else
-    set -a
-    # shellcheck disable=SC1090
-    . "$ENV_FILE"
-    set +a
+    # .env was sourced above (before migrate); HOST/PORT are already in env.
     nohup "$VENV_DIR/bin/openpa" serve >>"$OPENPA_HOME/server.log" 2>&1 &
     echo $! > "$SERVER_PID_FILE"
     ok "OpenPA started (pid $(cat "$SERVER_PID_FILE"), logs: $OPENPA_HOME/server.log)"
@@ -698,28 +736,6 @@ profile name, and tool preferences, then activates the server.
   Stop:       kill \$(cat $SERVER_PID_FILE)
 
 EOF
-
-if [ "$MODIFY_PATH" -eq 1 ]; then
-    cat <<EOF
-${BOLD}One last step — activate \`openpa\` in this shell:${RESET}
-
-    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
-
-(New terminals pick this up automatically from your shell rc.)
-Then run: ${BOLD}openpa --help${RESET}
-
-EOF
-else
-    cat <<EOF
-${BOLD}One last step — put \`openpa\` on your PATH:${RESET}
-
-    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
-
-To make this permanent, add the line above to your shell rc
-(e.g. ~/.bashrc, ~/.zshrc).
-
-EOF
-fi
 
 if [ "$NO_LAUNCH" -eq 0 ] && [ "$UNATTENDED" -eq 0 ]; then
     if command -v xdg-open >/dev/null 2>&1; then
