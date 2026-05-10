@@ -21,7 +21,10 @@
     .\install-test.ps1 -Deployment server -AppHost 100.120.175.90
 
 .PARAMETER Deployment
-    'local' or 'server'. Skips the deployment-type prompt.
+    'local', 'server', or 'container'. Skips the deployment-type prompt.
+    'container' binds to 0.0.0.0 with localhost URLs - pick this when running
+    the installer inside a Docker / Podman container and browsing from the
+    docker host via published ports.
 
 .PARAMETER AppHost
     Public IP/domain for server deployments.
@@ -50,7 +53,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('local','server')] [string] $Deployment = '',
+    [ValidateSet('local','server','container')] [string] $Deployment = '',
     [string] $AppHost = '',
     [ValidateSet('','docker','native')] [string] $Mode = '',
     [switch] $NoLaunch,
@@ -206,18 +209,23 @@ Write-Step "Deployment"
 if (-not $Deployment) {
     Write-Host @"
 How will you run OpenPA?
-  1) local   — bind to 127.0.0.1, only this machine can reach it
-  2) server  — bind to all interfaces, reachable from other devices
+  1) local      - bind to 127.0.0.1, only this machine can reach it
+  2) server     - bind to all interfaces, reachable from other devices
+  3) container  - bind to 0.0.0.0; URLs use localhost
+                  (pick this if you're running this script inside a
+                   container and will browse from the docker host)
 "@
     while (-not $Deployment) {
         $choice = Read-Host "Choice [1]"
         if (-not $choice) { $choice = '1' }
         switch ($choice) {
-            '1'      { $Deployment = 'local' }
-            'local'  { $Deployment = 'local' }
-            '2'      { $Deployment = 'server' }
-            'server' { $Deployment = 'server' }
-            default  { Write-Warn2 "Pick 1 or 2." }
+            '1'         { $Deployment = 'local' }
+            'local'     { $Deployment = 'local' }
+            '2'         { $Deployment = 'server' }
+            'server'    { $Deployment = 'server' }
+            '3'         { $Deployment = 'container' }
+            'container' { $Deployment = 'container' }
+            default     { Write-Warn2 "Pick 1, 2, or 3." }
         }
     }
 }
@@ -593,11 +601,17 @@ if ($NoModifyPath) {
 
 if (-not (Test-Path $EnvFile)) {
     Write-Info "Generating $EnvFile"
-    if ($Deployment -eq 'local') {
-        Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/local.env" -OutFile $EnvFile
-    } else {
-        $tmpl = Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/server.env.tmpl"
-        ($tmpl.Content -replace '__APP_HOST__', $AppHost) | Set-Content -Path $EnvFile -Encoding utf8
+    switch ($Deployment) {
+        'local' {
+            Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/local.env" -OutFile $EnvFile
+        }
+        'container' {
+            Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/container.env" -OutFile $EnvFile
+        }
+        'server' {
+            $tmpl = Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/server.env.tmpl"
+            ($tmpl.Content -replace '__APP_HOST__', $AppHost) | Set-Content -Path $EnvFile -Encoding utf8
+        }
     }
     Write-Ok "Wrote $EnvFile"
 } else {
@@ -690,10 +704,13 @@ for ($i = 0; $i -lt 10; $i++) {
 
 Write-Step "Setup wizard"
 
-if ($Deployment -eq 'local') {
-    $WizardUrl = 'http://localhost:1515/#/setup'
-} else {
+# 'container' binds to 0.0.0.0 inside the container, but the user
+# browses from the docker host (where the published port surfaces as
+# localhost) - same wizard URL as 'local'.
+if ($Deployment -eq 'server') {
     $WizardUrl = "http://${AppHost}:1515/#/setup"
+} else {
+    $WizardUrl = 'http://localhost:1515/#/setup'
 }
 
 Write-Host @"

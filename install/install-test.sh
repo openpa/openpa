@@ -82,8 +82,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+IN_CONTAINER=0
+if [ -f /.dockerenv ] || [ -f /run/.containerenv ] \
+        || (grep -qE '(docker|containerd|kubepods)' /proc/1/cgroup 2>/dev/null); then
+    IN_CONTAINER=1
+fi
+
 if [ "$UNATTENDED" -eq 1 ] && [ -z "$DEPLOYMENT" ]; then
-    DEPLOYMENT="local"
+    if [ "$IN_CONTAINER" -eq 1 ]; then
+        DEPLOYMENT="container"
+    else
+        DEPLOYMENT="local"
+    fi
 fi
 if [ "$UNATTENDED" -eq 1 ] && [ -z "$APP_HOST" ] && [ "$DEPLOYMENT" = "server" ]; then
     err "--unattended with --deployment=server requires --host"
@@ -213,17 +223,36 @@ fi
 step "Deployment"
 
 if [ -z "$DEPLOYMENT" ]; then
-    cat <<EOF
+    if [ "$IN_CONTAINER" -eq 1 ]; then
+        default_choice=3
+        cat <<EOF
+${YELLOW}${BOLD}Detected: this installer is running inside a container.${RESET}
+${DIM}Pick option 3 — local would bind to 127.0.0.1 inside the container,
+which is unreachable from the docker host's browser even with -p forwarding.${RESET}
+
 How will you run OpenPA?
-  ${BOLD}1)${RESET} ${BOLD}local${RESET}   — bind to 127.0.0.1, only this machine can reach it
-  ${BOLD}2)${RESET} ${BOLD}server${RESET}  — bind to all interfaces, reachable from other devices
+  ${BOLD}1)${RESET} ${BOLD}local${RESET}      — bind to 127.0.0.1, only this machine can reach it
+  ${BOLD}2)${RESET} ${BOLD}server${RESET}     — bind to all interfaces, reachable from other devices
+  ${BOLD}3)${RESET} ${BOLD}container${RESET}  — bind to 0.0.0.0; URLs use localhost (recommended here)
 EOF
+    else
+        default_choice=1
+        cat <<EOF
+How will you run OpenPA?
+  ${BOLD}1)${RESET} ${BOLD}local${RESET}      — bind to 127.0.0.1, only this machine can reach it
+  ${BOLD}2)${RESET} ${BOLD}server${RESET}     — bind to all interfaces, reachable from other devices
+  ${BOLD}3)${RESET} ${BOLD}container${RESET}  — bind to 0.0.0.0; URLs use localhost
+                  ${DIM}(pick this if you're running this script inside a container
+                   and will browse from the docker host)${RESET}
+EOF
+    fi
     while :; do
-        read -r -p "Choice [1]: " choice </dev/tty || choice=""
-        case "${choice:-1}" in
-            1|local)  DEPLOYMENT=local;  break ;;
-            2|server) DEPLOYMENT=server; break ;;
-            *) warn "Pick 1 or 2." ;;
+        read -r -p "Choice [$default_choice]: " choice </dev/tty || choice=""
+        case "${choice:-$default_choice}" in
+            1|local)     DEPLOYMENT=local;     break ;;
+            2|server)    DEPLOYMENT=server;    break ;;
+            3|container) DEPLOYMENT=container; break ;;
+            *) warn "Pick 1, 2, or 3." ;;
         esac
     done
 fi
@@ -621,14 +650,20 @@ fi
 
 if [ ! -f "$ENV_FILE" ]; then
     info "Generating $ENV_FILE"
-    if [ "$DEPLOYMENT" = "local" ]; then
-        curl -fsSL "$TEMPLATE_BASE/local.env" -o "$ENV_FILE"
-    else
-        tmpl="$(mktemp)"
-        curl -fsSL "$TEMPLATE_BASE/server.env.tmpl" -o "$tmpl"
-        sed "s|__APP_HOST__|$APP_HOST|g" "$tmpl" > "$ENV_FILE"
-        rm -f "$tmpl"
-    fi
+    case "$DEPLOYMENT" in
+        local)
+            curl -fsSL "$TEMPLATE_BASE/local.env" -o "$ENV_FILE"
+            ;;
+        container)
+            curl -fsSL "$TEMPLATE_BASE/container.env" -o "$ENV_FILE"
+            ;;
+        server)
+            tmpl="$(mktemp)"
+            curl -fsSL "$TEMPLATE_BASE/server.env.tmpl" -o "$tmpl"
+            sed "s|__APP_HOST__|$APP_HOST|g" "$tmpl" > "$ENV_FILE"
+            rm -f "$tmpl"
+            ;;
+    esac
     ok "Wrote $ENV_FILE"
 else
     info ".env already exists — keeping it. Edit $ENV_FILE if you need to."
@@ -700,10 +735,13 @@ done
 
 step "Setup wizard"
 
-if [ "$DEPLOYMENT" = "local" ]; then
-    WIZARD_URL="http://localhost:1515/#/setup"
-else
+# ``container`` mode binds to 0.0.0.0 inside the container, but the user
+# browses from the docker host where the published port surfaces as
+# localhost — so the wizard URL is the same as ``local``.
+if [ "$DEPLOYMENT" = "server" ]; then
     WIZARD_URL="http://$APP_HOST:1515/#/setup"
+else
+    WIZARD_URL="http://localhost:1515/#/setup"
 fi
 
 cat <<EOF
