@@ -95,6 +95,11 @@ $ServerLogFile = Join-Path $OpenpaHome 'server.log'
 $BinDir        = Join-Path $OpenpaHome 'bin'
 $UvExe         = Join-Path $BinDir 'uv.exe'
 
+# Scope pip's cache under our install dir so `Remove-Item -Recurse $OpenpaHome`
+# (or -Reinstall) wipes any stale index responses. Without this, pip uses
+# %LOCALAPPDATA%\pip\Cache, which persists across reinstalls.
+$env:PIP_CACHE_DIR = Join-Path $OpenpaHome 'pip-cache'
+
 if (-not (Test-Path $OpenpaHome)) { New-Item -ItemType Directory -Path $OpenpaHome | Out-Null }
 
 # Templates fetched at install time. OPENPA_TEMPLATE_BASE override is for testing.

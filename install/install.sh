@@ -107,6 +107,13 @@ LOG_FILE="$OPENPA_HOME/install.log"
 BIN_DIR="$OPENPA_HOME/bin"
 UV_BIN="$BIN_DIR/uv"
 
+# Scope pip's HTTP + wheel cache under our install dir so a user-driven
+# `rm -rf ~/.openpa` (or --reinstall) can't leave behind a stale index
+# response that makes pip pin an old version. Without this, pip uses
+# ~/.cache/pip/, which persists across openpa reinstalls and has bitten
+# us when re-resolving the latest pre-release.
+export PIP_CACHE_DIR="$OPENPA_HOME/pip-cache"
+
 mkdir -p "$OPENPA_HOME"
 
 # Templates are fetched at install time so we don't need to ship them
@@ -702,12 +709,33 @@ profile name, and tool preferences, then activates the server.
   Wizard URL: ${BOLD}$WIZARD_URL${RESET}
   Backend:    http://${HOST:-127.0.0.1}:${PORT:-1112}
   Stop:       kill \$(cat $SERVER_PID_FILE)
-  Re-open:    openpa serve   ${DIM}(or "$VENV_DIR/bin/openpa" serve)${RESET}
-
-  ${BOLD}Tip:${RESET} open a new terminal so \`openpa\` is on your PATH,
-       or run: ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
 
 EOF
+
+# Activation guidance — front-and-center because bash can't update the
+# parent shell's PATH for us, and "command not found" right after install
+# is the most common user pitfall.
+if [ "$MODIFY_PATH" -eq 1 ]; then
+    cat <<EOF
+${BOLD}One last step — activate \`openpa\` in this shell:${RESET}
+
+    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+
+(New terminals pick this up automatically from your shell rc.)
+Then run: ${BOLD}openpa --help${RESET}
+
+EOF
+else
+    cat <<EOF
+${BOLD}One last step — put \`openpa\` on your PATH:${RESET}
+
+    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+
+To make this permanent, add the line above to your shell rc
+(e.g. ~/.bashrc, ~/.zshrc).
+
+EOF
+fi
 
 if [ "$NO_LAUNCH" -eq 0 ] && [ "$UNATTENDED" -eq 0 ]; then
     if command -v xdg-open >/dev/null 2>&1; then

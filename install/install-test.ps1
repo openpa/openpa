@@ -113,6 +113,11 @@ $ServerLogFile = Join-Path $OpenpaHome 'server.log'
 $BinDir        = Join-Path $OpenpaHome 'bin'
 $UvExe         = Join-Path $BinDir 'uv.exe'
 
+# Scope pip's cache under our install dir. Critical for the test installer:
+# rapid test-wheel iteration can otherwise trip over Test PyPI's index-page
+# caching at %LOCALAPPDATA%\pip\Cache, pinning pip to an older test build.
+$env:PIP_CACHE_DIR = Join-Path $OpenpaHome 'pip-cache'
+
 # Default PATH-mod behavior for the test installer: only modify PATH when
 # OPENPA_HOME is the canonical install dir, so a staging install at
 # ~/.openpa-test doesn't clobber prod's PATH entry. -ModifyPath /

@@ -114,6 +114,12 @@ LOG_FILE="$OPENPA_HOME/install.log"
 BIN_DIR="$OPENPA_HOME/bin"
 UV_BIN="$BIN_DIR/uv"
 
+# Scope pip's HTTP + wheel cache under our install dir. Critical for the
+# test installer: rapid test-wheel iteration trips over Test PyPI's
+# index-page caching at ~/.cache/pip/, which can keep pip pinned to an
+# older test build even after `rm -rf ~/.openpa`.
+export PIP_CACHE_DIR="$OPENPA_HOME/pip-cache"
+
 # Default MODIFY_PATH: only modify PATH for the canonical install dir, so
 # a staging install at ~/.openpa-test doesn't clobber prod's PATH entry.
 # --modify-path / --no-modify-path override this.
@@ -690,12 +696,30 @@ profile name, and tool preferences, then activates the server.
   Wizard URL: ${BOLD}$WIZARD_URL${RESET}
   Backend:    http://${HOST:-127.0.0.1}:${PORT:-1112}
   Stop:       kill \$(cat $SERVER_PID_FILE)
-  Re-open:    openpa serve   ${DIM}(or "$VENV_DIR/bin/openpa" serve)${RESET}
-
-  ${BOLD}Tip:${RESET} open a new terminal so \`openpa\` is on your PATH,
-       or run: ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
 
 EOF
+
+if [ "$MODIFY_PATH" -eq 1 ]; then
+    cat <<EOF
+${BOLD}One last step — activate \`openpa\` in this shell:${RESET}
+
+    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+
+(New terminals pick this up automatically from your shell rc.)
+Then run: ${BOLD}openpa --help${RESET}
+
+EOF
+else
+    cat <<EOF
+${BOLD}One last step — put \`openpa\` on your PATH:${RESET}
+
+    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+
+To make this permanent, add the line above to your shell rc
+(e.g. ~/.bashrc, ~/.zshrc).
+
+EOF
+fi
 
 if [ "$NO_LAUNCH" -eq 0 ] && [ "$UNATTENDED" -eq 0 ]; then
     if command -v xdg-open >/dev/null 2>&1; then
