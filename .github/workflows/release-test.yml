@@ -118,6 +118,19 @@ jobs:
       - name: Build wheel + sdist
         run: hatch build
 
+      # Catch the class of bug where a Python subpackage is accidentally
+      # gitignored out of the wheel: install the freshly built wheel into
+      # a throwaway venv and import the modules the CLI actually loads.
+      # If anything is missing this fails the release before publish.
+      - name: Smoke-test built wheel
+        run: |
+          python -m venv /tmp/smoke
+          . /tmp/smoke/bin/activate
+          pip install --upgrade pip
+          pip install dist/*.whl
+          python -c "import app, app.storage, app.storage.migrations"
+          openpa --help >/dev/null
+
       - name: Publish to Test PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

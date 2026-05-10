@@ -1,4 +1,3 @@
-migrations/
 .vscode/
 dump.rdb
 **/__pycache__
@@ -40,7 +39,6 @@ logs
 output.txt
 .client_storage
 .auth_client_storage*
-storage/
 .profiles/
 .remote_agents/
 .mcp_servers/
