@@ -73,6 +73,20 @@ wheels = [
 ]
 
 [[package]]
+name = "alembic"
+version = "1.18.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mako" },
+    { name = "sqlalchemy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/94/13/8b084e0f2efb0275a1d534838844926f798bd766566b1375174e2448cd31/alembic-1.18.4.tar.gz", hash = "sha256:cb6e1fd84b6174ab8dbb2329f86d631ba9559dd78df550b57804d607672cedbc", size = 2056725, upload-time = "2026-02-10T16:00:47.195Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/29/6533c317b74f707ea28f8d633734dbda2119bbadfc61b2f3640ba835d0f7/alembic-1.18.4-py3-none-any.whl", hash = "sha256:a5ed4adcf6d8a4cb575f3d759f071b03cd6e5c7618eb796cb52497be25bfe19a", size = 263893, upload-time = "2026-02-10T16:00:49.997Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1577,6 +1591,18 @@ wheels = [
 ]
 
 [[package]]
+name = "mako"
+version = "1.3.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/00/62/791b31e69ae182791ec67f04850f2f062716bbd205483d63a215f3e062d3/mako-1.3.12.tar.gz", hash = "sha256:9f778e93289bd410bb35daadeb4fc66d95a746f0b75777b942088b7fd7af550a", size = 400219, upload-time = "2026-04-28T19:01:08.512Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/b1/a0ec7a5a9db730a08daef1fdfb8090435b82465abbf758a596f0ea88727e/mako-1.3.12-py3-none-any.whl", hash = "sha256:8f61569480282dbf557145ce441e4ba888be453c30989f879f0d652e39f53ea9", size = 78521, upload-time = "2026-04-28T19:01:10.393Z" },
+]
+
+[[package]]
 name = "mammoth"
 version = "1.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2133,87 +2159,56 @@ wheels = [
 
 [[package]]
 name = "openpa"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "a2a-sdk", extra = ["http-server", "sql"] },
+    { name = "aiosqlite" },
+    { name = "alembic" },
+    { name = "anthropic" },
+    { name = "asyncpg" },
+    { name = "chromadb" },
+    { name = "dynaconf" },
+    { name = "fastmcp" },
+    { name = "google-api-python-client" },
+    { name = "google-auth" },
+    { name = "groq" },
     { name = "httpx", extra = ["http2"] },
     { name = "httpx-sse" },
+    { name = "jinja2" },
     { name = "jsonschema" },
     { name = "loguru" },
+    { name = "markitdown", extra = ["all"] },
+    { name = "openai" },
+    { name = "pandas" },
+    { name = "playwright" },
     { name = "prompt-toolkit" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "python-dotenv" },
+    { name = "python-multipart" },
+    { name = "python-telegram-bot" },
+    { name = "pywinpty", marker = "sys_platform == 'win32'" },
     { name = "pyyaml" },
+    { name = "qdrant-client" },
     { name = "qrcode" },
     { name = "rich" },
+    { name = "sentence-transformers" },
+    { name = "starlette" },
+    { name = "telethon" },
     { name = "tenacity" },
+    { name = "tiktoken" },
+    { name = "toml" },
     { name = "typer" },
+    { name = "uvicorn" },
+    { name = "watchdog" },
     { name = "websockets" },
 ]
 
 [package.optional-dependencies]
-all = [
-    { name = "a2a-sdk", extra = ["http-server", "sql"] },
-    { name = "aiosqlite" },
-    { name = "anthropic" },
-    { name = "asyncpg" },
-    { name = "chromadb" },
-    { name = "dynaconf" },
-    { name = "fastmcp" },
-    { name = "google-api-python-client" },
-    { name = "google-auth" },
-    { name = "groq" },
-    { name = "jinja2" },
-    { name = "markitdown", extra = ["all"] },
-    { name = "openai" },
-    { name = "pandas" },
-    { name = "playwright" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "python-multipart" },
-    { name = "python-telegram-bot" },
-    { name = "pywinpty", marker = "sys_platform == 'win32'" },
-    { name = "qdrant-client" },
-    { name = "sentence-transformers" },
-    { name = "starlette" },
-    { name = "telethon" },
-    { name = "tiktoken" },
-    { name = "toml" },
-    { name = "uvicorn" },
-    { name = "watchdog" },
-]
 dev = [
     { name = "autopep8" },
     { name = "pre-commit" },
-]
-server = [
-    { name = "a2a-sdk", extra = ["http-server", "sql"] },
-    { name = "aiosqlite" },
-    { name = "anthropic" },
-    { name = "asyncpg" },
-    { name = "chromadb" },
-    { name = "dynaconf" },
-    { name = "fastmcp" },
-    { name = "google-api-python-client" },
-    { name = "google-auth" },
-    { name = "groq" },
-    { name = "jinja2" },
-    { name = "markitdown", extra = ["all"] },
-    { name = "openai" },
-    { name = "pandas" },
-    { name = "playwright" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "python-multipart" },
-    { name = "python-telegram-bot" },
-    { name = "pywinpty", marker = "sys_platform == 'win32'" },
-    { name = "qdrant-client" },
-    { name = "sentence-transformers" },
-    { name = "starlette" },
-    { name = "telethon" },
-    { name = "tiktoken" },
-    { name = "toml" },
-    { name = "uvicorn" },
-    { name = "watchdog" },
 ]
 
 [package.dev-dependencies]
@@ -2223,52 +2218,52 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "a2a-sdk", extras = ["http-server", "sql"], marker = "extra == 'server'", specifier = ">=0.3.10" },
-    { name = "aiosqlite", marker = "extra == 'server'", specifier = ">=0.21.0" },
-    { name = "anthropic", marker = "extra == 'server'", specifier = ">=0.52.0" },
-    { name = "asyncpg", marker = "extra == 'server'", specifier = ">=0.29" },
+    { name = "a2a-sdk", extras = ["http-server", "sql"], specifier = ">=0.3.10,<1.0" },
+    { name = "aiosqlite", specifier = ">=0.21.0" },
+    { name = "alembic", specifier = ">=1.13.0" },
+    { name = "anthropic", specifier = ">=0.52.0" },
+    { name = "asyncpg", specifier = ">=0.29" },
     { name = "autopep8", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "chromadb", marker = "extra == 'server'", specifier = ">=0.5.0" },
-    { name = "dynaconf", marker = "extra == 'server'", specifier = ">=3.2.0" },
-    { name = "fastmcp", marker = "extra == 'server'", specifier = ">=2.12.5" },
-    { name = "google-api-python-client", marker = "extra == 'server'", specifier = ">=2.0.0" },
-    { name = "google-auth", marker = "extra == 'server'", specifier = ">=2.0.0" },
-    { name = "groq", marker = "extra == 'server'", specifier = ">=0.33.0" },
+    { name = "chromadb", specifier = ">=0.5.0" },
+    { name = "dynaconf", specifier = ">=3.2.0" },
+    { name = "fastmcp", specifier = ">=2.12.5" },
+    { name = "google-api-python-client", specifier = ">=2.0.0" },
+    { name = "google-auth", specifier = ">=2.0.0" },
+    { name = "groq", specifier = ">=0.33.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
     { name = "httpx-sse", specifier = ">=0.4" },
-    { name = "jinja2", marker = "extra == 'server'", specifier = ">=3.1.6" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "markitdown", extras = ["all"], marker = "extra == 'server'", specifier = ">=0.1.0" },
-    { name = "openai", marker = "extra == 'server'", specifier = ">=2.6.0" },
-    { name = "openpa", extras = ["server"], marker = "extra == 'all'" },
-    { name = "pandas", marker = "extra == 'server'", specifier = ">=3.0.1" },
-    { name = "playwright", marker = "extra == 'server'", specifier = ">=1.52.0" },
+    { name = "markitdown", extras = ["all"], specifier = ">=0.1.0" },
+    { name = "openai", specifier = ">=2.6.0" },
+    { name = "pandas", specifier = ">=3.0.1" },
+    { name = "playwright", specifier = ">=1.52.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.47" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'server'", specifier = ">=3.1" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.12.3" },
     { name = "pyjwt", specifier = ">=2.8.0" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
-    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.9" },
-    { name = "python-telegram-bot", marker = "extra == 'server'", specifier = ">=21.0" },
-    { name = "pywinpty", marker = "sys_platform == 'win32' and extra == 'server'", specifier = ">=2.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "python-telegram-bot", specifier = ">=21.0" },
+    { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "qdrant-client", marker = "extra == 'server'", specifier = ">=1.9.0" },
+    { name = "qdrant-client", specifier = ">=1.9.0" },
     { name = "qrcode", specifier = ">=7" },
     { name = "rich", specifier = ">=13" },
-    { name = "sentence-transformers", marker = "extra == 'server'", specifier = ">=3.0.0" },
-    { name = "starlette", marker = "extra == 'server'", specifier = ">=0.52.1" },
-    { name = "telethon", marker = "extra == 'server'", specifier = ">=1.36.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "starlette", specifier = ">=0.52.1" },
+    { name = "telethon", specifier = ">=1.36.0" },
     { name = "tenacity", specifier = ">=8.2.0" },
-    { name = "tiktoken", marker = "extra == 'server'", specifier = ">=0.12.0" },
-    { name = "toml", marker = "extra == 'server'", specifier = ">=0.10.2" },
+    { name = "tiktoken", specifier = ">=0.12.0" },
+    { name = "toml", specifier = ">=0.10.2" },
     { name = "typer", specifier = ">=0.12" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.41.0" },
-    { name = "watchdog", marker = "extra == 'server'", specifier = ">=4.0.0" },
+    { name = "uvicorn", specifier = ">=0.41.0" },
+    { name = "watchdog", specifier = ">=4.0.0" },
     { name = "websockets", specifier = ">=13.0" },
 ]
-provides-extras = ["server", "all", "dev"]
+provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]

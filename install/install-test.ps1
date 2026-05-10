@@ -519,26 +519,34 @@ if ($Reinstall -and (Test-Path $VenvDir)) {
 $VenvPip = Join-Path $VenvDir 'Scripts\pip.exe'
 $VenvOpenpa = Join-Path $VenvDir 'Scripts\openpa.exe'
 
-# Test installs use Test PyPI as the primary index and prod PyPI as a
-# fallback (transitive deps like anthropic / openai / pandas only live
-# on prod PyPI). ``--pre`` is required because the test wheel is a
-# PEP 440 pre-release (e.g. 0.1.5.dev1).
-$PipTestFlags = @(
-    '--index-url', $TestPyPIIndexUrl,
-    '--extra-index-url', $ProdPyPIExtraUrl,
-    '--pre'
-)
+# Resolve the latest openpa test wheel directly from Test PyPI's simple
+# index, then pip-install that URL with prod PyPI as the only resolver
+# for transitive deps. See install-test.sh for the rationale - Test PyPI
+# is polluted with broken stubs (e.g. uppercase 'FASTAPI-1.0.tar.gz')
+# and pre-release noise that beats prod stables once --pre is enabled.
+Write-Info "Locating latest openpa test wheel"
+$indexHtml = (Invoke-WebRequest -UseBasicParsing -Uri 'https://test.pypi.org/simple/openpa/').Content
+$wheelUrls = [regex]::Matches($indexHtml, 'https://[^"]*openpa-[^"]*-py3-none-any\.whl') |
+    ForEach-Object { $_.Value } | Sort-Object -Unique
+$OpenpaWheelUrl = $wheelUrls |
+    Sort-Object -Property @{ Expression = { ($_ -split '/')[-1] } } |
+    Select-Object -Last 1
+if (-not $OpenpaWheelUrl) {
+    Write-Err2 "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+    exit 1
+}
+Write-Ok ("Test wheel: " + (Split-Path $OpenpaWheelUrl -Leaf))
 
 if (Test-Path $VenvDir) {
-    Write-Info "Existing install detected at $VenvDir — upgrading in place."
+    Write-Info "Existing install detected at $VenvDir - upgrading in place."
     & $VenvPip install --upgrade pip *>> $LogFile
-    & $VenvPip install @PipTestFlags --upgrade openpa *>> $LogFile
+    & $VenvPip install --upgrade $OpenpaWheelUrl *>> $LogFile
 } else {
     Write-Info "Creating venv at $VenvDir"
     & $Python -m venv $VenvDir *>> $LogFile
     Write-Info "Installing openpa from Test PyPI (this may take a few minutes)"
     & $VenvPip install --upgrade pip *>> $LogFile
-    & $VenvPip install @PipTestFlags openpa *>> $LogFile
+    & $VenvPip install $OpenpaWheelUrl *>> $LogFile
 }
 
 $InstalledVersion = ''

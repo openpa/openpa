@@ -537,26 +537,47 @@ if [ "$REINSTALL" -eq 1 ] && [ -d "$VENV_DIR" ]; then
     rm -rf "$VENV_DIR"
 fi
 
-# Test installs use Test PyPI as the primary index and prod PyPI as a
-# fallback (transitive deps like anthropic / openai / pandas only live on
-# prod PyPI). ``--pre`` is required because the test wheel is a PEP 440
-# pre-release (e.g. 0.1.5.dev1).
-PIP_TEST_FLAGS=(
-    --index-url "$TEST_PYPI_INDEX_URL"
-    --extra-index-url "$PROD_PYPI_EXTRA_INDEX_URL"
-    --pre
-)
+# Resolve the latest openpa test wheel directly from Test PyPI's simple
+# index, then pip-install that URL with prod PyPI as the only resolver
+# for transitive deps.
+#
+# We deliberately do NOT use ``--index-url <test_pypi> --extra-index-url
+# <prod_pypi> --pre`` to install openpa, because Test PyPI is a public
+# free-for-all polluted with broken stubs and stale pre-releases that
+# match openpa's transitive constraints. Two examples we hit on
+# v0.1.6.dev4:
+#
+#   - ``FASTAPI-1.0.tar.gz`` (uppercase, 2.5 KB stub with a missing
+#     DESCRIPTION.txt) satisfies ``fastapi>=0.115.2`` and crashes the
+#     setuptools build with FileNotFoundError.
+#   - ``httpx-1.0.dev3`` outranks prod PyPI's stable ``httpx 0.28`` once
+#     ``--pre`` is on, even though we only wanted pre-release semantics
+#     for openpa itself.
+#
+# Pinning openpa to a direct wheel URL sidesteps both: pip never asks
+# Test PyPI for transitive deps, so the pollution can't reach us.
+info "Locating latest openpa test wheel"
+OPENPA_WHEEL_URL="$(curl -fsSL https://test.pypi.org/simple/openpa/ \
+    | grep -oE 'https://[^"]*openpa-[^"]*-py3-none-any\.whl' \
+    | awk -F/ '{print $NF, $0}' \
+    | sort -V \
+    | awk 'END {print $2}')"
+if [ -z "$OPENPA_WHEEL_URL" ]; then
+    err "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+    exit 1
+fi
+ok "Test wheel: $(basename "$OPENPA_WHEEL_URL")"
 
 if [ -d "$VENV_DIR" ]; then
     info "Existing install detected at $VENV_DIR — upgrading in place."
     "$VENV_DIR/bin/pip" install --upgrade pip >>"$LOG_FILE" 2>&1
-    "$VENV_DIR/bin/pip" install "${PIP_TEST_FLAGS[@]}" --upgrade openpa >>"$LOG_FILE" 2>&1
+    "$VENV_DIR/bin/pip" install --upgrade "$OPENPA_WHEEL_URL" >>"$LOG_FILE" 2>&1
 else
     info "Creating venv at $VENV_DIR"
     "$PYTHON" -m venv "$VENV_DIR" >>"$LOG_FILE" 2>&1
     info "Installing openpa from Test PyPI (this may take a few minutes)"
     "$VENV_DIR/bin/pip" install --upgrade pip >>"$LOG_FILE" 2>&1
-    "$VENV_DIR/bin/pip" install "${PIP_TEST_FLAGS[@]}" openpa >>"$LOG_FILE" 2>&1
+    "$VENV_DIR/bin/pip" install "$OPENPA_WHEEL_URL" >>"$LOG_FILE" 2>&1
 fi
 
 INSTALLED_VERSION="$("$VENV_DIR/bin/openpa" version 2>/dev/null | awk '{print $2}' || echo "?")"
