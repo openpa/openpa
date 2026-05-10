@@ -35,7 +35,11 @@ dependencies = [
     "pydantic>=2.12.3",
     "jsonschema>=4.23.0",
     "tenacity>=8.2.0",
-    "starlette>=0.52.1",
+    # Starlette 1.0 removed the `on_startup` / `on_shutdown` kwargs in
+    # favor of the lifespan async context manager. app/server.py still
+    # passes on_startup=[_on_startup], which TypeErrors out under 1.x.
+    # Pin <1.0 until server.py migrates to lifespan().
+    "starlette>=0.52.1,<1.0",
     "uvicorn>=0.41.0",
     "python-multipart>=0.0.9",
     # a2a-sdk 1.0 removed `a2a.server.apps` and `A2AStarletteApplication`
