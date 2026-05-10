@@ -4,15 +4,8 @@ Personal AI Assistant — server + CLI.
 
 ## Install
 
-OpenPA is published as a single PyPI package with optional extras so you can
-install just the slim CLI client or the full server.
-
 ```bash
-# Slim CLI (~30 MB) — talks to a remote OpenPA server over HTTP/SSE/WebSocket.
 pip install openpa
-
-# Server stack (full install, includes uvicorn / chromadb / playwright / etc).
-pip install "openpa[server]"
 ```
 
 After install, the `opa` command is on your PATH. Run `opa --help` for the
@@ -56,19 +49,12 @@ opa proc attach <pid>        # attach to a long-running PTY process
 ## Development setup
 
 ```bash
-# Install everything for local development (CLI + server + dev tools).
-uv sync --all-extras --all-groups
+# Install everything for local development.
+uv sync --all-groups
 
 # Now you can run both the server and the CLI from the project venv:
 uv run opa serve          # in one terminal
 uv run opa me             # in another, after exporting OPENPA_TOKEN
-```
-
-If you only want the slim install in your dev venv (for example to test the
-CLI-only experience):
-
-```bash
-uv sync                   # installs only the [project.dependencies] (CLI)
 ```
 
 ## DBeaver SQLite Configuration

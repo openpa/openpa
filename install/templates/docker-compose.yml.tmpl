@@ -21,8 +21,14 @@ services:
       context: ../..
       dockerfile: Dockerfile.desktop
       args:
-        OPENPA_PIP_SPEC: "openpa[server]==${OPENPA_VERSION}"
+        OPENPA_PIP_SPEC: "openpa==${OPENPA_VERSION}"
         OPENPA_UI_REF: ${OPENPA_UI_REF:-main}
+        # Empty when unset → Dockerfile falls back to default PyPI. The
+        # test installer writes ``OPENPA_PIP_INDEX_URL`` and
+        # ``OPENPA_PIP_EXTRA_INDEX_URL`` into the sibling .env so the
+        # build resolves from Test PyPI; prod installs leave them unset.
+        OPENPA_PIP_INDEX_URL: ${OPENPA_PIP_INDEX_URL:-}
+        OPENPA_PIP_EXTRA_INDEX_URL: ${OPENPA_PIP_EXTRA_INDEX_URL:-}
     ports:
       - "${API_PORT:-1112}:1112"
       - "${SPA_PORT:-1515}:1515"

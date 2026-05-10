@@ -1,0 +1,132 @@
+# Backend test-release workflow.
+#
+# Trigger: push a tag matching ``v*-test*`` (e.g., ``v0.1.5-test1``).
+# Unlike the prod ``release.yml`` workflow, this one:
+#   1. Rewrites ``app/__version__.py`` in-place to a PEP 440 dev version
+#      derived from the tag suffix (``v0.1.5-test1`` → ``0.1.5.dev1``).
+#      The rewrite is in-CI only, never committed.
+#   2. Builds the openpa-ui SPA + the wheel/sdist exactly like prod.
+#   3. Publishes to **Test PyPI** (``test.pypi.org``), not production PyPI.
+#   4. Uploads the dist as workflow artifacts so we can download and
+#      inspect the exact bytes that went to Test PyPI.
+#   5. **Does NOT create a GitHub Release** — the Releases page only
+#      advertises real prod versions.
+#
+# Required repo secrets:
+#   TEST_PYPI_API_TOKEN  — created at https://test.pypi.org/manage/account/token/.
+#                          Scoped to the openpa project once it exists,
+#                          otherwise account-wide for the very first run.
+
+name: release-test
+
+on:
+  push:
+    tags:
+      - "v*-test*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Test tag to release (e.g. v0.1.5-test1)"
+        required: true
+        type: string
+
+jobs:
+  release-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out openpa
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Map ``vMAJOR.MINOR.PATCH-testN`` → ``MAJOR.MINOR.PATCH.devN`` and
+      # rewrite app/__version__.py so hatch picks it up. PEP 440 ``.devN``
+      # is the canonical pre-release suffix; pip needs ``--pre`` to install
+      # it, which the test installers pass.
+      - name: Compute test version
+        id: version
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          python <<'PY'
+          import os
+          import re
+          import sys
+
+          tag = os.environ["TAG"]
+          m = re.match(r"^v(\d+\.\d+\.\d+)-test(\d+)$", tag)
+          if not m:
+              sys.exit(
+                  f"Tag {tag!r} does not match v<major>.<minor>.<patch>-test<N>; "
+                  "refusing to publish."
+              )
+          base, dev = m.group(1), m.group(2)
+          version = f"{base}.dev{dev}"
+
+          path = "app/__version__.py"
+          src = open(path).read()
+          new = re.sub(
+              r'^__version__\s*=\s*"[^"]*"',
+              f'__version__ = "{version}"',
+              src,
+              count=1,
+              flags=re.M,
+          )
+          if new == src:
+              sys.exit(f"Failed to rewrite __version__ in {path}")
+          open(path, "w").write(new)
+          print(f"Rewrote __version__ → {version}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"value={version}\n")
+          PY
+
+      # Same SPA build step as prod. Default ref is main; override via the
+      # ``OPENPA_UI_REF`` repo variable if you need to pin to a UI tag.
+      - name: Build openpa-ui SPA
+        env:
+          OPENPA_UI_REF: ${{ vars.OPENPA_UI_REF || 'main' }}
+        run: bash scripts/build_ui.sh
+
+      - name: Install hatch
+        run: pip install --upgrade hatch
+
+      - name: Build wheel + sdist
+        run: hatch build
+
+      - name: Publish to Test PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          skip-existing: true
+
+      # Saves the dist on the workflow run page so testers can download
+      # the exact wheel/sdist that hit Test PyPI without going through pip.
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpa-${{ steps.version.outputs.value }}-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

@@ -19,6 +19,42 @@ curl -fsSL https://openpa.ai/install.sh | bash
 iwr -useb https://openpa.ai/install.ps1 | iex
 ```
 
+## Pre-release / test builds
+
+To validate a release candidate end-to-end before it lands on production
+PyPI, use the test installers. They install from
+[Test PyPI](https://test.pypi.org) and are wired up to the
+`release-test` GitHub workflow (which fires on tags matching `v*-test*`,
+e.g. `v0.1.5-test1`).
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://openpa.ai/install-test.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://openpa.ai/install-test.ps1 | iex
+```
+
+The test installers behave identically to the production ones (same
+flags, same prompts, both modes supported) but with two differences:
+
+- **Pip index** — native installs use
+  `--index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ --pre openpa`.
+  Docker installs forward the same URLs as build args via
+  `~/.openpa/docker/.env`.
+- **Working directory** — test installs share `~/.openpa` with the
+  production installer. Running `install-test.sh` on a host that
+  already has prod `openpa` installed **will upgrade or downgrade the
+  existing install to the test version**. To keep them side-by-side,
+  set `OPENPA_WORKING_DIR=~/.openpa-test` before running.
+
+Test versions live only on Test PyPI — they are **not** announced on
+the GitHub Releases page.
+
 ## Two install modes
 
 The scripts detect Docker and ask which mode you want:
@@ -26,7 +62,7 @@ The scripts detect Docker and ask which mode you want:
 | Mode | What you get | When to pick it |
 |---|---|---|
 | **docker** *(recommended)* | The agent runs inside a sandboxed VNC-accessible XFCE desktop, alongside Postgres and Qdrant. You can observe what the agent is doing at `http://<host>:6080/vnc.html`. | Anytime Docker is available — the agent is isolated from your host, and the bundle includes everything in one shot. |
-| **native** | A Python venv at `~/.openpa/venv` with `openpa[server]` and SQLite. The agent shares your desktop and home directory. | Docker isn't available, or you want a minimal install without containers. |
+| **native** | A Python venv at `~/.openpa/venv` with `openpa` and SQLite. The agent shares your desktop and home directory. | Docker isn't available, or you want a minimal install without containers. |
 
 ## What docker mode does
 
@@ -58,7 +94,7 @@ docker compose down -v             # stop and delete all data
 
 1. Detect Python 3.13+ on PATH.
 2. Ask deployment type (local / server) and host.
-3. Create venv at `~/.openpa/venv` and `pip install openpa[server]`. The
+3. Create venv at `~/.openpa/venv` and `pip install openpa`. The
    wheel ships the prebuilt openpa-ui SPA inside it (see
    [`scripts/build_ui.sh`](../scripts/build_ui.sh)), so no separate UI
    install is needed.
@@ -111,7 +147,7 @@ to wipe and start fresh.
 
 | Path | Purpose |
 |---|---|
-| `~/.openpa/venv/`                     | Python virtualenv with `openpa[server]` (SPA included). |
+| `~/.openpa/venv/`                     | Python virtualenv with `openpa` (SPA included). |
 | `~/.openpa/.env`                      | Backend env vars. |
 | `~/.openpa/bootstrap.toml`            | DB-provider selection. |
 | `~/.openpa/install.log`               | Output of `pip install` and `opa db upgrade`. |
@@ -148,7 +184,7 @@ by the daemon and survives logout.
 
 ## Building the SPA into the wheel
 
-The `openpa[server]` wheel ships the prebuilt openpa-ui SPA at
+The `openpa` wheel ships the prebuilt openpa-ui SPA at
 `app/static/ui/` so `opa serve` can serve it on `:1515` without a
 separate UI install. CI runs [`scripts/build_ui.sh`](../scripts/build_ui.sh)
 before `hatch build`; you can run it locally too:

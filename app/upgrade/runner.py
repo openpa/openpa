@@ -213,7 +213,7 @@ def acquire_lock_or_recover(callback: ProgressCallback | None = None) -> None:
 
             _restore(Path(backup_path))
         if previous_version:
-            _pip_install(f"openpa[server]=={previous_version}", callback)
+            _pip_install(f"openpa=={previous_version}", callback)
     finally:
         lock.unlink(missing_ok=True)
 
@@ -272,8 +272,8 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
         ))
 
         # 3. Install.
-        _emit(callback, UpgradeEvent("install", f"pip install openpa[server]=={release.version}"))
-        _pip_install(f"openpa[server]=={release.version}", callback)
+        _emit(callback, UpgradeEvent("install", f"pip install openpa=={release.version}"))
+        _pip_install(f"openpa=={release.version}", callback)
 
         # 4. Migrate. We shell out to a fresh ``opa db upgrade`` rather
         # than calling the in-process migration helper because pip just
@@ -309,7 +309,7 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
             if backup_path and Path(backup_path).is_file():
                 from app.storage.backup import restore as _restore
                 _restore(backup_path)
-            _pip_install(f"openpa[server]=={CURRENT_VERSION}", callback)
+            _pip_install(f"openpa=={CURRENT_VERSION}", callback)
         except Exception as e2:  # noqa: BLE001
             _emit(callback, UpgradeEvent(
                 "rollback",

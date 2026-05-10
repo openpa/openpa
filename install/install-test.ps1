@@ -1,17 +1,24 @@
 <#
 .SYNOPSIS
-    OpenPA installer for Windows (PowerShell).
+    OpenPA TEST installer for Windows (PowerShell).
 
 .DESCRIPTION
-    The Phase 2 installer. Native install only — Docker mode is detected
-    and recommended, but the actual containerized bundle ships in Phase 3.
+    Identical to install.ps1 except it pulls pre-release builds from
+    Test PyPI (https://test.pypi.org) instead of production PyPI. Use
+    this to validate a release candidate end-to-end before cutting a
+    real tag.
+
+    Heads up: this installer shares ~/.openpa with the production
+    installer. Running it on a host that already has prod openpa
+    installed WILL upgrade/downgrade that install to the test version.
+    Set $env:OPENPA_WORKING_DIR=~/.openpa-test to keep them separate.
 
 .EXAMPLE
-    iwr -useb https://openpa.ai/install.ps1 | iex
+    iwr -useb https://openpa.ai/install-test.ps1 | iex
 
 .EXAMPLE
-    iwr -useb https://openpa.ai/install.ps1 -OutFile install.ps1
-    .\install.ps1 -Deployment server -Host 100.120.175.90
+    iwr -useb https://openpa.ai/install-test.ps1 -OutFile install-test.ps1
+    .\install-test.ps1 -Deployment server -AppHost 100.120.175.90
 
 .PARAMETER Deployment
     'local' or 'server'. Skips the deployment-type prompt.
@@ -42,10 +49,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Pipeline-chain operators (`&&`, `||`) and ternaries are not available in
-# Windows PowerShell 5.1. We stick to explicit if/else throughout so the
-# script works on the default PS that ships with Windows 10/11.
-
 # ── logging helpers ───────────────────────────────────────────────────────
 
 function Write-Info  { param($Msg) Write-Host "==> $Msg"      -ForegroundColor Cyan }
@@ -62,6 +65,15 @@ if ($Unattended -and $Deployment -eq 'server' -and -not $AppHost) {
     exit 2
 }
 
+# ── test-pypi config ──────────────────────────────────────────────────────
+
+# Pip index URLs used for the native install and forwarded to the docker
+# build via the docker-compose .env file. Test PyPI is the primary index
+# (so ``pip install openpa`` resolves the test wheel); production PyPI is
+# the fallback for transitive deps that don't live on Test PyPI.
+$TestPyPIIndexUrl  = 'https://test.pypi.org/simple/'
+$ProdPyPIExtraUrl  = 'https://pypi.org/simple/'
+
 # ── paths ─────────────────────────────────────────────────────────────────
 
 $OpenpaHome = if ($env:OPENPA_WORKING_DIR) { $env:OPENPA_WORKING_DIR } else { Join-Path $env:USERPROFILE '.openpa' }
@@ -74,7 +86,6 @@ $ServerLogFile = Join-Path $OpenpaHome 'server.log'
 
 if (-not (Test-Path $OpenpaHome)) { New-Item -ItemType Directory -Path $OpenpaHome | Out-Null }
 
-# Templates fetched at install time. OPENPA_TEMPLATE_BASE override is for testing.
 $TemplateBase = if ($env:OPENPA_TEMPLATE_BASE) {
     $env:OPENPA_TEMPLATE_BASE
 } else {
@@ -84,7 +95,9 @@ $TemplateBase = if ($env:OPENPA_TEMPLATE_BASE) {
 # ── banner ────────────────────────────────────────────────────────────────
 
 Write-Host ""
-Write-Host "OpenPA installer" -ForegroundColor White
+Write-Host "OpenPA TEST installer" -ForegroundColor Yellow
+Write-Host "Installs from $TestPyPIIndexUrl" -ForegroundColor DarkGray
+Write-Host "Targets $OpenpaHome (will overwrite an existing install in this directory)" -ForegroundColor DarkGray
 Write-Host "Logs: $LogFile" -ForegroundColor DarkGray
 Write-Host ""
 
@@ -95,8 +108,6 @@ Write-Step "Environment"
 $Arch = $env:PROCESSOR_ARCHITECTURE
 Write-Ok "OS:   Windows ($Arch)"
 
-# Locate a Python 3.13+ interpreter. The Windows launcher ``py -3.13`` is
-# the most reliable lookup; fall back to whatever ``python`` resolves to.
 $Python = $null
 $candidates = @(
     @{ Cmd = 'py'; Args = @('-3.13','-c','import sys; print("%d.%d" % sys.version_info[:2])') },
@@ -108,8 +119,6 @@ foreach ($c in $candidates) {
             $ver = & $c.Cmd @($c.Args) 2>$null
             if ($ver -match '^3\.(1[3-9]|[2-9]\d)$') {
                 if ($c.Cmd -eq 'py') {
-                    # Resolve the launcher to the actual exe so subprocesses
-                    # don't depend on the launcher's heuristics.
                     $Python = (& py -3.13 -c "import sys; print(sys.executable)").Trim()
                 } else {
                     $Python = (Get-Command python).Source
@@ -180,8 +189,6 @@ if ($AppHost) { Write-Ok "Host: $AppHost" }
 
 # ── mode (docker vs native) ──────────────────────────────────────────────
 
-# Default: docker if available, native otherwise. The agent runs in a
-# sandboxed VNC desktop by default — opt out via -Mode native.
 if (-not $Mode) {
     if ($HasDocker) {
         if ($Unattended) {
@@ -191,7 +198,7 @@ if (-not $Mode) {
             Write-Host "How do you want to run OpenPA?" -ForegroundColor White
             Write-Host "  1) docker  - sandboxed VNC desktop with bundled Postgres + Qdrant"
             Write-Host "               (recommended; the agent gets its own GUI environment)"
-            Write-Host "  2) native  - Python venv at %USERPROFILE%\.openpa\venv with SQLite"
+            Write-Host "  2) native  - Python venv at $OpenpaHome\venv with SQLite"
             Write-Host "               (simpler, but the agent shares your desktop)"
             while (-not $Mode) {
                 $choice = Read-Host "Choice [1]"
@@ -218,10 +225,6 @@ if ($Mode -eq 'docker' -and -not $HasDocker) {
 
 # ── docker install ────────────────────────────────────────────────────────
 
-# Random secret generator. ``RNGCryptoServiceProvider`` would be the
-# pedantically-correct choice, but ``Get-Random`` with a wide enough
-# alphabet is sufficient for non-crypto-grade install-time secrets that
-# the user controls and can rotate.
 function New-Secret {
     -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
 }
@@ -276,6 +279,11 @@ if ($Mode -eq 'docker') {
             -replace '__SETUP_WIZARD_ENV__', $DockerWizardEnv `
             -replace '__PG_PASSWORD__',    $PgPwd `
             -replace '__VNC_PASSWORD__',   $VncPwd
+        # Append the Test PyPI index URLs so docker-compose forwards them
+        # to the Dockerfile's pip install step. These keys are only
+        # written by the test installer; the prod installer leaves them
+        # unset (the Dockerfile treats empty as "use default PyPI").
+        $rendered += "`nOPENPA_PIP_INDEX_URL=$TestPyPIIndexUrl`nOPENPA_PIP_EXTRA_INDEX_URL=$ProdPyPIExtraUrl`n"
         $rendered | Set-Content -Path $EnvDocker -Encoding utf8
 
         Write-Ok "Wrote $ComposeFile + .env"
@@ -340,13 +348,12 @@ profile name, and tool preferences, then activates the server.
         Start-Process $WizardUrl
     }
 
-    Write-Ok "Done. Welcome to OpenPA."
+    Write-Ok "Done. Welcome to OpenPA (test build)."
     exit 0
 }
 
 # ── native install ────────────────────────────────────────────────────────
 
-# (Reaching here implies Mode = native. The Docker path exited above.)
 if (-not $Python) {
     Write-Err2 "Python 3.13 or newer is required for native mode but was not found."
     Write-Host ""
@@ -370,22 +377,32 @@ if ($Reinstall -and (Test-Path $VenvDir)) {
 $VenvPip = Join-Path $VenvDir 'Scripts\pip.exe'
 $VenvOpa = Join-Path $VenvDir 'Scripts\opa.exe'
 
+# Test installs use Test PyPI as the primary index and prod PyPI as a
+# fallback (transitive deps like anthropic / openai / pandas only live
+# on prod PyPI). ``--pre`` is required because the test wheel is a
+# PEP 440 pre-release (e.g. 0.1.5.dev1).
+$PipTestFlags = @(
+    '--index-url', $TestPyPIIndexUrl,
+    '--extra-index-url', $ProdPyPIExtraUrl,
+    '--pre'
+)
+
 if (Test-Path $VenvDir) {
     Write-Info "Existing install detected at $VenvDir — upgrading in place."
     & $VenvPip install --upgrade pip *>> $LogFile
-    & $VenvPip install --upgrade openpa *>> $LogFile
+    & $VenvPip install @PipTestFlags --upgrade openpa *>> $LogFile
 } else {
     Write-Info "Creating venv at $VenvDir"
     & $Python -m venv $VenvDir *>> $LogFile
-    Write-Info "Installing openpa from PyPI (this may take a few minutes)"
+    Write-Info "Installing openpa from Test PyPI (this may take a few minutes)"
     & $VenvPip install --upgrade pip *>> $LogFile
-    & $VenvPip install openpa *>> $LogFile
+    & $VenvPip install @PipTestFlags openpa *>> $LogFile
 }
 
 $InstalledVersion = ''
 try { $InstalledVersion = (& $VenvOpa version 2>$null).Split(' ')[-1] } catch {}
 if (-not $InstalledVersion) { $InstalledVersion = '?' }
-Write-Ok "Installed openpa $InstalledVersion"
+Write-Ok "Installed openpa $InstalledVersion (test build)"
 
 # ── env file ──────────────────────────────────────────────────────────────
 
@@ -395,8 +412,6 @@ if (-not (Test-Path $EnvFile)) {
         Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/local.env" -OutFile $EnvFile
     } else {
         $tmpl = Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/server.env.tmpl"
-        # __APP_HOST__ is the only placeholder; the user-provided host gets
-        # substituted as-is (it was validated above).
         ($tmpl.Content -replace '__APP_HOST__', $AppHost) | Set-Content -Path $EnvFile -Encoding utf8
     }
     Write-Ok "Wrote $EnvFile"
@@ -429,9 +444,6 @@ Write-Ok "Database at revision $Revision"
 
 Write-Step "Starting OpenPA"
 
-# Load .env into the process so HOST/PORT propagate to the child without
-# us needing a TOML parser. Keys that look like KEY=VALUE are honored;
-# anything else is ignored.
 $ParsedEnv = @{}
 Get-Content $EnvFile | ForEach-Object {
     $line = $_.Trim()
@@ -464,7 +476,6 @@ if (-not $running) {
     Write-Ok "OpenPA started (pid $($proc.Id), logs: $ServerLogFile)"
 }
 
-# Wait briefly for the HTTP listener so the wizard URL doesn't 404.
 $healthUrl = "http://${ServerHost}:${ServerPort}/health"
 for ($i = 0; $i -lt 10; $i++) {
     try {
@@ -500,4 +511,4 @@ if (-not $NoLaunch -and -not $Unattended) {
     Start-Process $WizardUrl
 }
 
-Write-Ok "Done. Welcome to OpenPA."
+Write-Ok "Done. Welcome to OpenPA (test build)."

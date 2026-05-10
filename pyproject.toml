@@ -20,7 +20,7 @@ classifiers = [
     "Environment :: Console",
 ]
 dependencies = [
-    # CLI baseline — installed by `pip install openpa`
+    # Runtime dependencies for the OpenPA server and CLI.
     "typer>=0.12",
     "httpx[http2]>=0.27",
     "httpx-sse>=0.4",
@@ -31,18 +31,10 @@ dependencies = [
     "PyJWT>=2.8.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.1.1",
-    # Shared utilities used by both CLI and server during the migration.
-    # Audited at Phase 5 — anything CLI doesn't actually import can move to
-    # the [server] extra at that point.
     "loguru>=0.7.3",
     "pydantic>=2.12.3",
     "jsonschema>=4.23.0",
     "tenacity>=8.2.0",
-]
-
-[project.optional-dependencies]
-server = [
-    # Heavy server-only stack — installed by `pip install openpa[server]`
     "starlette>=0.52.1",
     "uvicorn>=0.41.0",
     "python-multipart>=0.0.9",
@@ -72,7 +64,8 @@ server = [
     "dynaconf>=3.2.0",
     "toml>=0.10.2",
 ]
-all = ["openpa[server]"]
+
+[project.optional-dependencies]
 dev = [
     "autopep8>=2.0.0",
     "pre-commit>=3.6.0",

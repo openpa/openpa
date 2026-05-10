@@ -6,9 +6,6 @@ Wraps :mod:`app.upgrade.runner`. Two subcommands:
                      available without making any changes.
   upgrade apply      Run the upgrade flow. Prompts for confirmation
                      unless ``--yes`` is passed.
-
-Both require the ``[server]`` extra (pip, alembic, sqlalchemy, the
-backup helper). The slim CLI install errors out gracefully.
 """
 
 from __future__ import annotations
@@ -22,19 +19,6 @@ upgrade_app = typer.Typer(
     no_args_is_help=False,
     invoke_without_command=True,
 )
-
-
-def _require_server_extra():
-    try:
-        from app.upgrade import runner  # noqa: F401
-        return runner
-    except ImportError as e:
-        typer.echo(
-            "`opa upgrade` requires the server extra.\n"
-            "Install with:  pip install 'openpa[server]'",
-            err=True,
-        )
-        raise typer.Exit(code=1) from e
 
 
 def _print_event(event) -> None:
@@ -59,7 +43,7 @@ def _root(ctx: typer.Context) -> None:
 @upgrade_app.command("check")
 def upgrade_check() -> None:
     """Check whether a newer version is available without changing anything."""
-    runner = _require_server_extra()
+    from app.upgrade import runner
     release, status = runner.check(callback=_print_event)
     if status == "available" and release is not None:
         typer.echo(f"\nRun `opa upgrade apply` to install {release.version}.")
@@ -78,7 +62,7 @@ def upgrade_apply(
     ),
 ) -> None:
     """Apply the upgrade. Stops on rollback if any step fails."""
-    runner = _require_server_extra()
+    from app.upgrade import runner
 
     def _confirm(release) -> bool:
         if yes:

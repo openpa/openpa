@@ -2,10 +2,9 @@
 
 Unlike most ``opa`` subcommands these don't go through the HTTP API; they
 operate on the database directly via :mod:`app.storage.migrations` and
-:mod:`app.storage.backup`. That means they need the ``[server]`` extra to
-be installed (Alembic, the SQLAlchemy bindings, the provider stack), and
-they typically run with the OpenPA service stopped — Alembic and SQLite's
-write-ahead log don't appreciate concurrent writers.
+:mod:`app.storage.backup`. They typically run with the OpenPA service
+stopped — Alembic and SQLite's write-ahead log don't appreciate
+concurrent writers.
 
 Subcommands:
 
@@ -33,24 +32,10 @@ db_app = typer.Typer(
 )
 
 
-def _require_server_extra():
-    """Import the migration helpers, surfacing a friendly error on failure."""
-    try:
-        from app.storage import migrations  # noqa: F401
-        return migrations
-    except ImportError as e:
-        typer.echo(
-            "`opa db` requires the server extra.\n"
-            "Install with:  pip install 'openpa[server]'",
-            err=True,
-        )
-        raise typer.Exit(code=1) from e
-
-
 @db_app.command("current")
 def db_current() -> None:
     """Show the current Alembic revision (or 'none' if the DB is unstamped)."""
-    migrations = _require_server_extra()
+    from app.storage import migrations
     rev = migrations.current_revision()
     typer.echo(rev or "none")
 
@@ -58,7 +43,7 @@ def db_current() -> None:
 @db_app.command("heads")
 def db_heads() -> None:
     """Show the head revision(s) shipped by this build."""
-    migrations = _require_server_extra()
+    from app.storage import migrations
     for rev in migrations.heads():
         typer.echo(rev)
 
@@ -71,7 +56,7 @@ def db_upgrade(
     ),
 ) -> None:
     """Apply migrations forward to ``target``."""
-    migrations = _require_server_extra()
+    from app.storage import migrations
     migrations.upgrade(target)
     typer.echo(f"Upgraded to {migrations.current_revision() or '<none>'}")
 
@@ -81,7 +66,7 @@ def db_downgrade(
     target: str = typer.Argument(..., help="Target revision (e.g., '-1' or a revision id)."),
 ) -> None:
     """Roll back migrations to ``target``."""
-    migrations = _require_server_extra()
+    from app.storage import migrations
     migrations.downgrade(target)
     typer.echo(f"Downgraded to {migrations.current_revision() or '<none>'}")
 
@@ -99,7 +84,7 @@ def db_stamp(
     revision. Mis-stamping leads to silent corruption on the next migration,
     so this is generally only run by the upgrader during recovery.
     """
-    migrations = _require_server_extra()
+    from app.storage import migrations
     migrations.stamp(target)
     typer.echo(f"Stamped at {migrations.current_revision() or '<none>'}")
 
@@ -119,15 +104,7 @@ def db_backup(
     ``pg_dump`` outputs. Either way the output path is printed on success
     so the upgrader can capture it.
     """
-    try:
-        from app.storage.backup import backup as _backup
-    except ImportError as e:
-        typer.echo(
-            "`opa db backup` requires the server extra.\n"
-            "Install with:  pip install 'openpa[server]'",
-            err=True,
-        )
-        raise typer.Exit(code=1) from e
+    from app.storage.backup import backup as _backup
 
     out = _backup(to)
     typer.echo(str(out))
@@ -148,15 +125,7 @@ def db_restore(
     Destructive: the live database is replaced with the contents of ``src``.
     Run only with the OpenPA service stopped.
     """
-    try:
-        from app.storage.backup import restore as _restore
-    except ImportError as e:
-        typer.echo(
-            "`opa db restore` requires the server extra.\n"
-            "Install with:  pip install 'openpa[server]'",
-            err=True,
-        )
-        raise typer.Exit(code=1) from e
+    from app.storage.backup import restore as _restore
 
     if not yes:
         confirm = typer.confirm(

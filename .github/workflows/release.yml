@@ -21,6 +21,10 @@ on:
   push:
     tags:
       - "v*"
+      # Test-release tags (``v*-test*``) belong to release-test.yml, which
+      # publishes to Test PyPI. The negation keeps both workflows from
+      # firing on the same tag.
+      - "!v*-test*"
   # ``workflow_dispatch`` lets you re-run a release manually from the
   # Actions tab (e.g. if PyPI was down). It accepts the tag name so the
   # build artifacts are versioned correctly.

@@ -6,18 +6,29 @@
 # (mirroring ubuntu-vnc-desktop) AND the OpenPA stack into one tag so
 # users only need ``docker compose up`` to get a working install.
 #
-# Three build args:
+# Build args:
 #
-#   OPENPA_UI_REF      — git ref (branch/tag/sha) to build the SPA from.
-#                        Default tracks main; pin to a release tag in CI.
-#   OPENPA_PIP_SPEC    — what to ``pip install`` for the backend.
-#                        Default ``openpa[server]`` pulls latest from PyPI;
-#                        override to ``openpa[server]==X.Y.Z`` in CI for
-#                        deterministic image builds, or to ``-e /src`` if
-#                        you mount a checkout.
-#   RESOLUTION         — VNC framebuffer geometry (passed to vncserver).
-#                        Larger = higher network/CPU cost; 1920x1080 is
-#                        the comfort default.
+#   OPENPA_UI_REF              — git ref (branch/tag/sha) to build the SPA
+#                                from. Default tracks main; pin to a
+#                                release tag in CI.
+#   OPENPA_PIP_SPEC            — what to ``pip install`` for the backend.
+#                                Default ``openpa`` pulls latest from PyPI;
+#                                override to ``openpa==X.Y.Z`` in CI for
+#                                deterministic image builds, or to
+#                                ``-e /src`` if you mount a checkout.
+#   OPENPA_PIP_INDEX_URL       — optional pip primary index. Empty (the
+#                                default) means use pip's default
+#                                (production PyPI). Set to
+#                                ``https://test.pypi.org/simple/`` to
+#                                build a test image.
+#   OPENPA_PIP_EXTRA_INDEX_URL — optional pip fallback index. When using
+#                                Test PyPI as the primary, set this to
+#                                ``https://pypi.org/simple/`` so transitive
+#                                dependencies that only live on prod PyPI
+#                                still resolve.
+#   RESOLUTION                 — VNC framebuffer geometry (passed to
+#                                vncserver). Larger = higher network/CPU
+#                                cost; 1920x1080 is the comfort default.
 
 # ── Stage 1: build the openpa-ui SPA ──────────────────────────────────────
 FROM node:20-bookworm-slim AS spa-builder
@@ -108,16 +119,27 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa \
            python3.13 python3.13-venv python3.13-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ── OpenPA backend (server extra) ─────────────────────────────────────────
-ARG OPENPA_PIP_SPEC="openpa[server]"
+# ── OpenPA backend ────────────────────────────────────────────────────────
+ARG OPENPA_PIP_SPEC="openpa"
+ARG OPENPA_PIP_INDEX_URL=""
+ARG OPENPA_PIP_EXTRA_INDEX_URL=""
 
 # Dedicated venv keeps the install isolated from any system Python and
 # from anything the user installs at the desktop level. /opt/openpa is
 # the canonical "application bytes" path (read-only at runtime), while
 # /root/.openpa is the writable working directory (mounted as a volume).
+#
+# PIP_INDEX_URL / PIP_EXTRA_INDEX_URL are pip's own env vars; setting
+# them inline scopes the override to this RUN step so the final image
+# carries no lingering ENV PIP_* (anything ``pip install``ed at runtime
+# goes back to default PyPI). Empty values are equivalent to "unset".
+# ``--pre`` is unconditional: a no-op for stable releases, required for
+# test (.devN / rcN) versions pinned via OPENPA_PIP_SPEC.
 RUN python3.13 -m venv /opt/openpa/venv \
     && /opt/openpa/venv/bin/pip install --upgrade pip \
-    && /opt/openpa/venv/bin/pip install "$OPENPA_PIP_SPEC"
+    && PIP_INDEX_URL="$OPENPA_PIP_INDEX_URL" \
+       PIP_EXTRA_INDEX_URL="$OPENPA_PIP_EXTRA_INDEX_URL" \
+       /opt/openpa/venv/bin/pip install --pre "$OPENPA_PIP_SPEC"
 
 ENV PATH="/opt/openpa/venv/bin:${PATH}"
 

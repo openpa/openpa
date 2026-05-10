@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
-# OpenPA installer — Linux / macOS.
+# OpenPA TEST installer — Linux / macOS.
+#
+# Identical to install.sh except it pulls pre-release builds from
+# **Test PyPI** (https://test.pypi.org) instead of production PyPI. Use
+# this to validate a release candidate end-to-end before cutting a real
+# tag.
 #
 # Usage:
-#   curl -fsSL https://openpa.ai/install.sh | bash
-#   curl -fsSL https://openpa.ai/install.sh | bash -s -- [flags]
+#   curl -fsSL https://openpa.ai/install-test.sh | bash
+#   curl -fsSL https://openpa.ai/install-test.sh | bash -s -- [flags]
 #
-# Flags:
-#   --deployment local|server   Skip the deployment-type prompt.
-#   --host HOST                 Public IP/domain (server deployment only).
-#   --no-launch                 Skip opening the setup wizard at the end.
-#   --unattended                Use defaults; never prompt. Implies --no-launch
-#                               unless deployment+host are also provided.
-#   --reinstall                 Wipe any existing ~/.openpa/venv before installing.
-#   --help                      Show this message.
+# Flags: same as install.sh.
 #
-# This is the Phase 2 installer: native install only. Docker mode is
-# detected and recommended, but the actual containerized bundle ships in
-# Phase 3 — for now we explain that and fall back to native.
+# Heads up: this installer shares ~/.openpa with the production
+# installer. Running it on a host that already has prod openpa installed
+# WILL upgrade/downgrade that install to the test version. Use
+# OPENPA_WORKING_DIR=~/.openpa-test to keep them separate.
 
 set -euo pipefail
 
@@ -81,10 +80,19 @@ if [ "$UNATTENDED" -eq 1 ] && [ -z "$APP_HOST" ] && [ "$DEPLOYMENT" = "server" ]
     exit 2
 fi
 
+# ── test-pypi config ──────────────────────────────────────────────────────
+
+# Pip index URLs used for the native install and forwarded to the docker
+# build via the docker-compose .env file. Test PyPI is the primary index
+# (so ``pip install openpa`` resolves the test wheel); production PyPI is
+# the fallback for transitive deps that don't live on Test PyPI.
+TEST_PYPI_INDEX_URL="https://test.pypi.org/simple/"
+PROD_PYPI_EXTRA_INDEX_URL="https://pypi.org/simple/"
+
 # ── paths ─────────────────────────────────────────────────────────────────
 
-# Honour OPENPA_WORKING_DIR so power users can install side-by-side
-# (e.g., a staging copy under ~/.openpa-staging).
+# Same default as the prod installer. Use OPENPA_WORKING_DIR to install
+# side-by-side (e.g., ~/.openpa-test) without clobbering a real install.
 OPENPA_HOME="${OPENPA_WORKING_DIR:-$HOME/.openpa}"
 VENV_DIR="$OPENPA_HOME/venv"
 ENV_FILE="$OPENPA_HOME/.env"
@@ -93,15 +101,14 @@ LOG_FILE="$OPENPA_HOME/install.log"
 
 mkdir -p "$OPENPA_HOME"
 
-# Templates are fetched at install time so we don't need to ship them
-# alongside the script. The remote is the same repo this script ships from;
-# OPENPA_TEMPLATE_BASE override is provided for testing.
 TEMPLATE_BASE="${OPENPA_TEMPLATE_BASE:-https://raw.githubusercontent.com/openpa/openpa/main/install/templates}"
 
 # ── banner ────────────────────────────────────────────────────────────────
 
 cat <<EOF
-${BOLD}OpenPA installer${RESET}
+${BOLD}${YELLOW}OpenPA TEST installer${RESET}
+${DIM}Installs from $TEST_PYPI_INDEX_URL${RESET}
+${DIM}Targets $OPENPA_HOME (will overwrite an existing install in this directory)${RESET}
 ${DIM}Logs: $LOG_FILE${RESET}
 
 EOF
@@ -115,15 +122,13 @@ case "$OS_NAME" in
     Linux*)  OS=linux ;;
     Darwin*) OS=macos ;;
     *)
-        err "Unsupported OS: $OS_NAME (this script handles Linux and macOS; use install.ps1 on Windows)"
+        err "Unsupported OS: $OS_NAME (this script handles Linux and macOS; use install-test.ps1 on Windows)"
         exit 1
         ;;
 esac
 ARCH="$(uname -m)"
 ok "OS:   $OS ($ARCH)"
 
-# Find a Python 3.13+ interpreter. Try the most-specific name first so we
-# don't accidentally pick up a system 3.10 named just `python3`.
 PYTHON=""
 for candidate in python3.13 python3.14 python3 python; do
     if command -v "$candidate" >/dev/null 2>&1; then
@@ -143,8 +148,6 @@ else
     info "Python: 3.13+ not found (only required for native mode)"
 fi
 
-# Docker is detected so we can RECOMMEND it. The actual container bundle
-# ships in Phase 3 — for now we explain and fall back.
 HAS_DOCKER=0
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     HAS_DOCKER=1
@@ -188,9 +191,6 @@ fi
 
 # ── mode (docker vs native) ──────────────────────────────────────────────
 
-# Default: docker if available, native otherwise. We sandbox the agent in
-# a desktop container by default — the user opts out explicitly if they
-# want a native install.
 if [ -z "$MODE" ]; then
     if [ "$HAS_DOCKER" -eq 1 ]; then
         if [ "$UNATTENDED" -eq 1 ]; then
@@ -201,7 +201,7 @@ if [ -z "$MODE" ]; then
 ${BOLD}How do you want to run OpenPA?${RESET}
   ${BOLD}1)${RESET} ${BOLD}docker${RESET}  — sandboxed VNC desktop with bundled Postgres + Qdrant
                 ${DIM}recommended; the agent gets its own GUI environment${RESET}
-  ${BOLD}2)${RESET} ${BOLD}native${RESET}  — Python venv at ~/.openpa/venv with SQLite
+  ${BOLD}2)${RESET} ${BOLD}native${RESET}  — Python venv at $OPENPA_HOME/venv with SQLite
                 ${DIM}simpler, but the agent shares your desktop${RESET}
 EOF
             while :; do
@@ -226,16 +226,11 @@ fi
 
 # ── docker install ────────────────────────────────────────────────────────
 
-# Random secret generator. /dev/urandom + tr keeps us within the printable
-# alnum set so passwords paste cleanly through web forms and shells.
 gen_secret() {
     LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24 || true
     echo
 }
 
-# Read the version pinned in the installed package, falling back to
-# ``main`` when we don't have a Python install yet (Docker mode is
-# allowed without Python on the host).
 resolve_version() {
     local v=""
     if [ -n "$PYTHON" ]; then
@@ -255,8 +250,6 @@ if [ "$MODE" = "docker" ]; then
     DOCKER_DIR="$OPENPA_HOME/docker"
     mkdir -p "$DOCKER_DIR"
 
-    # Idempotency: if the bundle is already running, just bring it up
-    # again (which no-ops if everything is healthy) and skip generation.
     if [ -f "$DOCKER_DIR/.env" ] && [ -f "$DOCKER_DIR/docker-compose.yml" ] && [ "$REINSTALL" -ne 1 ]; then
         info "Existing Docker bundle detected at $DOCKER_DIR — reusing config."
     else
@@ -291,15 +284,20 @@ if [ "$MODE" = "docker" ]; then
             -e "s|__PG_PASSWORD__|$PG_PASSWORD|g" \
             -e "s|__VNC_PASSWORD__|$VNC_PASSWORD|g" \
             "$tmpl" > "$DOCKER_DIR/.env"
+        # Append the Test PyPI index URLs so docker-compose forwards them
+        # to the Dockerfile's pip install step. These keys are only
+        # written by the test installer; the prod installer leaves them
+        # unset (which the Dockerfile treats as "use default PyPI").
+        cat >>"$DOCKER_DIR/.env" <<EOF
+OPENPA_PIP_INDEX_URL=$TEST_PYPI_INDEX_URL
+OPENPA_PIP_EXTRA_INDEX_URL=$PROD_PYPI_EXTRA_INDEX_URL
+EOF
         chmod 600 "$DOCKER_DIR/.env"
         rm -f "$tmpl"
 
         ok "Wrote $DOCKER_DIR/docker-compose.yml + .env"
     fi
 
-    # ``compose pull`` is best-effort — if the published image isn't
-    # available yet (dev release), Compose's ``build:`` directive picks
-    # up the slack on ``up -d``.
     info "Pulling images (this may take a few minutes the first time)"
     (cd "$DOCKER_DIR" && docker compose pull --ignore-pull-failures \
         >>"$LOG_FILE" 2>&1) || warn "Some images couldn't be pulled; will build locally."
@@ -307,7 +305,6 @@ if [ "$MODE" = "docker" ]; then
     info "Starting bundle"
     (cd "$DOCKER_DIR" && docker compose up -d --build >>"$LOG_FILE" 2>&1)
 
-    # Health gate: don't open the wizard until the backend is reachable.
     if [ "$DEPLOYMENT" = "local" ]; then
         HEALTH_HOST="localhost"
     else
@@ -351,13 +348,12 @@ EOF
         fi
     fi
 
-    ok "Done. Welcome to OpenPA."
+    ok "Done. Welcome to OpenPA (test build)."
     exit 0
 fi
 
 # ── native install ────────────────────────────────────────────────────────
 
-# (Reaching here implies MODE=native. The Docker path exited above.)
 if [ -z "$PYTHON" ]; then
     err "Python 3.13 or newer is required for native mode but was not found."
     cat <<EOF >&2
@@ -382,20 +378,30 @@ if [ "$REINSTALL" -eq 1 ] && [ -d "$VENV_DIR" ]; then
     rm -rf "$VENV_DIR"
 fi
 
+# Test installs use Test PyPI as the primary index and prod PyPI as a
+# fallback (transitive deps like anthropic / openai / pandas only live on
+# prod PyPI). ``--pre`` is required because the test wheel is a PEP 440
+# pre-release (e.g. 0.1.5.dev1).
+PIP_TEST_FLAGS=(
+    --index-url "$TEST_PYPI_INDEX_URL"
+    --extra-index-url "$PROD_PYPI_EXTRA_INDEX_URL"
+    --pre
+)
+
 if [ -d "$VENV_DIR" ]; then
     info "Existing install detected at $VENV_DIR — upgrading in place."
     "$VENV_DIR/bin/pip" install --upgrade pip >>"$LOG_FILE" 2>&1
-    "$VENV_DIR/bin/pip" install --upgrade openpa >>"$LOG_FILE" 2>&1
+    "$VENV_DIR/bin/pip" install "${PIP_TEST_FLAGS[@]}" --upgrade openpa >>"$LOG_FILE" 2>&1
 else
     info "Creating venv at $VENV_DIR"
     "$PYTHON" -m venv "$VENV_DIR" >>"$LOG_FILE" 2>&1
-    info "Installing openpa from PyPI (this may take a few minutes)"
+    info "Installing openpa from Test PyPI (this may take a few minutes)"
     "$VENV_DIR/bin/pip" install --upgrade pip >>"$LOG_FILE" 2>&1
-    "$VENV_DIR/bin/pip" install openpa >>"$LOG_FILE" 2>&1
+    "$VENV_DIR/bin/pip" install "${PIP_TEST_FLAGS[@]}" openpa >>"$LOG_FILE" 2>&1
 fi
 
 INSTALLED_VERSION="$("$VENV_DIR/bin/opa" version 2>/dev/null | awk '{print $2}' || echo "?")"
-ok "Installed openpa $INSTALLED_VERSION"
+ok "Installed openpa $INSTALLED_VERSION (test build)"
 
 # ── env file ──────────────────────────────────────────────────────────────
 
@@ -406,8 +412,6 @@ if [ ! -f "$ENV_FILE" ]; then
     else
         tmpl="$(mktemp)"
         curl -fsSL "$TEMPLATE_BASE/server.env.tmpl" -o "$tmpl"
-        # __APP_HOST__ is the only placeholder; the user-provided host gets
-        # substituted as-is (it was validated against [a-zA-Z0-9.:-]+ above).
         sed "s|__APP_HOST__|$APP_HOST|g" "$tmpl" > "$ENV_FILE"
         rm -f "$tmpl"
     fi
@@ -436,19 +440,14 @@ info "Migrating database to current schema"
 REVISION="$("$VENV_DIR/bin/opa" db current 2>/dev/null || echo "?")"
 ok "Database at revision $REVISION"
 
-# ── start the server (foreground-detached for the install session) ───────
+# ── start the server ──────────────────────────────────────────────────────
 
 step "Starting OpenPA"
 
-# We start the server in the background so the wizard URL works as soon as
-# we open the browser. The PID is recorded so the user can stop it with
-# `kill $(cat ~/.openpa/install.pid)`. Future Phase: install a real service
-# unit (systemd / launchd) so it survives logout.
 SERVER_PID_FILE="$OPENPA_HOME/install.pid"
 if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE")" 2>/dev/null; then
     info "OpenPA is already running (pid $(cat "$SERVER_PID_FILE"))."
 else
-    # Source the .env so HOST/PORT are honored without us having to parse it.
     set -a
     # shellcheck disable=SC1090
     . "$ENV_FILE"
@@ -458,8 +457,6 @@ else
     ok "OpenPA started (pid $(cat "$SERVER_PID_FILE"), logs: $OPENPA_HOME/server.log)"
 fi
 
-# Wait briefly for the HTTP listener — if it doesn't come up the wizard
-# will be a dead link, which is the worst end-user experience.
 HEALTH_URL="http://${HOST:-127.0.0.1}:${PORT:-1112}/health"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
     if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
@@ -497,4 +494,4 @@ if [ "$NO_LAUNCH" -eq 0 ] && [ "$UNATTENDED" -eq 0 ]; then
     fi
 fi
 
-ok "Done. Welcome to OpenPA."
+ok "Done. Welcome to OpenPA (test build)."
