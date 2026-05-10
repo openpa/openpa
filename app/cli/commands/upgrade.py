@@ -27,6 +27,21 @@ def _print_event(event) -> None:
     typer.echo(f"{prefix}[{event.kind}] {event.message}")
 
 
+def _print_channel_banner() -> None:
+    """One line at the top of every upgrade subcommand.
+
+    Surfaces the active channel so a user noticing they're on the
+    wrong feed can abort before triggering a state-mutating apply.
+    """
+    from app.upgrade.channel import get_channel
+
+    channel = get_channel()
+    if channel == "test":
+        typer.echo("Channel: test (Test PyPI)")
+    else:
+        typer.echo("Channel: production")
+
+
 @upgrade_app.callback()
 def _root(ctx: typer.Context) -> None:
     """Default action: ``openpa upgrade`` with no subcommand runs ``apply``.
@@ -44,6 +59,7 @@ def _root(ctx: typer.Context) -> None:
 def upgrade_check() -> None:
     """Check whether a newer version is available without changing anything."""
     from app.upgrade import runner
+    _print_channel_banner()
     release, status = runner.check(callback=_print_event)
     if status == "available" and release is not None:
         typer.echo(f"\nRun `openpa upgrade apply` to install {release.version}.")
@@ -63,6 +79,8 @@ def upgrade_apply(
 ) -> None:
     """Apply the upgrade. Stops on rollback if any step fails."""
     from app.upgrade import runner
+
+    _print_channel_banner()
 
     def _confirm(release) -> bool:
         if yes:

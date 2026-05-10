@@ -9,8 +9,10 @@
 #   3. Publishes to **Test PyPI** (``test.pypi.org``), not production PyPI.
 #   4. Uploads the dist as workflow artifacts so we can download and
 #      inspect the exact bytes that went to Test PyPI.
-#   5. **Does NOT create a GitHub Release** — the Releases page only
-#      advertises real prod versions.
+#   5. Creates a GitHub Release marked ``prerelease: true`` so the
+#      app's upgrader can discover new test builds via the Releases
+#      API. ``/releases/latest`` filters out prereleases by default,
+#      so prod hosts still only see the stable channel.
 #
 # Required repo secrets:
 #   TEST_PYPI_API_TOKEN  — created at https://test.pypi.org/manage/account/token/.
@@ -33,6 +35,8 @@ on:
 jobs:
   release-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed for creating the GitHub prerelease
 
     steps:
       - name: Resolve tag
@@ -130,3 +134,18 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 30
+
+      # Publish a GitHub prerelease at the original ``v*-testN`` tag so
+      # the app's upgrader can find it via ``/releases``. The wheel/sdist
+      # are attached for inspection. ``prerelease: true`` keeps these
+      # entries out of the default Releases listing seen by prod hosts.
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz

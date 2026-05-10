@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,7 @@ from app.__version__ import (
     __version__ as CURRENT_VERSION,
 )
 from app.upgrade import manifest
+from app.upgrade.channel import Channel, get_channel
 
 # Lock file lives alongside the working dir's other state. Its presence
 # means an upgrade is in flight (or crashed mid-flight); the JSON inside
@@ -94,9 +96,13 @@ def check(callback: ProgressCallback | None = None) -> tuple[manifest.ReleaseInf
       - ``too_old``: the latest release refuses to migrate from us.
       - ``unreachable``: the GitHub API call failed.
     """
-    _emit(callback, UpgradeEvent("check", "Looking up latest release..."))
+    channel = get_channel()
+    _emit(callback, UpgradeEvent(
+        "check",
+        f"Looking up latest release on {channel} channel...",
+    ))
     try:
-        release = manifest.fetch_latest()
+        release = manifest.fetch_latest(channel=channel)
     except urllib.error.URLError as e:
         _emit(callback, UpgradeEvent("check", f"Couldn't reach GitHub: {e}", ok=False))
         return None, "unreachable"
@@ -201,6 +207,12 @@ def acquire_lock_or_recover(callback: ProgressCallback | None = None) -> None:
 
     backup_path = state.get("backup_path")
     previous_version = state.get("previous_version")
+    # Older lock files (from before channel-aware upgrades shipped) won't
+    # carry a ``channel`` key; default to production for those, since
+    # any host that ran a prior upgrade was a prod host by definition.
+    recovery_channel: Channel = (
+        "test" if state.get("channel") == "test" else "production"
+    )
     _emit(callback, UpgradeEvent(
         "rollback",
         f"Detected interrupted upgrade (was at {previous_version}); restoring backup.",
@@ -213,7 +225,9 @@ def acquire_lock_or_recover(callback: ProgressCallback | None = None) -> None:
 
             _restore(Path(backup_path))
         if previous_version:
-            _pip_install(f"openpa=={previous_version}", callback)
+            _pip_install(
+                f"openpa=={previous_version}", callback, channel=recovery_channel,
+            )
     finally:
         lock.unlink(missing_ok=True)
 
@@ -239,6 +253,10 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
         "previous_version": CURRENT_VERSION,
         "target_version": release.version,
         "backup_path": None,
+        # Persist the channel so a crash-recovery rollback uses the
+        # right pip index. Without this, a test-install rollback would
+        # try to find ``openpa==0.1.5.dev1`` on prod PyPI and fail.
+        "channel": release.channel,
     }
 
     def _persist_state() -> None:
@@ -272,8 +290,9 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
         ))
 
         # 3. Install.
-        _emit(callback, UpgradeEvent("install", f"pip install openpa=={release.version}"))
-        _pip_install(f"openpa=={release.version}", callback)
+        spec = _pip_spec_for(release)
+        _emit(callback, UpgradeEvent("install", f"pip install {spec}"))
+        _pip_install(spec, callback, channel=release.channel)
 
         # 4. Migrate. We shell out to a fresh ``openpa db upgrade`` rather
         # than calling the in-process migration helper because pip just
@@ -309,7 +328,9 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
             if backup_path and Path(backup_path).is_file():
                 from app.storage.backup import restore as _restore
                 _restore(backup_path)
-            _pip_install(f"openpa=={CURRENT_VERSION}", callback)
+            _pip_install(
+                f"openpa=={CURRENT_VERSION}", callback, channel=release.channel,
+            )
         except Exception as e2:  # noqa: BLE001
             _emit(callback, UpgradeEvent(
                 "rollback",
@@ -338,15 +359,67 @@ def _check_disk_space(*, min_free_mb: int) -> None:
         )
 
 
-def _pip_install(spec: str, callback: ProgressCallback | None) -> None:
+# Defaults for the test installer's pip indexes. The installer also
+# writes these to ``~/.openpa/.env`` so they reach this process via the
+# .env loader at server start; the literals are the fallback for hosts
+# installed before the .env keys were added.
+_TEST_PYPI_INDEX_URL = "https://test.pypi.org/simple/"
+_TEST_PYPI_EXTRA_INDEX_URL = "https://pypi.org/simple/"
+
+
+def _pip_spec_for(release: manifest.ReleaseInfo) -> str:
+    """Build the pip requirement spec for ``release``.
+
+    For prod, the GitHub tag and the PyPI version match (``0.1.5``).
+    For test, the GitHub tag is ``v0.1.5-test3`` but the wheel on Test
+    PyPI is named ``0.1.5.dev3``; we install against the PEP 440 form.
+    ``release.version`` already carries the right value because
+    :func:`manifest._parse_release` translated it.
+    """
+    return f"openpa=={release.version}"
+
+
+def _pip_install(
+    spec: str,
+    callback: ProgressCallback | None,
+    *,
+    channel: Channel,
+) -> None:
     """Run ``pip install --upgrade <spec>`` against the current interpreter.
 
     Using ``sys.executable`` keeps us in the same venv we're running
     out of. ``--upgrade`` lets us downgrade as well as upgrade (which
     is what the rollback path needs).
+
+    On the test channel we add ``--pre`` (the test wheels are PEP 440
+    pre-releases that pip otherwise refuses) plus the Test PyPI index
+    URLs the installer recorded. We also force ``PIP_CACHE_DIR`` into
+    the subprocess env: a long-running server may have started before
+    the installer set it, so inheriting from ``os.environ`` isn't
+    enough.
     """
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", spec]
-    _run(cmd, callback)
+    cmd: list[str] = [sys.executable, "-m", "pip", "install", "--upgrade"]
+
+    env = os.environ.copy()
+    # Scope cache to the working dir for both channels — same reason
+    # the installers do (avoid a stale ~/.cache/pip pinning an old
+    # wheel after a reinstall).
+    from app.config.settings import BaseConfig
+    env["PIP_CACHE_DIR"] = str(Path(BaseConfig.OPENPA_WORKING_DIR) / "pip-cache")
+
+    if channel == "test":
+        index_url = os.environ.get("OPENPA_PIP_INDEX_URL") or _TEST_PYPI_INDEX_URL
+        extra_index_url = (
+            os.environ.get("OPENPA_PIP_EXTRA_INDEX_URL") or _TEST_PYPI_EXTRA_INDEX_URL
+        )
+        cmd += [
+            "--pre",
+            "--index-url", index_url,
+            "--extra-index-url", extra_index_url,
+        ]
+
+    cmd.append(spec)
+    _run(cmd, callback, env=env)
 
 
 def _run(
@@ -355,6 +428,7 @@ def _run(
     *,
     ignore_failure: bool = False,
     prefer: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> None:
     """Spawn ``cmd``, stream output through the callback, raise on failure.
 
@@ -369,6 +443,7 @@ def _run(
             cmd,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
+            env=env,
         )
     except FileNotFoundError as e:
         if ignore_failure:

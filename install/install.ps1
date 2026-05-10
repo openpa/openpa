@@ -579,6 +579,14 @@ if (-not (Test-Path $EnvFile)) {
     Write-Info ".env already exists — keeping it. Edit $EnvFile if you need to."
 }
 
+# Stamp the upgrade channel into .env so the running app reads
+# "production" via the .env loader. Idempotent: skipped if a value is
+# already present. Switching channels means reinstalling via
+# install-test.ps1, which overwrites the line.
+if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_UPGRADE_CHANNEL=' -Quiet)) {
+    Add-Content -Path $EnvFile -Value "`nOPENPA_UPGRADE_CHANNEL=production" -Encoding utf8
+}
+
 # ── bootstrap.toml (DB selection) ─────────────────────────────────────────
 
 if (-not (Test-Path $BootstrapFile)) {

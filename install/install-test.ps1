@@ -604,6 +604,21 @@ if (-not (Test-Path $EnvFile)) {
     Write-Info ".env already exists — keeping it. Edit $EnvFile if you need to."
 }
 
+# Stamp test-channel keys into .env. The upgrader reads
+# OPENPA_UPGRADE_CHANNEL to decide which feed to query, and the two
+# pip-index URLs to point ``openpa upgrade -y`` at Test PyPI. Each
+# write is idempotent — re-running the installer doesn't accumulate
+# duplicate lines.
+if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_UPGRADE_CHANNEL=' -Quiet)) {
+    Add-Content -Path $EnvFile -Value "`nOPENPA_UPGRADE_CHANNEL=test" -Encoding utf8
+}
+if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_PIP_INDEX_URL=' -Quiet)) {
+    Add-Content -Path $EnvFile -Value "OPENPA_PIP_INDEX_URL=$TestPyPIIndexUrl" -Encoding utf8
+}
+if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_PIP_EXTRA_INDEX_URL=' -Quiet)) {
+    Add-Content -Path $EnvFile -Value "OPENPA_PIP_EXTRA_INDEX_URL=$ProdPyPIExtraUrl" -Encoding utf8
+}
+
 # ── bootstrap.toml (DB selection) ─────────────────────────────────────────
 
 if (-not (Test-Path $BootstrapFile)) {

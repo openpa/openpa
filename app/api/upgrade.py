@@ -29,6 +29,7 @@ async def get_upgrade_check(_request: Request) -> JSONResponse:
     # the manifest helpers — fine at runtime, but unnecessary work
     # during the API-route registration pass.
     try:
+        from app.upgrade.channel import get_channel
         from app.upgrade.manifest import fetch_latest, is_at_or_above, is_newer
     except ImportError:
         return JSONResponse({
@@ -37,11 +38,13 @@ async def get_upgrade_check(_request: Request) -> JSONResponse:
             "reason": "Upgrade module not installed.",
         })
 
+    channel = get_channel()
     try:
-        release = fetch_latest()
+        release = fetch_latest(channel=channel)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({
             "current": CURRENT_VERSION,
+            "channel": channel,
             "status": "unreachable",
             "reason": str(e),
         })
@@ -50,6 +53,7 @@ async def get_upgrade_check(_request: Request) -> JSONResponse:
         return JSONResponse({
             "current": CURRENT_VERSION,
             "latest": release.version,
+            "channel": channel,
             "status": "up_to_date",
             "release_url": release.html_url,
         })
@@ -61,6 +65,7 @@ async def get_upgrade_check(_request: Request) -> JSONResponse:
         return JSONResponse({
             "current": CURRENT_VERSION,
             "latest": release.version,
+            "channel": channel,
             "status": "too_old",
             "min_supported_upgrade_from": release.min_supported_upgrade_from,
             "release_url": release.html_url,
@@ -69,6 +74,7 @@ async def get_upgrade_check(_request: Request) -> JSONResponse:
     return JSONResponse({
         "current": CURRENT_VERSION,
         "latest": release.version,
+        "channel": channel,
         "status": "available",
         "min_compatible_ui": release.min_compatible_ui,
         "release_url": release.html_url,

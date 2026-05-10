@@ -640,6 +640,15 @@ else
     info ".env already exists — keeping it. Edit $ENV_FILE if you need to."
 fi
 
+# Stamp the upgrade channel into .env so the running app reads "production"
+# from os.environ via the .env loader. Idempotent: only writes the line if
+# absent so re-runs don't accumulate duplicates. The prod installer always
+# emits ``production`` here; switching channels means reinstalling via
+# install-test.sh, which overwrites the value.
+if ! grep -q '^OPENPA_UPGRADE_CHANNEL=' "$ENV_FILE" 2>/dev/null; then
+    printf '\nOPENPA_UPGRADE_CHANNEL=production\n' >> "$ENV_FILE"
+fi
+
 # ── bootstrap.toml (DB selection) ─────────────────────────────────────────
 
 if [ ! -f "$BOOTSTRAP_FILE" ]; then

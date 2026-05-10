@@ -634,6 +634,23 @@ else
     info ".env already exists — keeping it. Edit $ENV_FILE if you need to."
 fi
 
+# Stamp test-channel keys into .env. The runtime upgrader reads
+# ``OPENPA_UPGRADE_CHANNEL`` to decide whether to query the prod
+# ``releases/latest`` or the prerelease listing, and reads the two
+# pip-index URLs to point ``openpa upgrade -y`` at Test PyPI. Each
+# write is idempotent — re-running the installer doesn't accumulate
+# duplicate lines, but a value already present is preserved (the user
+# may have customized it).
+if ! grep -q '^OPENPA_UPGRADE_CHANNEL=' "$ENV_FILE" 2>/dev/null; then
+    printf '\nOPENPA_UPGRADE_CHANNEL=test\n' >> "$ENV_FILE"
+fi
+if ! grep -q '^OPENPA_PIP_INDEX_URL=' "$ENV_FILE" 2>/dev/null; then
+    printf 'OPENPA_PIP_INDEX_URL=%s\n' "$TEST_PYPI_INDEX_URL" >> "$ENV_FILE"
+fi
+if ! grep -q '^OPENPA_PIP_EXTRA_INDEX_URL=' "$ENV_FILE" 2>/dev/null; then
+    printf 'OPENPA_PIP_EXTRA_INDEX_URL=%s\n' "$PROD_PYPI_EXTRA_INDEX_URL" >> "$ENV_FILE"
+fi
+
 # ── bootstrap.toml (DB selection) ─────────────────────────────────────────
 
 if [ ! -f "$BOOTSTRAP_FILE" ]; then
