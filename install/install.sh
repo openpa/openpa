@@ -537,6 +537,23 @@ mkdir -p "$BIN_DIR"
 ln -sfn "$VENV_DIR/bin/openpa" "$BIN_DIR/openpa"
 ok "Linked $BIN_DIR/openpa -> $VENV_DIR/bin/openpa"
 
+# Drop a tiny activation script the user can `source` from any shell to
+# add openpa to their current PATH without restarting the terminal. The
+# guard makes it idempotent if sourced multiple times.
+ACTIVATE_FILE="$OPENPA_HOME/activate.sh"
+cat > "$ACTIVATE_FILE" <<'EOF'
+# OpenPA activation. `source` this file to put `openpa` on PATH in the
+# current shell. Safe to source repeatedly — the guard prevents PATH
+# duplication.
+case ":$PATH:" in
+    *":__BIN_DIR__:"*) ;;
+    *) export PATH="__BIN_DIR__:$PATH" ;;
+esac
+EOF
+# sed-style replace because the heredoc was single-quoted to keep $PATH
+# literal. We deliberately don't expand $BIN_DIR inside the heredoc.
+sed -i.bak "s|__BIN_DIR__|$BIN_DIR|g" "$ACTIVATE_FILE" && rm -f "$ACTIVATE_FILE.bak"
+
 # Append a marker block to the user's shell rc so $BIN_DIR is on PATH for
 # every new shell. The block is idempotent (re-runs are no-ops) and uses a
 # runtime guard so $PATH doesn't accumulate duplicates if the rc gets
@@ -627,8 +644,9 @@ fi
 if [ "$MODIFY_PATH" -eq 1 ]; then
     cat <<EOF
 
-${BOLD}To use \`openpa\` in this shell, run:${RESET}
+${BOLD}To use \`openpa\` in THIS shell, run one of:${RESET}
 
+    ${BOLD}source $ACTIVATE_FILE${RESET}
     ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
 
 (New terminals pick this up automatically from your shell rc.)
@@ -637,12 +655,11 @@ EOF
 else
     cat <<EOF
 
-${BOLD}To put \`openpa\` on your PATH, run:${RESET}
+${BOLD}To put \`openpa\` on your PATH in THIS shell, run:${RESET}
 
-    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+    ${BOLD}source $ACTIVATE_FILE${RESET}
 
-Add that line to your shell rc (e.g. ~/.bashrc, ~/.zshrc) to make it
-permanent.
+For new shells, add the same line to your shell rc (e.g. ~/.bashrc).
 
 EOF
 fi

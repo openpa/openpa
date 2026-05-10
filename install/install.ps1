@@ -529,6 +529,20 @@ exit $LASTEXITCODE
 
 Write-Ok "Wrote shim $OpenpaCmd (-> venv\Scripts\openpa.exe)"
 
+# Drop a tiny activation script the user can dot-source from any
+# PowerShell session to add openpa to the current PATH without
+# restarting the terminal. Idempotent if sourced multiple times.
+$ActivateFile = Join-Path $OpenpaHome 'activate.ps1'
+$ActivateContent = @"
+# OpenPA activation. Dot-source (`. $ActivateFile`) or invoke this
+# file to put ``openpa`` on PATH in the current PowerShell session.
+# Safe to run repeatedly.
+if (-not (";`$(`$env:Path);" -like "*;$BinDir;*")) {
+    `$env:Path = "$BinDir;`$env:Path"
+}
+"@
+$ActivateContent | Set-Content -Path $ActivateFile -Encoding utf8
+
 function Add-OpenPAPathEntry {
     $current = [Environment]::GetEnvironmentVariable('Path', 'User')
     $target  = $BinDir
@@ -568,11 +582,14 @@ if ($NoModifyPath) {
 # CURRENT session, so `openpa` works immediately here.
 Write-Host ""
 if (-not $NoModifyPath) {
-    Write-Host "``openpa`` is on PATH for this session and any new shell." -ForegroundColor White
-    Write-Host "Already-open terminals (cmd, other PS sessions) need to be reopened."
+    Write-Host "``openpa`` is on PATH for this PowerShell session and any new shell." -ForegroundColor White
+    Write-Host ""
+    Write-Host "For already-open terminals (cmd, other PS sessions), either reopen them"
+    Write-Host "or dot-source the activation script:"
+    Write-Host "    . $ActivateFile" -ForegroundColor White
 } else {
-    Write-Host "To use ``openpa`` in this session, run:" -ForegroundColor White
-    Write-Host "    `$env:Path = `"`$env:Path;$BinDir`""
+    Write-Host "To use ``openpa`` in this session, dot-source:" -ForegroundColor White
+    Write-Host "    . $ActivateFile"
 }
 Write-Host ""
 

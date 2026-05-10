@@ -539,6 +539,19 @@ mkdir -p "$BIN_DIR"
 ln -sfn "$VENV_DIR/bin/openpa" "$BIN_DIR/openpa"
 ok "Linked $BIN_DIR/openpa -> $VENV_DIR/bin/openpa"
 
+# Drop a tiny activation script the user can `source` from any shell to
+# add openpa to their current PATH without restarting the terminal.
+ACTIVATE_FILE="$OPENPA_HOME/activate.sh"
+cat > "$ACTIVATE_FILE" <<'EOF'
+# OpenPA activation. `source` this file to put `openpa` on PATH in the
+# current shell. Safe to source repeatedly.
+case ":$PATH:" in
+    *":__BIN_DIR__:"*) ;;
+    *) export PATH="__BIN_DIR__:$PATH" ;;
+esac
+EOF
+sed -i.bak "s|__BIN_DIR__|$BIN_DIR|g" "$ACTIVATE_FILE" && rm -f "$ACTIVATE_FILE.bak"
+
 PATH_MARKER_BEGIN="# >>> openpa installer >>>"
 PATH_MARKER_END="# <<< openpa installer <<<"
 
@@ -623,8 +636,9 @@ fi
 if [ "$MODIFY_PATH" -eq 1 ]; then
     cat <<EOF
 
-${BOLD}To use \`openpa\` in this shell, run:${RESET}
+${BOLD}To use \`openpa\` in THIS shell, run one of:${RESET}
 
+    ${BOLD}source $ACTIVATE_FILE${RESET}
     ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
 
 (New terminals pick this up automatically from your shell rc.)
@@ -633,12 +647,11 @@ EOF
 else
     cat <<EOF
 
-${BOLD}To put \`openpa\` on your PATH, run:${RESET}
+${BOLD}To put \`openpa\` on your PATH in THIS shell, run:${RESET}
 
-    ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
+    ${BOLD}source $ACTIVATE_FILE${RESET}
 
-Add that line to your shell rc (e.g. ~/.bashrc, ~/.zshrc) to make it
-permanent.
+For new shells, add the same line to your shell rc (e.g. ~/.bashrc).
 
 EOF
 fi
