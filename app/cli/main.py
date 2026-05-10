@@ -1,6 +1,6 @@
-"""Entry point for the `opa` CLI.
+"""Entry point for the `openpa` CLI.
 
-Registered in pyproject.toml as `opa = "app.cli.main:app"`.
+Registered in pyproject.toml as `openpa = "app.cli.main:app"`.
 
 Discipline: this module and any module under `app/cli/` MUST NOT import from
 `app.server`, `app.api`, `app.tools`, `app.agent`, `app.skills`, `app.events`,
@@ -47,7 +47,7 @@ from app.cli.commands.upgrade import upgrade_app
 
 
 app = typer.Typer(
-    name="opa",
+    name="openpa",
     help="OpenPA command-line interface.",
     no_args_is_help=True,
     add_completion=False,
@@ -76,7 +76,7 @@ def _root(
         help="JWT bearer token for the OpenPA server.",
     ),
 ) -> None:
-    """opa — lightweight client for the OpenPA server."""
+    """openpa — lightweight client for the OpenPA server."""
     from app.cli.config import ConfigError, load_from_env
     from app.cli.output import OutputMode
 

@@ -1,7 +1,7 @@
 """Process endpoints — `/api/processes*` and `/api/autostart-processes*`.
 
 Mirrors `cli/internal/client/processes.go`. The PTY WebSocket attach itself
-is handled in Phase 4 (`opa proc attach`); this module exposes the URL helper
+is handled in Phase 4 (`openpa proc attach`); this module exposes the URL helper
 so that command can build the ws:// URL.
 """
 

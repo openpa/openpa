@@ -2,7 +2,7 @@
 
 Phase 5 ships the read-only ``/api/upgrade/check``: the UI uses it to
 render a banner when a newer version is on GitHub. Actually applying
-the upgrade is intentionally still a CLI operation (``opa upgrade``)
+the upgrade is intentionally still a CLI operation (``openpa upgrade``)
 because doing it safely requires either a service supervisor or a
 clean process replacement — neither of which we want to invent inside
 a running HTTP server. When that supervisor lands in a follow-up,
@@ -73,10 +73,10 @@ async def get_upgrade_check(_request: Request) -> JSONResponse:
         "min_compatible_ui": release.min_compatible_ui,
         "release_url": release.html_url,
         "release_notes": release.body,
-        # The user runs ``opa upgrade`` themselves for now. The UI
+        # The user runs ``openpa upgrade`` themselves for now. The UI
         # banner shows this command verbatim so the user doesn't have
         # to leave the app to find it.
-        "apply_command": "opa upgrade -y",
+        "apply_command": "openpa upgrade -y",
     })
 
 

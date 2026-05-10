@@ -1,10 +1,10 @@
 ---
-description: "Complete reference for the `opa channels` CLI command — the terminal-side counterpart to the **Channels** page in the OpenPA web UI — covering how to list connected external messaging channels (`list`), register a new channel from a JSON config blob (`add`), run the interactive pairing flow with QR rendered in the terminal or prompts for Telegram's verification code and 2FA password (`pair`), delete a channel and cascade-remove its conversations (`delete`), and dump the dynamic TOML-driven channel catalog (`catalog`). Documents the channel/sender data model, the per-platform config fields (Telegram bot_token, etc.), the `--mode` / `--auth-mode` / `--response-mode` / `--enabled` flags on `add`, the `*main*` channel that's auto-created and not removable, the read-only-from-OpenPA contract for external channels, and the shape of `--channel <type>` filtering on `opa conv list`."
+description: "Complete reference for the `openpa channels` CLI command — the terminal-side counterpart to the **Channels** page in the OpenPA web UI — covering how to list connected external messaging channels (`list`), register a new channel from a JSON config blob (`add`), run the interactive pairing flow with QR rendered in the terminal or prompts for Telegram's verification code and 2FA password (`pair`), delete a channel and cascade-remove its conversations (`delete`), and dump the dynamic TOML-driven channel catalog (`catalog`). Documents the channel/sender data model, the per-platform config fields (Telegram bot_token, etc.), the `--mode` / `--auth-mode` / `--response-mode` / `--enabled` flags on `add`, the `*main*` channel that's auto-created and not removable, the read-only-from-OpenPA contract for external channels, and the shape of `--channel <type>` filtering on `openpa conv list`."
 ---
 
-# `opa channels` — External Messaging Channel Management
+# `openpa channels` — External Messaging Channel Management
 
-`opa channels` is the CLI for managing OpenPA's external messaging
+`openpa channels` is the CLI for managing OpenPA's external messaging
 channels — Telegram, WhatsApp, Discord, Messenger, and Slack — that
 let users on those platforms talk to your OpenPA agent. Each channel
 is a row in the per-profile `channels` table; conversations created
@@ -29,7 +29,7 @@ The group covers four operations:
 
 The `main` channel — the implicit channel that web UI and CLI
 conversations belong to — is always present, auto-created on profile
-creation, and is **not** listed by `opa channels list`. You can't
+creation, and is **not** listed by `openpa channels list`. You can't
 register a second `main`, and you can't delete the existing one.
 
 ## Channel data model
@@ -50,7 +50,7 @@ Each row returned by `list` looks like:
 | `created_at`, `updated_at` | Unix-ms timestamps.                                                                                              |
 
 The list of which fields are *secret* per channel type comes from the
-TOML catalog (`opa channels catalog`); the API redacts those keys to
+TOML catalog (`openpa channels catalog`); the API redacts those keys to
 `***` in any list/get response.
 
 ## Read-only contract
@@ -66,7 +66,7 @@ External channels are **inbound-only from the platform's user**:
   `Read-only channel` for any conversation whose `channel_id` resolves
   to a channel with `channel_type != "main"`.
 
-Use `opa conv get <id>` and `opa conv attach <id>` to inspect channel
+Use `openpa conv get <id>` and `openpa conv attach <id>` to inspect channel
 conversations; use the corresponding platform (Telegram, etc.) to
 talk to the agent.
 
@@ -78,21 +78,21 @@ of the OpenPA web UI:
 > **Sidebar → Channels** (live management view) — or
 > **Settings → Channels** (registration form).
 
-The Settings page exposes the **Add Channel** flow (mirroring `opa
+The Settings page exposes the **Add Channel** flow (mirroring `openpa
 channels add`); the sidebar Channels page lists channels with their
-runtime status and per-sender authentication state (mirroring `opa
+runtime status and per-sender authentication state (mirroring `openpa
 channels list` plus the `senders` API the CLI doesn't expose). The
-sidebar's conversation-list channel selector mirrors `opa conv list
+sidebar's conversation-list channel selector mirrors `openpa conv list
 --channel <type>`.
 
 ## Global flags
 
-All `opa channels` subcommands accept the root-level `--json` flag.
+All `openpa channels` subcommands accept the root-level `--json` flag.
 `OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 
-### `opa channels list`
+### `openpa channels list`
 
 **Purpose.** Show every external channel registered for the active
 profile, with live runtime status.
@@ -100,7 +100,7 @@ profile, with live runtime status.
 **Syntax.**
 
 ```bash
-opa channels list
+openpa channels list
 ```
 
 **Behavior.** Renders a seven-column table:
@@ -124,12 +124,12 @@ not user-manageable.
 **Example.**
 
 ```bash
-$ opa channels list
+$ openpa channels list
 ID                                     TYPE      MODE  AUTH  REPLY    ENABLED  STATUS
 e2e8...d4f1                            telegram  bot   none  detail   true     running
 ```
 
-### `opa channels add`
+### `openpa channels add`
 
 **Purpose.** Register a new external messaging channel and optionally
 start its adapter.
@@ -137,7 +137,7 @@ start its adapter.
 **Syntax.**
 
 ```bash
-opa channels add --type <kind>
+openpa channels add --type <kind>
                  [--mode bot|userbot]
                  [--auth-mode none|otp|password]
                  [--response-mode normal|detail]
@@ -160,19 +160,19 @@ mode, auth_mode, response_mode, enabled, status).
 
 **Auto-pairing.** When the chosen mode declares an interactive setup
 (`setup_kind` set in the catalog — e.g. WhatsApp QR scan, Telegram
-userbot code + 2FA), `add` drops directly into the same flow `opa
+userbot code + 2FA), `add` drops directly into the same flow `openpa
 channels pair <id>` runs. The QR is rendered in the terminal, or the
 prompt waits for the verification code. Pass `--no-pair` to skip; the
 root `--json` flag also suppresses auto-pairing because it implies a
 non-interactive caller. The auto-pair step is also skipped when
 `--enabled=false` (no live adapter to pair with yet — re-enable from
-the web UI or run `opa channels pair <id>` after enabling).
+the web UI or run `openpa channels pair <id>` after enabling).
 
 **Flags.**
 
 | Flag              | Type    | Default   | Meaning                                                                            |
 |-------------------|---------|-----------|------------------------------------------------------------------------------------|
-| `--type`          | string  | (required)| Channel type. Must match an entry in `opa channels catalog`.                       |
+| `--type`          | string  | (required)| Channel type. Must match an entry in `openpa channels catalog`.                       |
 | `--mode`          | string  | `bot`     | Adapter mode (`bot` or `userbot`). Catalog-declared modes only; modes flagged `implemented = false` are rejected. |
 | `--auth-mode`     | string  | `none`    | Per-sender gate.                                                                   |
 | `--response-mode` | string  | `normal`  | Reply detail (`normal` or `detail`).                                               |
@@ -185,7 +185,7 @@ the web UI or run `opa channels pair <id>` after enabling).
 
 ```bash
 # Register a Telegram bot
-$ opa channels add --type telegram --mode bot \
+$ openpa channels add --type telegram --mode bot \
                    --response-mode detail \
                    --json '{"bot_token":"123:abc..."}'
 
@@ -194,7 +194,7 @@ $ opa channels add --type telegram --mode bot \
 # After `add`, open the web UI's Channels page; the pairing dialog will
 # prompt for the verification code Telegram sent through the Telegram
 # app itself, plus the cloud password if 2FA is enabled.
-$ opa channels add --type telegram --mode userbot \
+$ openpa channels add --type telegram --mode userbot \
                    --auth-mode otp \
                    --json '{"api_id":"12345","api_hash":"abcdef","phone":"+14155551212"}'
 id              e2e8...d4f1
@@ -206,7 +206,7 @@ enabled         true
 status          running
 
 # Register a Telegram bot but don't start it yet
-$ opa channels add --type telegram --mode bot \
+$ openpa channels add --type telegram --mode bot \
                    --enabled=false \
                    --json '{"bot_token":"123:abc..."}'
 
@@ -215,13 +215,13 @@ $ opa channels add --type telegram --mode bot \
 # via `mdp/qrterminal`; scan it with WhatsApp → Linked Devices.
 # Prereq: Node 18+ on PATH and `npm install` already run inside
 # `app/channels/sidecars/whatsapp/`.
-$ opa channels add --type whatsapp --mode userbot \
+$ openpa channels add --type whatsapp --mode userbot \
                    --auth-mode password \
                    --json '{"phone":"+14155551212","password":"hunter2"}'
 id              <whatsapp-id>
 ...
 This channel needs interactive pairing — starting the pairing flow.
-(re-run later with `opa channels pair <whatsapp-id>`, or pass --no-pair to skip)
+(re-run later with `openpa channels pair <whatsapp-id>`, or pass --no-pair to skip)
 
 Open WhatsApp → Settings → Linked Devices → Link a Device, then scan:
 
@@ -231,16 +231,16 @@ Open WhatsApp → Settings → Linked Devices → Link a Device, then scan:
 ✓ Paired successfully.
 
 # Same flow but skip auto-pair (e.g. you'll scan from another machine)
-$ opa channels add --type whatsapp --mode userbot \
+$ openpa channels add --type whatsapp --mode userbot \
                    --no-pair \
                    --json '{"phone":"+14155551212"}'
 
 # WhatsApp under Windows PowerShell — use --config to dodge PS's quote stripping
-PS> opa channels add --type whatsapp --mode userbot --auth-mode otp `
+PS> openpa channels add --type whatsapp --mode userbot --auth-mode otp `
                      --config phone=+84986664411
 ```
 
-### `opa channels pair`
+### `openpa channels pair`
 
 **Purpose.** Run the interactive pairing flow for a channel directly
 in the terminal — render WhatsApp's linked-device QR (as Unicode block
@@ -250,7 +250,7 @@ characters), or prompt for Telegram userbot's verification code and
 **Syntax.**
 
 ```bash
-opa channels pair <id>
+openpa channels pair <id>
 ```
 
 **Behavior.** Subscribes to the channel's auth-events SSE stream
@@ -279,11 +279,11 @@ must be set on the channel before `pair` is run.
 
 ```bash
 # Stand up a WhatsApp channel and pair it from the terminal in one go
-$ opa channels add --type whatsapp --mode userbot --auth-mode otp \
+$ openpa channels add --type whatsapp --mode userbot --auth-mode otp \
                    --json '{}' --enabled false
 id              <whatsapp-id>
 ...
-$ opa channels pair <whatsapp-id>
+$ openpa channels pair <whatsapp-id>
 Open WhatsApp → Settings → Linked Devices → Link a Device, then scan:
 
   ▄▄▄▄▄▄▄ ▄▄▄ ▄ ▄ ▄▄▄▄▄▄▄
@@ -292,7 +292,7 @@ Open WhatsApp → Settings → Linked Devices → Link a Device, then scan:
 ✓ Paired successfully.
 
 # Telegram userbot from the CLI
-$ opa channels pair <telegram-userbot-id>
+$ openpa channels pair <telegram-userbot-id>
 Telegram sent a verification code to +14155551212.
 Code: 12345
 Password:           # echoed if 2FA, hidden as you type
@@ -301,10 +301,10 @@ Password:           # echoed if 2FA, hidden as you type
 
 **Aborting.** Ctrl-C closes the SSE connection and exits with a
 non-zero status. The adapter on the server keeps running — re-invoke
-`opa channels pair <id>` (or open the web UI dialog) to resume the
+`openpa channels pair <id>` (or open the web UI dialog) to resume the
 flow from wherever it stalled.
 
-### `opa channels delete`
+### `openpa channels delete`
 
 **Purpose.** Stop a channel's adapter and delete the row. **Cascade
 deletes every conversation that lived on that channel and every
@@ -313,12 +313,12 @@ per-sender row.**
 **Syntax.**
 
 ```bash
-opa channels delete <id>
+openpa channels delete <id>
 ```
 
 **Arguments** (required):
 
-- `<id>` — Channel UUID (from `opa channels list`).
+- `<id>` — Channel UUID (from `openpa channels list`).
 
 **Behavior.** Refuses to delete the `main` channel. Otherwise:
 
@@ -332,11 +332,11 @@ Silent on success.
 **Example.**
 
 ```bash
-$ opa channels delete e2e8...d4f1
-$ opa channels list      # gone
+$ openpa channels delete e2e8...d4f1
+$ openpa channels list      # gone
 ```
 
-### `opa channels catalog`
+### `openpa channels catalog`
 
 **Purpose.** Dump the dynamic, TOML-driven channel catalog. This is
 what the web UI's "Add Channel" form is built from.
@@ -344,7 +344,7 @@ what the web UI's "Add Channel" form is built from.
 **Syntax.**
 
 ```bash
-opa channels catalog
+openpa channels catalog
 ```
 
 **Behavior.** Returns the merged catalog object — one entry per
@@ -359,7 +359,7 @@ pretty-printed.
 **Example.**
 
 ```bash
-$ opa channels catalog
+$ openpa channels catalog
 {
   "telegram": {
     "channel": {
@@ -398,17 +398,17 @@ adapter implementation has to land.
 
 ## Filtering conversations by channel
 
-`opa conv list --channel <type>` filters the conversation list by
+`openpa conv list --channel <type>` filters the conversation list by
 channel type. The most common case is rebuilding the sidebar's view
 by-channel from the terminal:
 
 ```bash
-$ opa conv list --channel main         # web/CLI conversations
-$ opa conv list --channel telegram     # only Telegram-sourced ones
+$ openpa conv list --channel main         # web/CLI conversations
+$ openpa conv list --channel telegram     # only Telegram-sourced ones
 ```
 
-The `CHANNEL` column on `opa conv list` shows the channel id (use
-`opa channels list` to map id → type).
+The `CHANNEL` column on `openpa conv list` shows the channel id (use
+`openpa channels list` to map id → type).
 
 ## Worked examples
 
@@ -419,29 +419,29 @@ The `CHANNEL` column on `opa conv list` shows the channel id (use
 $ TOKEN="123456:abc..."
 
 # 2. Register and start the adapter.
-$ opa channels add --type telegram --mode bot \
+$ openpa channels add --type telegram --mode bot \
                    --response-mode detail \
                    --json "{\"bot_token\":\"$TOKEN\"}"
 
 # 3. Confirm it's running.
-$ opa channels list
+$ openpa channels list
 ID         TYPE      MODE  AUTH  REPLY    ENABLED  STATUS
 e2e8...    telegram  bot   none  detail   true     running
 
 # 4. Send a DM to the bot from your phone, then watch the new
 #    conversation appear under the Telegram channel filter.
-$ opa conv list --channel telegram
+$ openpa conv list --channel telegram
 ID         TITLE                CHANNEL          CREATED_AT  TASK_ID
 c_92bc     Lee Nguyen           e2e8...d4f1      ...
 
 # 5. Replay the agent's reasoning trace for that conversation.
-$ opa conv get c_92bc --detail
+$ openpa conv get c_92bc --detail
 ```
 
 ### Pause a channel without losing it
 
 ```bash
-$ opa channels list
+$ openpa channels list
 ID                                     TYPE      MODE  AUTH  REPLY    ENABLED  STATUS
 e2e8...d4f1                            telegram  bot   none  detail   true     running
 
@@ -454,17 +454,17 @@ e2e8...d4f1                            telegram  bot   none  detail   true     r
 
 ```bash
 # Drop the channel — this cascades all its conversations away.
-$ opa channels delete e2e8...d4f1
+$ openpa channels delete e2e8...d4f1
 
 # Re-register with the same token.
-$ opa channels add --type telegram --mode bot \
+$ openpa channels add --type telegram --mode bot \
                    --json '{"bot_token":"123:abc..."}'
 ```
 
 ### Dump the catalog through `jq`
 
 ```bash
-$ opa channels catalog --json | jq '.telegram.channel.modes[].fields'
+$ openpa channels catalog --json | jq '.telegram.channel.modes[].fields'
 {
   "bot_token": {
     "description": "Bot API Token",
@@ -478,13 +478,13 @@ $ opa channels catalog --json | jq '.telegram.channel.modes[].fields'
 ## Troubleshooting
 
 **`add` returns `Channel 'telegram' is already registered for this profile`** —
-There's already a row of that type. `opa channels list` to find it,
+There's already a row of that type. `openpa channels list` to find it,
 then either reuse it (PATCH the config from the web UI) or
-`opa channels delete <id>` first. Each profile is hard-capped to one
+`openpa channels delete <id>` first. Each profile is hard-capped to one
 channel per type.
 
 **`add` succeeds but `STATUS` is `stopped`** — The adapter raised
-during startup. Check `state.last_error` via `opa channels list
+during startup. Check `state.last_error` via `openpa channels list
 --json`; common causes are an invalid `bot_token`, a Telegram userbot
 waiting for the verification code in the pairing dialog (status flips
 to `running` once `ready` fires), a missing `node_modules/` directory
@@ -501,7 +501,7 @@ pairing with. If 2FA is enabled, after the code succeeds the dialog
 asks for the cloud password (the password you set under
 ``Telegram → Settings → Privacy and Security → Two-Step Verification``).
 
-**Trying to send a message into a channel conversation from `opa conv send`** —
+**Trying to send a message into a channel conversation from `openpa conv send`** —
 Returns `403 Read-only channel`. External channels are inbound-only
 from the platform side; the agent's reply is forwarded automatically
 through the adapter. Use the corresponding platform (Telegram, etc.)
@@ -515,7 +515,7 @@ fails. If a single chunk still drops, the cause is logged at
 `telegram: send failed (attempt N/4); resetting connection pool` —
 copy that line into a bug.
 
-**`opa channels delete` deleted my conversations too** — That is the
+**`openpa channels delete` deleted my conversations too** — That is the
 documented behaviour: a channel deletion cascades to its conversations
 and per-sender rows. If you only want to pause a channel, toggle
 `enabled=false` from the web UI's Channels page instead.

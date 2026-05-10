@@ -1,4 +1,4 @@
-"""`opa me` — show identity info for the current OPENPA_TOKEN.
+"""`openpa me` — show identity info for the current OPENPA_TOKEN.
 
 Mirrors `cli/cmd/me.go`.
 """

@@ -4,7 +4,7 @@ This file is invoked by Alembic (online or offline) to apply migrations.
 The DB URL is sourced from the same ``bootstrap.toml`` the runtime uses, so
 we never have two sources of truth for which database to migrate.
 
-Online mode (the path used at server startup and from ``opa db upgrade``):
+Online mode (the path used at server startup and from ``openpa db upgrade``):
 the existing :class:`DatabaseProvider` builds the sync engine, so SQLite
 gets the same WAL/foreign-key pragmas it would get at runtime.
 

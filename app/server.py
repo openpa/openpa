@@ -812,7 +812,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     #
     # The web UI ships inside the openpa wheel at ``app/static/ui/`` (the
     # CI step in ``scripts/build_ui.sh`` populates it). When that
-    # directory exists, ``opa serve`` opens a second uvicorn listener on
+    # directory exists, ``openpa serve`` opens a second uvicorn listener on
     # ``OPENPA_UI_PORT`` (default 1515) and serves the SPA. The browser
     # then sees:
     #

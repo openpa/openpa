@@ -1,4 +1,4 @@
-"""`opa profile ...` — manage OpenPA profiles, persona, and skill mode.
+"""`openpa profile ...` — manage OpenPA profiles, persona, and skill mode.
 
 Mirrors `cli/cmd/profile.go`.
 """

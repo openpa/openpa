@@ -1,10 +1,10 @@
 ---
-description: "Complete reference for the `opa file-watchers` CLI command (aliases `opa file-watcher`, `opa fw`) — the terminal-side counterpart to the **File Watcher Events** section on the OpenPA web UI's Events page — covering how to register a filesystem watch on a directory (with relative-to-OPENPA_USER_WORKING_DIR or absolute paths), filter by event type (created / modified / deleted / moved), target kind (file / folder / any), and file extensions; how to list and delete watcher subscriptions for the active profile; and how to tail server-wide File Watcher admin snapshots over SSE. Documents the trigger payload format the agent receives, hardcoded ignore patterns (`*.swp`, `~$*`, `*.tmp`, `.DS_Store`), the 500ms debounce window, and the persistence-and-rearm-on-boot lifecycle."
+description: "Complete reference for the `openpa file-watchers` CLI command (aliases `openpa file-watcher`, `openpa fw`) — the terminal-side counterpart to the **File Watcher Events** section on the OpenPA web UI's Events page — covering how to register a filesystem watch on a directory (with relative-to-OPENPA_USER_WORKING_DIR or absolute paths), filter by event type (created / modified / deleted / moved), target kind (file / folder / any), and file extensions; how to list and delete watcher subscriptions for the active profile; and how to tail server-wide File Watcher admin snapshots over SSE. Documents the trigger payload format the agent receives, hardcoded ignore patterns (`*.swp`, `~$*`, `*.tmp`, `.DS_Store`), the 500ms debounce window, and the persistence-and-rearm-on-boot lifecycle."
 ---
 
-# `opa file-watchers` — Filesystem Watch Subscriptions
+# `openpa file-watchers` — Filesystem Watch Subscriptions
 
-`opa file-watchers` (aliases `opa file-watcher`, `opa fw`) is the CLI for
+`openpa file-watchers` (aliases `openpa file-watcher`, `openpa fw`) is the CLI for
 managing the **File Watcher** subsystem of OpenPA. A *file watcher
 subscription* binds a directory on disk to a natural-language *action*
 that the Reasoning Agent should execute whenever a matching filesystem
@@ -21,7 +21,7 @@ The group covers three orthogonal concerns:
   or its arm-state changes. Runs until interrupted with Ctrl-C.
 - **Notifications** — file watcher runs publish to the same
   per-profile notifications bus as skill events, so use
-  `opa skill-events notifications` to tail both kinds together.
+  `openpa skill-events notifications` to tail both kinds together.
 
 ## Finding this in the web UI
 
@@ -32,12 +32,12 @@ the OpenPA web UI:
 
 The Events page renders two sections: **Skill Events** at the top and
 **File Watcher Events** below. The lower table mirrors
-`opa file-watchers list`; deletes propagate live through the same
-admin SSE stream that powers `opa file-watchers stream`. There is no
+`openpa file-watchers list`; deletes propagate live through the same
+admin SSE stream that powers `openpa file-watchers stream`. There is no
 "register" button in the UI — subscriptions are created either by the
 assistant via the `register_file_watcher` builtin tool (e.g.
 "when a python file changes in the 'Lee' directory, notify me") or
-from the CLI with `opa file-watchers register`.
+from the CLI with `openpa file-watchers register`.
 
 ## How a watcher fires
 
@@ -92,7 +92,7 @@ detected_at: <ISO 8601 with TZ>
 
 ## Streaming output format
 
-`opa file-watchers stream` maintains a long-lived SSE connection. It
+`openpa file-watchers stream` maintains a long-lived SSE connection. It
 prints one line per snapshot frame in one of two formats:
 
 - **Default (table mode):** `[<event_type>] <raw JSON payload>`.
@@ -109,7 +109,7 @@ restarts: on boot, the `FileWatcherManager` re-arms a watchdog Observer
 for every existing row. If a row's `root_path` is missing or
 unreadable at boot, that row is marked `armed=false` in memory but
 **not deleted** — fix the path on disk and restart the server, or
-delete the subscription and re-register it with `opa file-watchers
+delete the subscription and re-register it with `openpa file-watchers
 register`.
 
 `armed=false` shows up in `list` and `stream` so you can spot stale
@@ -117,12 +117,12 @@ rows without diffing logs.
 
 ## Global flags
 
-All `opa file-watchers` subcommands accept the root-level `--json`
+All `openpa file-watchers` subcommands accept the root-level `--json`
 flag. `OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 
-### `opa file-watchers list`
+### `openpa file-watchers list`
 
 **Purpose.** List file watcher subscriptions belonging to the active
 profile.
@@ -130,7 +130,7 @@ profile.
 **Syntax.**
 
 ```bash
-opa file-watchers list
+openpa file-watchers list
 ```
 
 **Behavior.** Renders an eight-column table:
@@ -152,13 +152,13 @@ With `--json`, returns the underlying array (which also includes
 **Example.**
 
 ```bash
-$ opa file-watchers list
+$ openpa file-watchers list
 ID         NAME      PATH                              TRIGGERS                          TARGET  EXTENSIONS  ARMED  CONV_TITLE
 fw_a3f1    py-only   C:\Users\me\Documents\Lee         created,modified                  file    .py         yes    Lee Watcher
 fw_8c20    inbox     C:\Users\me\Documents\inbox       created                           file    .pdf        yes    PDF Inbox
 ```
 
-### `opa file-watchers delete`
+### `openpa file-watchers delete`
 
 **Purpose.** Remove a subscription. The corresponding watchdog
 Observer is torn down if no other subscription on the same
@@ -167,7 +167,7 @@ Observer is torn down if no other subscription on the same
 **Syntax.**
 
 ```bash
-opa file-watchers delete <id>
+openpa file-watchers delete <id>
 ```
 
 **Behavior.** Silent on success.
@@ -175,10 +175,10 @@ opa file-watchers delete <id>
 **Example.**
 
 ```bash
-$ opa file-watchers delete fw_a3f1
+$ openpa file-watchers delete fw_a3f1
 ```
 
-### `opa file-watchers register`
+### `openpa file-watchers register`
 
 **Purpose.** Create a new file watcher subscription. The server-side
 behavior is identical to invoking the `register_file_watcher` builtin
@@ -188,7 +188,7 @@ arming.
 **Syntax.**
 
 ```bash
-opa file-watchers register --action "<instruction>"
+openpa file-watchers register --action "<instruction>"
                            [--path <directory>]
                            [--name <label>]
                            [--triggers <csv>]
@@ -234,7 +234,7 @@ the server and the boot-time re-arm will retry.
 
 ```bash
 # Watch every change to .py files in <USER_WORKING_DIR>/Lee
-$ opa file-watchers register \
+$ openpa file-watchers register \
     --path Lee \
     --triggers modified,created \
     --target file \
@@ -251,7 +251,7 @@ armed            yes
 conversation_id  c_19a8
 
 # Watch an absolute path for new PDFs and summarize them
-$ opa file-watchers register \
+$ openpa file-watchers register \
     --path C:\Users\me\Documents\inbox \
     --triggers created \
     --target file \
@@ -259,7 +259,7 @@ $ opa file-watchers register \
     --action "summarize the new pdf for me"
 
 # Folder-only top-level watch (non-recursive), bind to existing conversation
-$ opa file-watchers register \
+$ openpa file-watchers register \
     --path Projects \
     --triggers created,deleted \
     --target folder \
@@ -268,7 +268,7 @@ $ opa file-watchers register \
     --action "log when a new project folder appears or vanishes"
 ```
 
-### `opa file-watchers stream`
+### `openpa file-watchers stream`
 
 **Purpose.** Tail the server-wide File Watcher admin snapshot stream.
 Each frame is the **complete** subscription list for the active
@@ -278,7 +278,7 @@ server emits a frame on every create, delete, or arm-state change.
 **Syntax.**
 
 ```bash
-opa file-watchers stream
+openpa file-watchers stream
 ```
 
 **Behavior.** Long-lived SSE connection. See [Streaming output
@@ -288,7 +288,7 @@ exit.
 **Example.**
 
 ```bash
-$ opa file-watchers stream
+$ openpa file-watchers stream
 [snapshot] {"subscriptions":[{"id":"fw_a3f1","name":"py-only",...,"armed":true},...]}
 [snapshot] {"subscriptions":[]}                         # last subscription deleted
 ```
@@ -301,7 +301,7 @@ The most common case — pretty much exactly the user request that
 prompted the feature:
 
 ```bash
-$ opa file-watchers register \
+$ openpa file-watchers register \
     --path Lee \
     --action "notify the user that something changed in the 'Lee' directory"
 id               fw_a3f1
@@ -324,11 +324,11 @@ watcher.
 
 ```bash
 # Window 1
-$ opa file-watchers stream
+$ openpa file-watchers stream
 [snapshot] {"subscriptions":[]}
 
 # Window 2
-$ opa file-watchers register --path Lee --action "notify me"
+$ openpa file-watchers register --path Lee --action "notify me"
 
 # Window 1 immediately receives the new state
 [snapshot] {"subscriptions":[{"id":"fw_a3f1","name":"Lee-all",...,"armed":true}]}
@@ -337,24 +337,24 @@ $ opa file-watchers register --path Lee --action "notify me"
 ### Pipe the snapshot stream into `jq`
 
 ```bash
-$ opa file-watchers stream --json | jq '.data.subscriptions[] | {name, path: .root_path, armed}'
+$ openpa file-watchers stream --json | jq '.data.subscriptions[] | {name, path: .root_path, armed}'
 {"name":"py-only","path":"C:\\Users\\me\\Documents\\Lee","armed":true}
 ```
 
 ### Tail combined notifications (skill events + file watcher events)
 
 ```bash
-$ opa skill-events notifications --since 0
+$ openpa skill-events notifications --since 0
 ```
 
 File watcher runs publish into the same per-profile notifications
 buffer that skill events do, so the existing notifications endpoint
-covers both. There is no separate `opa file-watchers notifications`
+covers both. There is no separate `openpa file-watchers notifications`
 because it would just be the same SSE stream.
 
 ### Manually fire a watcher for development
 
-There is no `opa file-watchers simulate` (intentionally). To exercise
+There is no `openpa file-watchers simulate` (intentionally). To exercise
 a watcher end-to-end during development, just touch a real file at
 the watched path:
 
@@ -372,7 +372,7 @@ debounce → per-subscription filter → enqueue → agent run.
 ## Troubleshooting
 
 **`stream` exits immediately** — Almost always an auth issue. Confirm
-`opa me` works first.
+`openpa me` works first.
 
 **`register` returns `armed: no`** — The subscription row was saved
 but no live watchdog Observer was created. Most common cause: the
@@ -415,7 +415,7 @@ written.
 
 ## Related
 
-- `opa skill-events` — the parallel system for events declared by a
+- `openpa skill-events` — the parallel system for events declared by a
   skill's `SKILL.md` rather than raw filesystem changes.
 - `documents/document.md` — how to write OpenPA docs (this file's
   conventions).

@@ -6,7 +6,7 @@
 # Run this:
 #   - In CI before ``hatch build`` (so released wheels include the SPA).
 #   - Locally before ``pip install -e .`` if you want the SPA served
-#     by ``opa serve`` from a checkout.
+#     by ``openpa serve`` from a checkout.
 #
 # Sources, in priority order:
 #   1. OPENPA_UI_LOCAL=/path/to/openpa-ui   — use a local checkout
@@ -20,7 +20,7 @@
 #     index.html
 #     assets/...
 #     .built-at        ← timestamp marker, also doubles as a sentinel
-#                        for ``opa serve``'s "is the SPA bundled?"
+#                        for ``openpa serve``'s "is the SPA bundled?"
 #                        check.
 
 set -euo pipefail

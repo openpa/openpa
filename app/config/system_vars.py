@@ -24,7 +24,7 @@ from app.config.settings import BaseConfig, get_user_working_directory
 from app.utils.logger import logger
 
 
-def _load_opa_token(profile: Optional[str]) -> Optional[str]:
+def _load_openpa_token(profile: Optional[str]) -> Optional[str]:
     """Read the per-profile OPENPA_TOKEN from ``<OPENPA_WORKING_DIR>/tokens/<profile>.token``.
 
     Returns the stripped token string, or ``None`` if the profile is unset,
@@ -39,10 +39,10 @@ def _load_opa_token(profile: Optional[str]) -> Optional[str]:
             token = f.read().strip()
         return token or None
     except FileNotFoundError:
-        logger.warning(f"OPA token file missing for profile '{profile}': {token_path}")
+        logger.warning(f"OpenPA token file missing for profile '{profile}': {token_path}")
         return None
     except OSError as e:
-        logger.warning(f"Could not read OPA token for profile '{profile}' ({token_path}): {e}")
+        logger.warning(f"Could not read OpenPA token for profile '{profile}' ({token_path}): {e}")
         return None
 
 
@@ -80,12 +80,12 @@ SYSTEM_VARS: list[SystemVarSpec] = [
     SystemVarSpec(
         name="OPENPA_SERVER",
         resolve=lambda _profile: f"http://127.0.0.1:{BaseConfig.PORT}",
-        description="Loopback URL of this server for the `opa` CLI.",
+        description="Loopback URL of this server for the `openpa` CLI.",
     ),
     SystemVarSpec(
         name="OPENPA_TOKEN",
-        resolve=_load_opa_token,
-        description="Per-profile OPA token; omitted when missing.",
+        resolve=_load_openpa_token,
+        description="Per-profile OpenPA token; omitted when missing.",
     ),
 ]
 

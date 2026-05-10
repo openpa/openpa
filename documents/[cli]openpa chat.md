@@ -1,10 +1,10 @@
 ---
-description: "Reference for the `opa chat` CLI command — an interactive full-screen chat REPL that opens a TUI against a new or existing conversation and streams the agent's thinking, text, and tool output as it arrives. Documents how `chat` differs from `opa conv send` (REPL vs one-shot scripting), the keyboard shortcuts (Enter to send, Ctrl+C to cancel an in-flight run or quit when idle, Ctrl+D to quit, PgUp/PgDn to scroll), the optional conversation-id argument that resumes an existing thread, the `-t/--title` flag for new conversations, how to rename a conversation's id or title from outside the REPL via `opa conv set-id` and `opa conv rename`, and what to reach for when you want to script a single message instead of sit at a prompt."
+description: "Reference for the `openpa chat` CLI command — an interactive full-screen chat REPL that opens a TUI against a new or existing conversation and streams the agent's thinking, text, and tool output as it arrives. Documents how `chat` differs from `openpa conv send` (REPL vs one-shot scripting), the keyboard shortcuts (Enter to send, Ctrl+C to cancel an in-flight run or quit when idle, Ctrl+D to quit, PgUp/PgDn to scroll), the optional conversation-id argument that resumes an existing thread, the `-t/--title` flag for new conversations, how to rename a conversation's id or title from outside the REPL via `openpa conv set-id` and `openpa conv rename`, and what to reach for when you want to script a single message instead of sit at a prompt."
 ---
 
-# `opa chat` — Interactive Chat REPL
+# `openpa chat` — Interactive Chat REPL
 
-`opa chat` opens a full-screen TUI chat session against an OpenPA
+`openpa chat` opens a full-screen TUI chat session against an OpenPA
 conversation. Every keystroke goes into the composer; Enter dispatches
 the message; the agent's thinking, text tokens, and tool output stream
 in real-time. With no argument, `chat` creates a new conversation and
@@ -12,7 +12,7 @@ starts a fresh session; with a conversation id, it resumes the thread.
 
 This is the right command when you want to *talk to* the agent. For
 scripted, one-shot interactions (pipe answer to a file, gate it on
-exit code, etc.) reach for [`opa conv send`](%5Bcli%5Dopa%20conv.md)
+exit code, etc.) reach for [`openpa conv send`](%5Bcli%5Dopa%20conv.md)
 instead — its `--raw` and `--json` modes are designed for pipelines,
 while `chat` always runs as an interactive TUI.
 
@@ -22,29 +22,29 @@ composer.
 
 ## Finding this in the web UI
 
-`opa chat` mirrors the conversation view in the web UI:
+`openpa chat` mirrors the conversation view in the web UI:
 
 > **Sidebar → Conversations → (open or create a conversation)**
 
 Selecting a conversation in the sidebar opens the same streaming
 message pane the TUI renders, with a composer at the bottom for new
 messages. Creating a new conversation from the **+** button corresponds
-to running `opa chat` with no argument; clicking into an existing
-conversation corresponds to running `opa chat <id>`.
+to running `openpa chat` with no argument; clicking into an existing
+conversation corresponds to running `openpa chat <id>`.
 
 ## Global flags
 
-`opa chat` accepts the root-level `--json` flag, but only as a no-op:
+`openpa chat` accepts the root-level `--json` flag, but only as a no-op:
 the TUI always renders interactively and ignores `--json`. For
-machine-readable streams use `opa conv send --json` or
-`opa conv attach --json`.
+machine-readable streams use `openpa conv send --json` or
+`openpa conv attach --json`.
 
 `OPENPA_TOKEN` is required.
 
 ## Syntax
 
 ```bash
-opa chat [<conversation_id>] [-t <title>]
+openpa chat [<conversation_id>] [-t <title>]
 ```
 
 **Arguments.**
@@ -71,7 +71,7 @@ opa chat [<conversation_id>] [-t <title>]
 Reasoning mode is always **on** in `chat` — the agent runs its full
 ReAct loop (Thought / Action / Input / Observation / Response) for
 every turn, and the TUI renders each step as it streams. To send a
-message without reasoning, use `opa conv send --no-reasoning` instead.
+message without reasoning, use `openpa conv send --no-reasoning` instead.
 
 ## Behavior
 
@@ -97,14 +97,14 @@ cases.
 ### Start a new chat
 
 ```bash
-$ opa chat -t "Quick question"
+$ openpa chat -t "Quick question"
 # (full-screen TUI opens — type, press Enter to send, Ctrl+D to quit)
 ```
 
 ### Resume an existing conversation
 
 ```bash
-$ opa chat c_82bc
+$ openpa chat c_82bc
 # (TUI opens with the conversation's title; previous messages
 # are scrollable via PgUp/PgDn)
 ```
@@ -113,8 +113,8 @@ $ opa chat c_82bc
 
 ```bash
 # `chat` is interactive only — for one-shot scripting use `conv send`:
-$ id=$(opa conv new -t "One-shot")
-$ opa conv send "$id" "Define entropy in one sentence." --raw
+$ id=$(openpa conv new -t "One-shot")
+$ openpa conv send "$id" "Define entropy in one sentence." --raw
 ```
 
 ### Watch an existing run from another shell
@@ -122,36 +122,36 @@ $ opa conv send "$id" "Define entropy in one sentence." --raw
 ```bash
 # `chat` will *send* a new message and lock you into the composer.
 # To passively follow a run started elsewhere, use `conv attach`:
-$ opa conv attach c_82bc
+$ openpa conv attach c_82bc
 ```
 
 ### Resume after Ctrl+D
 
 ```bash
 # Ctrl+D quits the TUI but does not delete or finalize the conversation.
-$ opa conv list | head
-$ opa chat c_82bc            # pick up where you left off
+$ openpa conv list | head
+$ openpa chat c_82bc            # pick up where you left off
 ```
 
 ### Give the conversation a friendlier id or title
 
-`opa chat` itself does not rename conversations; do it from the
+`openpa chat` itself does not rename conversations; do it from the
 sister command group before resuming. Both edits are non-destructive
 — the message history follows the rename atomically.
 
 ```bash
 # Promote a server-allocated UUID to a memorable slug. The title is
 # reset to match the new id; rename it afterward if you want a label.
-$ opa chat -t "scratch"        # creates e.g. c_82bc, then drops you in
+$ openpa chat -t "scratch"        # creates e.g. c_82bc, then drops you in
 # (Ctrl+D to leave the TUI)
-$ opa conv set-id c_82bc mkt_1
-$ opa conv rename mkt_1 "Marketing thread"
-$ opa chat mkt_1               # resume under the new id
+$ openpa conv set-id c_82bc mkt_1
+$ openpa conv rename mkt_1 "Marketing thread"
+$ openpa chat mkt_1               # resume under the new id
 ```
 
 Format rules for `set-id` (lowercase a-z, digits, `-`, `_`, must
 start with an alphanumeric, max 128 chars) and the full subcommand
-reference live in [`opa conv`](%5Bcli%5Dopa%20conv.md). The web UI's
+reference live in [`openpa conv`](%5Bcli%5Dopa%20conv.md). The web UI's
 sidebar exposes the same edits via the pencil icon on each
 conversation row.
 
@@ -165,8 +165,8 @@ conversation row.
 | Idle (no run)      | Quits the TUI.                                                   | Quits the TUI.                                   |
 
 If you Ctrl+D out during a run and want to stop it later, use
-`opa conv cancel <run_id>` (the run id is the `TASK_ID` column of
-`opa conv list`).
+`openpa conv cancel <run_id>` (the run id is the `TASK_ID` column of
+`openpa conv list`).
 
 ## Troubleshooting
 
@@ -177,17 +177,17 @@ Windows use Windows Terminal or PowerShell 7+ for proper rendering.
 **`Ctrl+C` quit the CLI but my run is still running** — That happens
 when Ctrl+C is delivered before the TUI has wired up its run-cancel
 hook (typically only at the very start of a session). Use
-`opa conv cancel <run_id>` to stop the run from another shell.
+`openpa conv cancel <run_id>` to stop the run from another shell.
 
 **`chat` exits immediately with an auth error** — `OPENPA_TOKEN` is
-either missing or expired. Run `opa me` to confirm.
+either missing or expired. Run `openpa me` to confirm.
 
 **Cannot create a new conversation** — Title-only failures are rare;
 the most common cause is a missing or invalid token. Try
-`opa conv new -t "Test"` to isolate the create step from the TUI.
+`openpa conv new -t "Test"` to isolate the create step from the TUI.
 
 **Wrong conversation opens** — `chat <id>` does not validate the id
 matches the current profile beyond what the server enforces. If a
-conversation id you remember does not appear in `opa conv list`, it
+conversation id you remember does not appear in `openpa conv list`, it
 likely belongs to a different profile — switch tokens (`OPENPA_TOKEN`)
 and try again.

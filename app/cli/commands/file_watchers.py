@@ -1,4 +1,4 @@
-"""`opa file-watchers ...` — manage filesystem watch subscriptions.
+"""`openpa file-watchers ...` — manage filesystem watch subscriptions.
 
 Mirrors `cli/cmd/filewatchers.go`. Phase 2 covers list/delete/register; the
 `stream` SSE subcommand is added in Phase 3.

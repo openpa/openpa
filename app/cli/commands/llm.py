@@ -1,4 +1,4 @@
-"""`opa llm ...` — manage LLM providers, models, and model groups.
+"""`openpa llm ...` — manage LLM providers, models, and model groups.
 
 Mirrors `cli/cmd/llm.go`.
 """
@@ -331,7 +331,7 @@ def device_code_poll(
                     return resp
                 if resp.status == "expired":
                     raise RuntimeError(
-                        "device code expired; run `opa llm device-code start` again"
+                        "device code expired; run `openpa llm device-code start` again"
                     )
                 if resp.status == "error":
                     raise RuntimeError(f"device-code flow error: {resp.error}")

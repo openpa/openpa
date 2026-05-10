@@ -2,7 +2,7 @@
 
 Two entry points:
 
-- :func:`apply` is what the ``opa upgrade`` CLI runs. It walks the
+- :func:`apply` is what the ``openpa upgrade`` CLI runs. It walks the
   whole flow synchronously, emitting ``UpgradeEvent`` records via the
   callback so the caller can render progress.
 - :func:`acquire_lock_or_recover` runs at every server boot. If the
@@ -18,7 +18,7 @@ way back."
 
 Docker installs aren't covered here. The container itself is the unit
 of versioning: ``docker compose pull && up -d`` is the upgrade, and
-the migrations run on the next entrypoint pass via ``opa db upgrade``
+the migrations run on the next entrypoint pass via ``openpa db upgrade``
 (see ``install/desktop/entrypoint.sh``).
 """
 
@@ -176,7 +176,7 @@ def acquire_lock_or_recover(callback: ProgressCallback | None = None) -> None:
     """Boot-time recovery hook. Restores from backup if a lock file exists.
 
     Call this from ``app/server.py`` before the migration runs (or from
-    a CLI ``opa db check-lock`` for ops). Idempotent — no-op when no
+    a CLI ``openpa db check-lock`` for ops). Idempotent — no-op when no
     lock is present.
     """
     lock = _lock_path()
@@ -275,16 +275,16 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
         _emit(callback, UpgradeEvent("install", f"pip install openpa=={release.version}"))
         _pip_install(f"openpa=={release.version}", callback)
 
-        # 4. Migrate. We shell out to a fresh ``opa db upgrade`` rather
+        # 4. Migrate. We shell out to a fresh ``openpa db upgrade`` rather
         # than calling the in-process migration helper because pip just
         # replaced our own source files on disk — Python's import cache
         # still holds the old modules in this process. A subprocess gets
         # a clean import and runs the new release's Alembic chain.
-        _emit(callback, UpgradeEvent("migrate", "opa db upgrade"))
+        _emit(callback, UpgradeEvent("migrate", "openpa db upgrade"))
         _run(
             [sys.executable, "-m", "app.cli.main", "db", "upgrade"],
             callback,
-            prefer="opa db upgrade",
+            prefer="openpa db upgrade",
         )
 
         # 5. Health gate. We hit /health from outside the running
@@ -359,7 +359,7 @@ def _run(
     """Spawn ``cmd``, stream output through the callback, raise on failure.
 
     ``prefer`` lets a step name a more user-friendly equivalent in
-    error messages (e.g., ``"opa db upgrade"`` instead of the raw
+    error messages (e.g., ``"openpa db upgrade"`` instead of the raw
     Alembic invocation). Cosmetic only.
     """
     label = prefer or " ".join(cmd)

@@ -1,10 +1,10 @@
 ---
-description: "Complete reference for the `opa proc` CLI command (alias `opa process`) — the terminal-side counterpart to the **Processes** page in the OpenPA web UI — covering how to list and inspect long-running processes, terminate them (`stop`), feed them stdin (literal text, named keys, or piped stdin), resize their PTY, attach a raw-mode interactive PTY session (`attach`, with detach via Ctrl-\\), tail a live SSE stream of process snapshots (`stream`), and manage autostart registrations (`autostart list/add/delete/run`) so processes relaunch at server boot. Documents the named-key vocabulary for `stdin --keys`, the line-ending modes, the WebSocket-backed `attach`, and how `register-long-running` from `opa tools` ties into autostart."
+description: "Complete reference for the `openpa proc` CLI command (alias `openpa process`) — the terminal-side counterpart to the **Processes** page in the OpenPA web UI — covering how to list and inspect long-running processes, terminate them (`stop`), feed them stdin (literal text, named keys, or piped stdin), resize their PTY, attach a raw-mode interactive PTY session (`attach`, with detach via Ctrl-\\), tail a live SSE stream of process snapshots (`stream`), and manage autostart registrations (`autostart list/add/delete/run`) so processes relaunch at server boot. Documents the named-key vocabulary for `stdin --keys`, the line-ending modes, the WebSocket-backed `attach`, and how `register-long-running` from `openpa tools` ties into autostart."
 ---
 
-# `opa proc` — Long-Running Process Control
+# `openpa proc` — Long-Running Process Control
 
-`opa proc` (alias `opa process`) is the CLI for managing the
+`openpa proc` (alias `openpa process`) is the CLI for managing the
 long-running processes that OpenPA spawns on a profile's behalf —
 typically MCP servers, skill listener daemons, and skill
 `long_running_app` processes. Every process is owned by a profile; the
@@ -19,8 +19,8 @@ The group covers four concerns:
 - **Streaming** — `stream` emits SSE events whenever any process's
   status changes.
 - **Autostart** — `autostart list/add/delete/run` register processes
-  so they relaunch at server boot. `opa tools register-long-running`
-  and `opa skill-events listener-start` both end up writing autostart
+  so they relaunch at server boot. `openpa tools register-long-running`
+  and `openpa skill-events listener-start` both end up writing autostart
   rows that are visible here.
 
 ## Finding this in the web UI
@@ -30,15 +30,15 @@ of the OpenPA web UI:
 
 > **Sidebar → Processes**
 
-The page lists active processes (matching `opa proc list`), exposes a
-**Stop** button per row (matching `opa proc stop`), and opens a
+The page lists active processes (matching `openpa proc list`), exposes a
+**Stop** button per row (matching `openpa proc stop`), and opens a
 PTY-style terminal panel when a process is selected (matching
-`opa proc attach`). The **Autostart** sub-tab on the same page lists
-autostart rows (matching `opa proc autostart list`).
+`openpa proc attach`). The **Autostart** sub-tab on the same page lists
+autostart rows (matching `openpa proc autostart list`).
 
 ## Streaming output format
 
-`opa proc stream` maintains a long-lived SSE connection. It prints one
+`openpa proc stream` maintains a long-lived SSE connection. It prints one
 line per snapshot in one of two formats:
 
 - **Default (table mode):** `[<event_type>] <raw JSON payload>`.
@@ -49,19 +49,19 @@ Press Ctrl-C to exit cleanly.
 
 ## Global flags
 
-All `opa proc` subcommands accept the root-level `--json` flag.
+All `openpa proc` subcommands accept the root-level `--json` flag.
 `OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 
-### `opa proc list`
+### `openpa proc list`
 
 **Purpose.** List running processes for the active profile.
 
 **Syntax.**
 
 ```bash
-opa proc list
+openpa proc list
 ```
 
 **Behavior.** Prints a four-column table:
@@ -79,20 +79,20 @@ exit codes, autostart-id back-references, etc.).
 **Example.**
 
 ```bash
-$ opa proc list
+$ openpa proc list
 PID     STATUS   COMMAND                                       WORKING_DIR
 p_9d72  running  /usr/bin/python /skills/daily-brief/listen.py /home/li/work
 p_e21f  running  /usr/bin/python /skills/daily-brief/run.py    /home/li/work
 ```
 
-### `opa proc get`
+### `openpa proc get`
 
 **Purpose.** Show the full record for a single process.
 
 **Syntax.**
 
 ```bash
-opa proc get <pid>
+openpa proc get <pid>
 ```
 
 **Behavior.** Pretty-prints the JSON object the server returns. With
@@ -101,7 +101,7 @@ opa proc get <pid>
 **Example.**
 
 ```bash
-$ opa proc get p_9d72
+$ openpa proc get p_9d72
 {
   "id": "p_9d72",
   "command": "/usr/bin/python /skills/daily-brief/listen.py",
@@ -113,7 +113,7 @@ $ opa proc get p_9d72
 }
 ```
 
-### `opa proc stop`
+### `openpa proc stop`
 
 **Purpose.** Terminate a process. The server signals the process and
 records the exit; restart policy from autostart still applies.
@@ -121,22 +121,22 @@ records the exit; restart policy from autostart still applies.
 **Syntax.**
 
 ```bash
-opa proc stop <pid>
+openpa proc stop <pid>
 ```
 
 **Behavior.** Silent on success. If the process is part of an
 autostart registration, it will be relaunched on the next server
-restart unless you also `opa proc autostart delete <id>`.
+restart unless you also `openpa proc autostart delete <id>`.
 
 **Example.**
 
 ```bash
-$ opa proc stop p_e21f
+$ openpa proc stop p_e21f
 ```
 
 ## I/O subcommands
 
-### `opa proc stdin`
+### `openpa proc stdin`
 
 **Purpose.** Send input to a running process. Three input modes are
 supported, picked by the flag combination.
@@ -144,8 +144,8 @@ supported, picked by the flag combination.
 **Syntax.**
 
 ```bash
-opa proc stdin <pid> [--text "..."] [--keys K1,K2,...] [--line-ending none|lf|crlf]
-opa proc stdin <pid>                                # body read from stdin
+openpa proc stdin <pid> [--text "..."] [--keys K1,K2,...] [--line-ending none|lf|crlf]
+openpa proc stdin <pid>                                # body read from stdin
 ```
 
 **Flags.**
@@ -176,16 +176,16 @@ response — useful for confirming bytes-written counts).
 
 ```bash
 # Type a literal command and press Enter
-$ opa proc stdin p_9d72 --text "ls /tmp" --line-ending lf
+$ openpa proc stdin p_9d72 --text "ls /tmp" --line-ending lf
 
 # Press the Enter key alone
-$ opa proc stdin p_9d72 --keys Enter
+$ openpa proc stdin p_9d72 --keys Enter
 
 # Pipe a payload from a file
-$ opa proc stdin p_9d72 < commands.txt
+$ openpa proc stdin p_9d72 < commands.txt
 ```
 
-### `opa proc resize`
+### `openpa proc resize`
 
 **Purpose.** Resize a process's pseudo-terminal. Necessary for
 applications that pay attention to terminal size (editors, REPLs,
@@ -194,7 +194,7 @@ applications that pay attention to terminal size (editors, REPLs,
 **Syntax.**
 
 ```bash
-opa proc resize <pid> --cols <int> --rows <int>
+openpa proc resize <pid> --cols <int> --rows <int>
 ```
 
 **Flags** (both required, both must be > 0):
@@ -204,17 +204,17 @@ opa proc resize <pid> --cols <int> --rows <int>
 | `--cols`  | int  | `0`     | Terminal columns.  |
 | `--rows`  | int  | `0`     | Terminal rows.     |
 
-**Behavior.** Silent on success. `opa proc attach` already forwards
+**Behavior.** Silent on success. `openpa proc attach` already forwards
 resize events automatically; this command is for non-interactive
 contexts.
 
 **Example.**
 
 ```bash
-$ opa proc resize p_9d72 --cols 200 --rows 60
+$ openpa proc resize p_9d72 --cols 200 --rows 60
 ```
 
-### `opa proc attach`
+### `openpa proc attach`
 
 **Purpose.** Open an interactive PTY session against a process —
 the closest you can get to running the program "as if" it were
@@ -223,7 +223,7 @@ local.
 **Syntax.**
 
 ```bash
-opa proc attach <pid> [--no-resize]
+openpa proc attach <pid> [--no-resize]
 ```
 
 **Flags.**
@@ -250,11 +250,11 @@ on exit.
 **Example.**
 
 ```bash
-$ opa proc attach p_9d72
+$ openpa proc attach p_9d72
 # (raw-mode session — type as if locally; press Ctrl-\ to detach)
 ```
 
-## `opa proc stream`
+## `openpa proc stream`
 
 **Purpose.** Tail live process snapshots (SSE). Useful for dashboards
 and log tailing.
@@ -262,7 +262,7 @@ and log tailing.
 **Syntax.**
 
 ```bash
-opa proc stream
+openpa proc stream
 ```
 
 **Behavior.** See [Streaming output format](#streaming-output-format).
@@ -271,7 +271,7 @@ Ctrl-C exits.
 **Example.**
 
 ```bash
-$ opa proc stream
+$ openpa proc stream
 [snapshot]    {"id":"p_9d72","status":"running","cpu":0.7,...}
 [exited]      {"id":"p_e21f","exit_code":0,...}
 ```
@@ -280,17 +280,17 @@ $ opa proc stream
 
 Autostart registrations make a process relaunch at server boot.
 Several CLI commands write autostart rows automatically — including
-`opa tools register-long-running` and `opa skill-events listener-start`.
+`openpa tools register-long-running` and `openpa skill-events listener-start`.
 This subgroup gives you direct CRUD on those rows.
 
-### `opa proc autostart list`
+### `openpa proc autostart list`
 
 **Purpose.** List autostart registrations.
 
 **Syntax.**
 
 ```bash
-opa proc autostart list
+openpa proc autostart list
 ```
 
 **Behavior.** Prints a five-column table:
@@ -308,20 +308,20 @@ With `--json`, returns the underlying array.
 **Example.**
 
 ```bash
-$ opa proc autostart list
+$ openpa proc autostart list
 ID      COMMAND                                       WORKING_DIR    PTY  ERROR
 a_8c14  /usr/bin/python /skills/daily-brief/listen.py /home/li/work  yes
 a_b1f0  /usr/bin/python /skills/daily-brief/run.py    /home/li/work  yes
 ```
 
-### `opa proc autostart add`
+### `openpa proc autostart add`
 
 **Purpose.** Register an *already-running* process as autostart.
 
 **Syntax.**
 
 ```bash
-opa proc autostart add --pid <pid> [--force]
+openpa proc autostart add --pid <pid> [--force]
 ```
 
 **Flags.**
@@ -338,30 +338,30 @@ success.
 **Example.**
 
 ```bash
-$ opa proc autostart add --pid p_9d72
+$ openpa proc autostart add --pid p_9d72
 a_8c14
 ```
 
-### `opa proc autostart delete`
+### `openpa proc autostart delete`
 
 **Purpose.** Remove an autostart row.
 
 **Syntax.**
 
 ```bash
-opa proc autostart delete <id>
+openpa proc autostart delete <id>
 ```
 
 **Behavior.** Silent on success. Does **not** stop a running process
-spawned from that row — use `opa proc stop <pid>` for that.
+spawned from that row — use `openpa proc stop <pid>` for that.
 
 **Example.**
 
 ```bash
-$ opa proc autostart delete a_b1f0
+$ openpa proc autostart delete a_b1f0
 ```
 
-### `opa proc autostart run`
+### `openpa proc autostart run`
 
 **Purpose.** Spawn the command from an autostart row immediately,
 without waiting for the next server boot.
@@ -369,7 +369,7 @@ without waiting for the next server boot.
 **Syntax.**
 
 ```bash
-opa proc autostart run <id>
+openpa proc autostart run <id>
 ```
 
 **Behavior.** Prints the new process id on success (or the full
@@ -378,7 +378,7 @@ record with `--json`).
 **Example.**
 
 ```bash
-$ opa proc autostart run a_8c14
+$ openpa proc autostart run a_8c14
 p_9d72
 ```
 
@@ -387,40 +387,40 @@ p_9d72
 ### Find every running listener and tail its output
 
 ```bash
-$ pid=$(opa proc list --json | jq -r '.[] | select(.command|contains("listen.py")) | .id' | head -n1)
-$ opa proc attach "$pid"
+$ pid=$(openpa proc list --json | jq -r '.[] | select(.command|contains("listen.py")) | .id' | head -n1)
+$ openpa proc attach "$pid"
 ```
 
 ### Send Ctrl-C to a wedged process without stopping it
 
 ```bash
 # Attach, press Ctrl-C (which is forwarded), then detach with Ctrl-\
-$ opa proc attach p_e21f
+$ openpa proc attach p_e21f
 ```
 
 ### Resize a TUI process running under a PTY
 
 ```bash
-$ opa proc resize p_9d72 --cols $(tput cols) --rows $(tput lines)
+$ openpa proc resize p_9d72 --cols $(tput cols) --rows $(tput lines)
 ```
 
 ### Promote a one-off process to autostart
 
 ```bash
-$ pid=$(opa proc list --json | jq -r '.[] | select(.command|contains("daily-brief"))' | jq -r .id | head -n1)
-$ opa proc autostart add --pid "$pid"
+$ pid=$(openpa proc list --json | jq -r '.[] | select(.command|contains("daily-brief"))' | jq -r .id | head -n1)
+$ openpa proc autostart add --pid "$pid"
 ```
 
 ### Re-run an autostart row after a config change
 
 ```bash
-$ opa proc autostart run a_8c14
+$ openpa proc autostart run a_8c14
 ```
 
 ### Tail process state changes into `jq`
 
 ```bash
-$ opa proc stream --json | jq -r 'select(.type=="exited") | "\(.data.id) exited code=\(.data.exit_code)"'
+$ openpa proc stream --json | jq -r 'select(.type=="exited") | "\(.data.id) exited code=\(.data.exit_code)"'
 ```
 
 ## Troubleshooting
@@ -430,7 +430,7 @@ when neither `--text` nor `--keys` is provided. Either pipe a file in
 (`< file.txt`) or use `--text`/`--keys`.
 
 **`attach` shows garbled output / no response** — The process is not
-running under a PTY. Check `opa proc list --json | jq '.[] | .is_pty'`.
+running under a PTY. Check `openpa proc list --json | jq '.[] | .is_pty'`.
 Non-PTY processes can still receive `stdin`, but their stdout/stderr
 streams are line-buffered and not interactive.
 
@@ -449,6 +449,6 @@ existing row first, or pass `--force` if you genuinely want a second
 copy.
 
 **Process exits immediately after `autostart run`** — Inspect the
-process record (`opa proc get <pid>`) for the exit code and stderr
+process record (`openpa proc get <pid>`) for the exit code and stderr
 preview. The most common cause is a missing variable or a stale
-working directory; check `opa tools set-var` for the relevant tool.
+working directory; check `openpa tools set-var` for the relevant tool.

@@ -1,4 +1,4 @@
-"""`opa conv ...` — manage conversations and stream agent runs.
+"""`openpa conv ...` — manage conversations and stream agent runs.
 
 Mirrors `cli/cmd/conv.go`. The interactive TUI used by `conv send`/`attach`
 and `conv get --detail` lands in Phase 4 — until then those commands fall

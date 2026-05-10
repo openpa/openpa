@@ -1,10 +1,10 @@
 ---
-description: "Complete reference for the `opa setup` CLI command — the headless equivalent of the OpenPA first-run wizard — covering how to check setup status, mint the very first admin JWT (`opa setup complete`), recover from an orphaned half-setup (`reset-orphaned`), trigger a re-run of the wizard (`reconfigure`), and read or write server-wide non-secret config (`server-config get/set`). Spells out which subcommands need an `OPENPA_TOKEN` and which are deliberately unauthenticated, documents the JSON payload schema accepted by `setup complete`, and gives admin-friendly examples for scripted bootstrap and reconfiguration."
+description: "Complete reference for the `openpa setup` CLI command — the headless equivalent of the OpenPA first-run wizard — covering how to check setup status, mint the very first admin JWT (`openpa setup complete`), recover from an orphaned half-setup (`reset-orphaned`), trigger a re-run of the wizard (`reconfigure`), and read or write server-wide non-secret config (`server-config get/set`). Spells out which subcommands need an `OPENPA_TOKEN` and which are deliberately unauthenticated, documents the JSON payload schema accepted by `setup complete`, and gives admin-friendly examples for scripted bootstrap and reconfiguration."
 ---
 
-# `opa setup` — First-Run Setup and Server Configuration
+# `openpa setup` — First-Run Setup and Server Configuration
 
-`opa setup` is the CLI entry point for bootstrapping a fresh OpenPA
+`openpa setup` is the CLI entry point for bootstrapping a fresh OpenPA
 server, recovering a half-finished setup, and editing server-wide
 configuration after the fact. It exposes the same actions that the
 **Setup Wizard** in the web UI walks an admin through, but in a form
@@ -19,7 +19,7 @@ The group has two halves with different auth requirements:
   `server-config get`, `server-config set`. These need a valid
   `OPENPA_TOKEN` from an admin profile.
 
-A typical first-run flow is: `opa setup status` → `opa setup complete`
+A typical first-run flow is: `openpa setup status` → `openpa setup complete`
 (which prints a JWT) → `export OPENPA_TOKEN=...` → use the rest of the CLI.
 
 ## Finding this in the web UI
@@ -35,11 +35,11 @@ The admin-authenticated subcommands map to the admin settings page:
 > **Sidebar → Settings → Admin → Server config**
 
 That page shows non-secret server settings as a key/value editor, and
-exposes a "Reset setup" action that mirrors `opa setup reconfigure`.
+exposes a "Reset setup" action that mirrors `openpa setup reconfigure`.
 
 ## Global flags and auth
 
-All `opa setup` subcommands respect the root-level `--json` flag.
+All `openpa setup` subcommands respect the root-level `--json` flag.
 
 Unlike most CLI commands, `status`, `complete`, and `reset-orphaned`
 are deliberately **unauthenticated** — they ignore `OPENPA_TOKEN`. The
@@ -51,7 +51,7 @@ the CLI talks to.
 
 ## Subcommands
 
-### `opa setup status`
+### `openpa setup status`
 
 **Purpose.** Check whether the server has finished its first-run setup,
 and optionally whether a particular profile already exists.
@@ -59,7 +59,7 @@ and optionally whether a particular profile already exists.
 **Syntax.**
 
 ```bash
-opa setup status [--profile <name>]
+openpa setup status [--profile <name>]
 ```
 
 **Flags.**
@@ -82,12 +82,12 @@ With `--json`, returns the raw object exactly as the server emitted it.
 **Example.**
 
 ```bash
-$ opa setup status --profile admin
+$ openpa setup status --profile admin
 setup_complete  true
 profile_exists  true
 ```
 
-### `opa setup complete`
+### `openpa setup complete`
 
 **Purpose.** POST a setup payload — the JSON the wizard would have
 collected — and receive a freshly minted admin JWT. This is the **only
@@ -97,7 +97,7 @@ existing token.
 **Syntax.**
 
 ```bash
-opa setup complete [--profile <name>] (--json '<inline>' | --json-file <path|->)
+openpa setup complete [--profile <name>] (--json '<inline>' | --json-file <path|->)
 ```
 
 **Flags.**
@@ -148,7 +148,7 @@ With `--json`, the full response object is emitted to stdout instead.
 
 ```bash
 # Minimal: just the profile
-$ echo '{"profile":"admin"}' | opa setup complete
+$ echo '{"profile":"admin"}' | openpa setup complete
 profile     admin
 expires_at  2026-06-01T14:00:00Z
 token       eyJhbGciOi...
@@ -157,13 +157,13 @@ Export the token to use the CLI:
   export OPENPA_TOKEN=eyJhbGciOi...
 
 # From a file, with a profile override
-$ opa setup complete --profile admin --json-file ./bootstrap.json
+$ openpa setup complete --profile admin --json-file ./bootstrap.json
 
 # Capture the token directly
-$ export OPENPA_TOKEN=$(opa setup complete --json-file ./bootstrap.json --json | jq -r .token)
+$ export OPENPA_TOKEN=$(openpa setup complete --json-file ./bootstrap.json --json | jq -r .token)
 ```
 
-### `opa setup reset-orphaned`
+### `openpa setup reset-orphaned`
 
 **Purpose.** Recover from a partially-completed setup where
 `setup_complete` is true but no profiles exist (for example, after
@@ -173,7 +173,7 @@ can run again.
 **Syntax.**
 
 ```bash
-opa setup reset-orphaned
+openpa setup reset-orphaned
 ```
 
 **Behavior.** Unauthenticated. Silent on success. The server itself
@@ -183,12 +183,12 @@ is in any state other than "orphaned".
 **Example.**
 
 ```bash
-$ opa setup reset-orphaned
-$ opa setup status
+$ openpa setup reset-orphaned
+$ openpa setup status
 setup_complete  false
 ```
 
-### `opa setup reconfigure`
+### `openpa setup reconfigure`
 
 **Purpose.** Reset `setup_complete` from a healthy server so the wizard
 runs again on next boot. Used to onboard the server through a fresh
@@ -197,23 +197,23 @@ admin payload, e.g. after rotating the JWT secret.
 **Syntax.**
 
 ```bash
-opa setup reconfigure
+openpa setup reconfigure
 ```
 
 **Behavior.** **Requires admin auth.** Silent on success. The next
-startup of openpa-ui will display the Setup Wizard, and `opa setup
+startup of openpa-ui will display the Setup Wizard, and `openpa setup
 status` will report `setup_complete=false` until a new `setup complete`
 call lands.
 
 **Example.**
 
 ```bash
-$ opa setup reconfigure
-$ opa setup status
+$ openpa setup reconfigure
+$ openpa setup status
 setup_complete  false
 ```
 
-### `opa setup server-config get`
+### `openpa setup server-config get`
 
 **Purpose.** Read non-secret server-wide settings — the same key/value
 pairs accepted by `server_config` in the setup payload.
@@ -221,8 +221,8 @@ pairs accepted by `server_config` in the setup payload.
 **Syntax.**
 
 ```bash
-opa setup server-config get [<key>]
-opa setup server server-config get [<key>]   # alias
+openpa setup server-config get [<key>]
+openpa setup server server-config get [<key>]   # alias
 ```
 
 **Arguments** (optional):
@@ -237,24 +237,24 @@ full JSON object (or `{<key>: <value>}` for the single-key form).
 
 ```bash
 # Everything
-$ opa setup server-config get
+$ openpa setup server-config get
 user_working_dir   /home/li/work
 jwt_issuer         openpa
 log_level          info
 
 # A single key (handy for scripts)
-$ opa setup server-config get user_working_dir
+$ openpa setup server-config get user_working_dir
 /home/li/work
 ```
 
-### `opa setup server-config set`
+### `openpa setup server-config set`
 
 **Purpose.** Write one or more server-wide config keys.
 
 **Syntax.**
 
 ```bash
-opa setup server-config set KEY=VALUE [KEY=VALUE...]
+openpa setup server-config set KEY=VALUE [KEY=VALUE...]
 ```
 
 **Arguments** (at least one required):
@@ -268,8 +268,8 @@ PATCH; if any one is rejected, none are applied. Silent on success.
 **Examples.**
 
 ```bash
-$ opa setup server-config set log_level=debug user_working_dir=/srv/openpa
-$ opa setup server-config get log_level
+$ openpa setup server-config set log_level=debug user_working_dir=/srv/openpa
+$ openpa setup server-config get log_level
 debug
 ```
 
@@ -279,7 +279,7 @@ debug
 
 ```bash
 # 1. Confirm the server is fresh
-$ opa setup status
+$ openpa setup status
 setup_complete  false
 
 # 2. POST the wizard payload, capture the token
@@ -290,10 +290,10 @@ $ cat > bootstrap.json <<'EOF'
   "llm_config":    { "anthropic.api_key": "sk-...", "auth_method": "anthropic" }
 }
 EOF
-$ export OPENPA_TOKEN=$(opa setup complete --json-file bootstrap.json --json | jq -r .token)
+$ export OPENPA_TOKEN=$(openpa setup complete --json-file bootstrap.json --json | jq -r .token)
 
 # 3. Verify identity is now usable
-$ opa me
+$ openpa me
 profile  admin
 ...
 ```
@@ -301,16 +301,16 @@ profile  admin
 ### Re-run the wizard from an existing admin
 
 ```bash
-$ opa setup reconfigure        # invalidates setup_complete
+$ openpa setup reconfigure        # invalidates setup_complete
 $ unset OPENPA_TOKEN              # no longer needed
-$ opa setup complete --json-file bootstrap.json
+$ openpa setup complete --json-file bootstrap.json
 ```
 
 ### Rotate the configured working directory
 
 ```bash
-$ opa setup server-config set user_working_dir=/mnt/openpa
-$ opa setup server-config get user_working_dir
+$ openpa setup server-config set user_working_dir=/mnt/openpa
+$ openpa setup server-config get user_working_dir
 /mnt/openpa
 ```
 
@@ -326,18 +326,18 @@ for the payload. To read from stdin, omit both flags or pass
 
 **`401 Unauthorized` on `reconfigure` / `server-config`** — These
 subcommands require admin auth. Make sure `OPENPA_TOKEN` belongs to an
-admin profile (`opa me` to confirm).
+admin profile (`openpa me` to confirm).
 
 **`setup complete` reports `setup already complete`** — The server has
-been bootstrapped before. Either use `opa profile create` for new
-profiles (with an existing admin token), or run `opa setup reconfigure`
+been bootstrapped before. Either use `openpa profile create` for new
+profiles (with an existing admin token), or run `openpa setup reconfigure`
 first to allow the wizard to run again.
 
 **`reset-orphaned` rejected** — The recovery path only fires when the
 database is genuinely orphaned (`setup_complete=true` but no profiles).
-Run `opa setup status` first to confirm.
+Run `openpa setup status` first to confirm.
 
 **Token printed to stdout but not exported** — `setup complete` cannot
 mutate your shell environment. Either copy the printed export line
 (emitted to stderr), or capture the token in a subshell:
-`export OPENPA_TOKEN=$(opa setup complete --json-file b.json --json | jq -r .token)`.
+`export OPENPA_TOKEN=$(openpa setup complete --json-file b.json --json | jq -r .token)`.

@@ -159,7 +159,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # ── runtime defaults ──────────────────────────────────────────────────────
 #
-# ``OPENPA_UI_DIR`` points ``opa serve`` at the SPA built in stage 1.
+# ``OPENPA_UI_DIR`` points ``openpa serve`` at the SPA built in stage 1.
 # It overrides the wheel-bundled location, so this image always serves
 # the freshly-built SPA from this Dockerfile rather than whatever (if
 # anything) shipped inside the openpa wheel.

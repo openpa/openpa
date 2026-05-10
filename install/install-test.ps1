@@ -34,6 +34,18 @@
 
 .PARAMETER Reinstall
     Wipe any existing %USERPROFILE%\.openpa\venv before installing.
+
+.PARAMETER AutoInstallPython
+    Auto-install isolated Python 3.13 if missing (default: prompt;
+    -Unattended installs silently).
+
+.PARAMETER NoAutoInstallPython
+    Never auto-install; print manual hints and exit when Python is missing.
+
+.PARAMETER NoModifyPath
+    Don't modify the User-scope PATH. Defaults to true for the test
+    installer when OPENPA_WORKING_DIR points outside the canonical
+    install dir, so a staging install never clobbers prod's PATH entry.
 #>
 
 [CmdletBinding()]
@@ -43,7 +55,11 @@ param(
     [ValidateSet('','docker','native')] [string] $Mode = '',
     [switch] $NoLaunch,
     [switch] $Unattended,
-    [switch] $Reinstall
+    [switch] $Reinstall,
+    [switch] $AutoInstallPython,
+    [switch] $NoAutoInstallPython,
+    [switch] $ModifyPath,
+    [switch] $NoModifyPath
 )
 
 Set-StrictMode -Version Latest
@@ -64,6 +80,17 @@ if ($Unattended -and $Deployment -eq 'server' -and -not $AppHost) {
     Write-Err2 "-Unattended with -Deployment server requires -AppHost"
     exit 2
 }
+if ($AutoInstallPython -and $NoAutoInstallPython) {
+    Write-Err2 "-AutoInstallPython and -NoAutoInstallPython are mutually exclusive"
+    exit 2
+}
+if ($ModifyPath -and $NoModifyPath) {
+    Write-Err2 "-ModifyPath and -NoModifyPath are mutually exclusive"
+    exit 2
+}
+if ($Unattended -and -not $AutoInstallPython -and -not $NoAutoInstallPython) {
+    $AutoInstallPython = $true
+}
 
 # ── test-pypi config ──────────────────────────────────────────────────────
 
@@ -83,6 +110,21 @@ $BootstrapFile = Join-Path $OpenpaHome 'bootstrap.toml'
 $LogFile       = Join-Path $OpenpaHome 'install.log'
 $PidFile       = Join-Path $OpenpaHome 'install.pid'
 $ServerLogFile = Join-Path $OpenpaHome 'server.log'
+$BinDir        = Join-Path $OpenpaHome 'bin'
+$UvExe         = Join-Path $BinDir 'uv.exe'
+
+# Default PATH-mod behavior for the test installer: only modify PATH when
+# OPENPA_HOME is the canonical install dir, so a staging install at
+# ~/.openpa-test doesn't clobber prod's PATH entry. -ModifyPath /
+# -NoModifyPath override.
+$DefaultOpenpaHome = Join-Path $env:USERPROFILE '.openpa'
+if (-not $ModifyPath -and -not $NoModifyPath) {
+    if ($OpenpaHome -ieq $DefaultOpenpaHome) {
+        $ModifyPath = $true
+    } else {
+        $NoModifyPath = $true
+    }
+}
 
 if (-not (Test-Path $OpenpaHome)) { New-Item -ItemType Directory -Path $OpenpaHome | Out-Null }
 
@@ -108,33 +150,35 @@ Write-Step "Environment"
 $Arch = $env:PROCESSOR_ARCHITECTURE
 Write-Ok "OS:   Windows ($Arch)"
 
-$Python = $null
-$candidates = @(
-    @{ Cmd = 'py'; Args = @('-3.13','-c','import sys; print("%d.%d" % sys.version_info[:2])') },
-    @{ Cmd = 'python'; Args = @('-c','import sys; print("%d.%d" % sys.version_info[:2])') }
-)
-foreach ($c in $candidates) {
-    if (Get-Command $c.Cmd -ErrorAction SilentlyContinue) {
-        try {
-            $ver = & $c.Cmd @($c.Args) 2>$null
-            if ($ver -match '^3\.(1[3-9]|[2-9]\d)$') {
-                if ($c.Cmd -eq 'py') {
-                    $Python = (& py -3.13 -c "import sys; print(sys.executable)").Trim()
-                } else {
-                    $Python = (Get-Command python).Source
+function Find-SystemPython {
+    $candidates = @(
+        @{ Cmd = 'py'; Args = @('-3.13','-c','import sys; print("%d.%d" % sys.version_info[:2])') },
+        @{ Cmd = 'python'; Args = @('-c','import sys; print("%d.%d" % sys.version_info[:2])') }
+    )
+    foreach ($c in $candidates) {
+        if (Get-Command $c.Cmd -ErrorAction SilentlyContinue) {
+            try {
+                $ver = & $c.Cmd @($c.Args) 2>$null
+                if ($ver -match '^3\.(1[3-9]|[2-9]\d)$') {
+                    if ($c.Cmd -eq 'py') {
+                        return (& py -3.13 -c "import sys; print(sys.executable)").Trim()
+                    } else {
+                        return (Get-Command python).Source
+                    }
                 }
-                break
+            } catch {
+                # Fall through to the next candidate.
             }
-        } catch {
-            # Fall through to the next candidate.
         }
     }
+    return $null
 }
+$Python = Find-SystemPython
 
 if ($Python) {
     Write-Ok "Python: $(& $Python --version) at $Python"
 } else {
-    Write-Info "Python: 3.13+ not found (only required for native mode)"
+    Write-Info "Python: 3.13+ not found (will auto-install in native mode)"
 }
 
 $HasDocker = $false
@@ -354,15 +398,100 @@ profile name, and tool preferences, then activates the server.
 
 # ── native install ────────────────────────────────────────────────────────
 
-if (-not $Python) {
-    Write-Err2 "Python 3.13 or newer is required for native mode but was not found."
+function Write-PythonManualHint {
     Write-Host ""
     Write-Host "Install options:"
     Write-Host "  winget install Python.Python.3.13"
     Write-Host "  https://www.python.org/downloads/"
     Write-Host ""
     Write-Host "Re-run this script after Python is on your PATH (or pass -Mode docker)."
-    exit 1
+}
+
+function Confirm-AutoInstallPython {
+    if ($NoAutoInstallPython) {
+        Write-Err2 "Python 3.13 or newer is required for native mode but was not found."
+        Write-PythonManualHint
+        exit 1
+    }
+    if ($AutoInstallPython) { return }
+    Write-Host ""
+    Write-Host "OpenPA can install an isolated Python 3.13 just for itself"
+    Write-Host "(~70 MB downloaded into $OpenpaHome\python, no admin needed; system"
+    Write-Host "Python is left untouched)."
+    Write-Host ""
+    while ($true) {
+        $choice = Read-Host "Install isolated Python 3.13 now? [Y/n]"
+        if (-not $choice) { $choice = 'y' }
+        switch ($choice.ToLower()) {
+            'y'   { return }
+            'yes' { return }
+            'n'   {
+                Write-Err2 "Aborted: Python 3.13 is required for native mode."
+                Write-PythonManualHint
+                exit 1
+            }
+            'no'  {
+                Write-Err2 "Aborted: Python 3.13 is required for native mode."
+                Write-PythonManualHint
+                exit 1
+            }
+            default { Write-Warn2 "Please answer y or n." }
+        }
+    }
+}
+
+function Install-UvLocally {
+    if (Test-Path $UvExe) {
+        Write-Info "uv already installed at $UvExe"
+        return
+    }
+    Write-Info "Installing uv into $BinDir"
+    if (-not (Test-Path $BinDir)) {
+        New-Item -ItemType Directory -Path $BinDir | Out-Null
+    }
+    $env:UV_INSTALL_DIR        = $BinDir
+    $env:UV_UNMANAGED_INSTALL  = $BinDir
+    $env:INSTALLER_NO_MODIFY_PATH = '1'
+    try {
+        Invoke-Expression (Invoke-WebRequest -UseBasicParsing 'https://astral.sh/uv/install.ps1').Content *>> $LogFile
+    } catch {
+        Write-Err2 "Failed to download uv (the Python installer)."
+        Write-Host ""
+        Write-Host "Possible causes: no internet, corporate TLS interception, or astral.sh"
+        Write-Host "is blocked. Set HTTPS_PROXY if you're behind a proxy, or install"
+        Write-Host "Python manually."
+        Write-PythonManualHint
+        exit 1
+    }
+    if (-not (Test-Path $UvExe)) {
+        Write-Err2 "uv installer ran but $UvExe is missing - see $LogFile."
+        exit 1
+    }
+    Write-Ok "Installed uv at $UvExe"
+}
+
+function Install-PythonViaUv {
+    $env:UV_PYTHON_INSTALL_DIR = Join-Path $OpenpaHome 'python'
+    $env:UV_CACHE_DIR          = Join-Path $OpenpaHome 'uv-cache'
+    Write-Info "Downloading isolated Python 3.13 (this may take a minute)"
+    & $UvExe python install 3.13 *>> $LogFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err2 "uv failed to install Python 3.13 - see $LogFile."
+        exit 1
+    }
+    $found = (& $UvExe python find 3.13 2>$null).Trim()
+    if (-not $found -or -not (Test-Path $found)) {
+        Write-Err2 "Python install completed but the interpreter could not be located."
+        exit 1
+    }
+    $script:Python = $found
+    Write-Ok "Python: $(& $Python --version) at $Python (isolated)"
+}
+
+if (-not $Python) {
+    Confirm-AutoInstallPython
+    Install-UvLocally
+    Install-PythonViaUv
 }
 
 # ── existing install detection ────────────────────────────────────────────
@@ -375,7 +504,7 @@ if ($Reinstall -and (Test-Path $VenvDir)) {
 }
 
 $VenvPip = Join-Path $VenvDir 'Scripts\pip.exe'
-$VenvOpa = Join-Path $VenvDir 'Scripts\opa.exe'
+$VenvOpenpa = Join-Path $VenvDir 'Scripts\openpa.exe'
 
 # Test installs use Test PyPI as the primary index and prod PyPI as a
 # fallback (transitive deps like anthropic / openai / pandas only live
@@ -400,9 +529,60 @@ if (Test-Path $VenvDir) {
 }
 
 $InstalledVersion = ''
-try { $InstalledVersion = (& $VenvOpa version 2>$null).Split(' ')[-1] } catch {}
+try { $InstalledVersion = (& $VenvOpenpa version 2>$null).Split(' ')[-1] } catch {}
 if (-not $InstalledVersion) { $InstalledVersion = '?' }
 Write-Ok "Installed openpa $InstalledVersion (test build)"
+
+# ── shim & PATH ───────────────────────────────────────────────────────────
+
+if (-not (Test-Path $BinDir)) {
+    New-Item -ItemType Directory -Path $BinDir | Out-Null
+}
+$OpenpaCmd = Join-Path $BinDir 'openpa.cmd'
+@"
+@echo off
+"%~dp0..\venv\Scripts\openpa.exe" %*
+"@ | Set-Content -Path $OpenpaCmd -Encoding ascii
+
+$OpenpaPs1 = Join-Path $BinDir 'openpa.ps1'
+@'
+& "$PSScriptRoot\..\venv\Scripts\openpa.exe" $args
+exit $LASTEXITCODE
+'@ | Set-Content -Path $OpenpaPs1 -Encoding utf8
+
+Write-Ok "Wrote shim $OpenpaCmd (-> venv\Scripts\openpa.exe)"
+
+function Add-OpenPAPathEntry {
+    $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $target  = $BinDir
+    $exists  = $false
+    if ($current) {
+        foreach ($entry in ($current -split ';')) {
+            if ($entry.TrimEnd('\') -ieq $target.TrimEnd('\')) {
+                $exists = $true
+                break
+            }
+        }
+    }
+    if (-not $exists) {
+        $newPath = if ($current) { "$current;$target" } else { $target }
+        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+        Write-Ok "Added $target to your User PATH"
+    } else {
+        Write-Info "$target is already on your User PATH"
+    }
+    if (-not (";$($env:Path);" -like "*;$target;*")) {
+        $env:Path = "$($env:Path);$target"
+    }
+}
+
+if ($NoModifyPath) {
+    Write-Info "Skipping PATH modification (test installer / -NoModifyPath). Add manually if needed:"
+    Write-Host '    $current = [Environment]::GetEnvironmentVariable(''Path'', ''User'')'
+    Write-Host "    [Environment]::SetEnvironmentVariable('Path', `$current + ';$BinDir', 'User')"
+} else {
+    Add-OpenPAPathEntry
+}
 
 # ── env file ──────────────────────────────────────────────────────────────
 
@@ -435,9 +615,9 @@ db_provider = "sqlite"
 # ── migrate ───────────────────────────────────────────────────────────────
 
 Write-Info "Migrating database to current schema"
-& $VenvOpa db upgrade *>> $LogFile
+& $VenvOpenpa db upgrade *>> $LogFile
 $Revision = '?'
-try { $Revision = (& $VenvOpa db current 2>$null) } catch {}
+try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
 Write-Ok "Database at revision $Revision"
 
 # ── start the server ──────────────────────────────────────────────────────
@@ -469,7 +649,7 @@ if (Test-Path $PidFile) {
 }
 
 if (-not $running) {
-    $proc = Start-Process -FilePath $VenvOpa -ArgumentList 'serve' `
+    $proc = Start-Process -FilePath $VenvOpenpa -ArgumentList 'serve' `
         -RedirectStandardOutput $ServerLogFile -RedirectStandardError $ServerLogFile `
         -WindowStyle Hidden -PassThru
     $proc.Id | Set-Content -Path $PidFile -Encoding ascii
@@ -503,7 +683,10 @@ profile name, and tool preferences, then activates the server.
   Wizard URL: $WizardUrl
   Backend:    http://${ServerHost}:${ServerPort}
   Stop:       Stop-Process -Id (Get-Content $PidFile)
-  Re-open:    & "$VenvOpa" serve
+  Re-open:    openpa serve   (or: & "$VenvOpenpa" serve)
+
+  Tip: open a NEW terminal so ``openpa`` is on PATH (already-open
+       shells won't see the User PATH update).
 
 "@
 

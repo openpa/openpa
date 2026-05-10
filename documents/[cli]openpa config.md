@@ -1,14 +1,14 @@
 ---
-description: "Complete reference for the `opa config` CLI command — the terminal-side counterpart to the **Settings → Config** page in the OpenPA web UI — covering how to inspect, override, and reset per-profile agent settings using the four subcommands `opa config schema`, `opa config get`, `opa config set`, and `opa config reset`. Lists every configurable key across the reasoning agent loop (max steps, retries, temperature, max tokens, steps history), conversation history token budgets, skill classifier, and trace summarizer, with dotted names, types, defaults, allowed ranges, and the matching card and field label on the Settings page so users can switch between CLI and UI without losing their place."
+description: "Complete reference for the `openpa config` CLI command — the terminal-side counterpart to the **Settings → Config** page in the OpenPA web UI — covering how to inspect, override, and reset per-profile agent settings using the four subcommands `openpa config schema`, `openpa config get`, `openpa config set`, and `openpa config reset`. Lists every configurable key across the reasoning agent loop (max steps, retries, temperature, max tokens, steps history), conversation history token budgets, skill classifier, and trace summarizer, with dotted names, types, defaults, allowed ranges, and the matching card and field label on the Settings page so users can switch between CLI and UI without losing their place."
 ---
 
-# `opa config` — Per-Profile Settings Reference
+# `openpa config` — Per-Profile Settings Reference
 
-`opa config` is the CLI for inspecting and changing per-profile settings
+`openpa config` is the CLI for inspecting and changing per-profile settings
 that control the OpenPA reasoning agent. Each subcommand maps one-to-one
 to an action on the **Settings → Config** page in the web UI, so you can
 freely switch between the two: anything you change in the CLI shows up
-on that page, and anything you change there is visible to `opa config
+on that page, and anything you change there is visible to `openpa config
 get`.
 
 The settings are grouped into four areas:
@@ -23,9 +23,9 @@ The settings are grouped into four areas:
   back into the conversation history when they grow too large.
 
 Every setting has a built-in **default**. When you change a setting
-with `opa config set`, your value becomes an **override** that takes
+with `openpa config set`, your value becomes an **override** that takes
 priority over the default for your profile only; the override persists
-across restarts. `opa config reset` removes the override and the
+across restarts. `openpa config reset` removes the override and the
 setting goes back to its default. Overrides are scoped to one profile,
 so different profiles can carry different values for the same key
 without interfering with each other.
@@ -56,19 +56,19 @@ key so you can match it to the row you see in the card.
 
 ## Global flags
 
-All `opa config` subcommands accept the root-level `--json` flag, which
+All `openpa config` subcommands accept the root-level `--json` flag, which
 forces JSON output instead of the default human-readable table:
 
 ```bash
-opa config get --json
+openpa config get --json
 ```
 
 ## Subcommands
 
-`opa config` has four subcommands. Each is documented below with its
+`openpa config` has four subcommands. Each is documented below with its
 purpose, syntax, and worked examples.
 
-### `opa config schema`
+### `openpa config schema`
 
 **Purpose.** Print every configurable group and key, with each key's
 type, default value, and allowed range. This is the answer to "what can
@@ -77,7 +77,7 @@ I configure?".
 **Syntax.**
 
 ```bash
-opa config schema [--json]
+openpa config schema [--json]
 ```
 
 **Behavior.** In the default (table) view, output is grouped by config
@@ -89,7 +89,7 @@ includes each key's `min`, `max`, `step`, `label`, and `description`.
 **Example (default output, abbreviated).**
 
 ```bash
-$ opa config schema
+$ openpa config schema
 [agent] Reasoning Agent
   Controls the ReAct loop's iteration limits and per-call LLM parameters.
   agent.max_llm_retries  type=number default=2
@@ -100,7 +100,7 @@ $ opa config schema
   ...
 ```
 
-### `opa config get`
+### `openpa config get`
 
 **Purpose.** Show the *current* value of one or all settings for the
 active profile, alongside the declared default so you can see at a
@@ -109,7 +109,7 @@ glance which keys you have overridden.
 **Syntax.**
 
 ```bash
-opa config get [<group.key>]
+openpa config get [<group.key>]
 ```
 
 **Arguments.**
@@ -126,7 +126,7 @@ the override if one is set, otherwise the default.
 
 ```bash
 # All keys with their override and default values
-$ opa config get
+$ openpa config get
 KEY                              VALUE   DEFAULT
 agent.max_llm_retries                    2
 agent.max_steps                  80      40
@@ -134,15 +134,15 @@ agent.reasoning_max_tokens               32768
 ...
 
 # A single key
-$ opa config get agent.max_steps
+$ openpa config get agent.max_steps
 80
 
 # JSON output (full structure including both maps)
-$ opa config get --json
+$ openpa config get --json
 {"values":{"agent.max_steps":80},"defaults":{"agent.max_steps":40, ...}}
 ```
 
-### `opa config set`
+### `openpa config set`
 
 **Purpose.** Override a single config key for the active profile. The
 override persists across restarts until you change it again or reset it.
@@ -150,7 +150,7 @@ override persists across restarts until you change it again or reset it.
 **Syntax.**
 
 ```bash
-opa config set <group.key> <value>
+openpa config set <group.key> <value>
 ```
 
 **Arguments** (both required):
@@ -174,16 +174,16 @@ unknown key) the override is **not** applied and an error is reported.
 
 ```bash
 # Integer
-opa config set agent.max_steps 80
+openpa config set agent.max_steps 80
 
 # Float
-opa config set agent.reasoning_temperature 0.5
+openpa config set agent.reasoning_temperature 0.5
 
 # Boolean (none of the current keys are boolean, but the coercion works)
-opa config set some.flag true
+openpa config set some.flag true
 ```
 
-### `opa config reset`
+### `openpa config reset`
 
 **Purpose.** Drop a single override and revert that key to its declared
 default.
@@ -191,7 +191,7 @@ default.
 **Syntax.**
 
 ```bash
-opa config reset <group.key>
+openpa config reset <group.key>
 ```
 
 **Arguments** (required):
@@ -204,13 +204,13 @@ profile. The next read returns the key's declared default.
 **Example.**
 
 ```bash
-opa config reset agent.max_steps
+openpa config reset agent.max_steps
 ```
 
 ## Available config keys
 
 The defaults shown below are the values that apply when no override
-has been set. Run `opa config schema --json` to confirm the live
+has been set. Run `openpa config schema --json` to confirm the live
 values for your installation.
 
 ### Group `agent` — Reasoning Agent
@@ -275,36 +275,36 @@ the page).
 ### Inspect everything
 
 ```bash
-$ opa config get
+$ openpa config get
 ```
 
 ### Raise the ReAct step ceiling for long tasks
 
 ```bash
-$ opa config set agent.max_steps 80
-$ opa config get agent.max_steps
+$ openpa config set agent.max_steps 80
+$ openpa config get agent.max_steps
 80
 ```
 
 ### Undo the override
 
 ```bash
-$ opa config reset agent.max_steps
-$ opa config get agent.max_steps
+$ openpa config reset agent.max_steps
+$ openpa config get agent.max_steps
 40
 ```
 
 ### Tighten the history budget for a short-context model
 
 ```bash
-$ opa config set history.max_tokens_total 2000
-$ opa config set history.max_tokens_per_message 250
+$ openpa config set history.max_tokens_total 2000
+$ openpa config set history.max_tokens_per_message 250
 ```
 
 ### Pipe the schema into `jq`
 
 ```bash
-$ opa config schema --json | jq '.groups.agent.fields | keys'
+$ openpa config schema --json | jq '.groups.agent.fields | keys'
 [
   "max_llm_retries",
   "max_steps",
@@ -317,7 +317,7 @@ $ opa config schema --json | jq '.groups.agent.fields | keys'
 
 ## Troubleshooting
 
-**`opa config set` is rejected as a bad request** — The value failed
+**`openpa config set` is rejected as a bad request** — The value failed
 validation. Common causes:
 
 - The value is out of the key's declared `min`/`max` range (see the
@@ -326,7 +326,7 @@ validation. Common causes:
 - The coerced type does not match the key's declared type (e.g.
   setting a `number` key to a non-numeric string).
 
-Run `opa config schema` to confirm the exact key name and allowed
+Run `openpa config schema` to confirm the exact key name and allowed
 range, then retry.
 
 **Override "doesn't seem to apply"** — Overrides are stored per profile.

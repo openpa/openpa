@@ -4,7 +4,7 @@ Mirrors `cli/internal/stream/` (Go). Two patterns live here:
 
 * **Conversation stream pipeline** (`run_stream`) — subscribe-first, then
   optionally POST a message after the `ready` event so we can't miss early
-  agent events. Used by `opa conv send` and `opa conv attach`.
+  agent events. Used by `openpa conv send` and `openpa conv attach`.
 * **Admin stream loop** (`run_admin_stream`) — generic line-mode renderer
   for `proc stream`, `skill-events stream`/`notifications`, and
   `file-watchers stream`.

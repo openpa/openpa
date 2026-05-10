@@ -11,11 +11,11 @@
 #
 #   1. Set the VNC password and clean stale lock files.
 #   2. Start the X server (TigerVNC display :0) and websockify (noVNC web).
-#   3. Wait for Postgres + Qdrant — opa serve refuses to come up if its
+#   3. Wait for Postgres + Qdrant — openpa serve refuses to come up if its
 #      stores are unreachable, so this avoids a noisy crash loop.
-#   4. Run ``opa db upgrade`` so a fresh DB gets the schema and an
+#   4. Run ``openpa db upgrade`` so a fresh DB gets the schema and an
 #      existing one picks up new migrations on every restart.
-#   5. Start ``opa serve`` on :1112, inheriting DISPLAY=:0 so the agent
+#   5. Start ``openpa serve`` on :1112, inheriting DISPLAY=:0 so the agent
 #      can drive the desktop. The same process opens a second listener
 #      on :1515 for the SPA (OPENPA_UI_DIR points at the stage-1 build).
 #   6. ``wait -n`` exits as soon as any background job dies; Docker
@@ -81,19 +81,19 @@ fi
 
 # Idempotent on every boot — fresh DB gets the baseline, existing DB
 # gets any new migrations. Failure here is fatal: if we can't reach
-# the schema we want, opa serve will crash anyway.
+# the schema we want, openpa serve will crash anyway.
 echo "[entrypoint] running db migrations..."
-opa db upgrade
+openpa db upgrade
 
 # ── 5. OpenPA backend (now also serves the SPA on :OPENPA_UI_PORT) ───────
 
-# ``opa serve`` opens two listeners in the same process: the API on
+# ``openpa serve`` opens two listeners in the same process: the API on
 # :PORT and the SPA on :OPENPA_UI_PORT (set in the Dockerfile env to
 # /opt/openpa-ui from the spa-builder stage). Hash routing means
 # StaticFiles' ``html=True`` fallback to index.html covers every
 # client-side route — no rewrite rules needed.
-echo "[entrypoint] starting opa serve (API :$PORT, SPA :${OPENPA_UI_PORT:-1515})..."
-opa serve --host "$HOST" --port "$PORT" \
+echo "[entrypoint] starting openpa serve (API :$PORT, SPA :${OPENPA_UI_PORT:-1515})..."
+openpa serve --host "$HOST" --port "$PORT" \
     > /var/log/openpa.log 2>&1 &
 
 # ── 6. Watchdog ───────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ cat <<EOF
 ================================================================
  OpenPA-Desktop ready.
    Backend     : http://<host>:1112  (mapped from this container)
-   Web UI      : http://<host>:1515  (served by opa serve)
+   Web UI      : http://<host>:1515  (served by openpa serve)
    noVNC       : http://<host>:6080/vnc.html  (VNC password set)
    Resolution  : $RESOLUTION
    DB provider : ${OPENPA_DB_PROVIDER:-sqlite}

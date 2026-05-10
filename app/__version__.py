@@ -1,7 +1,7 @@
 """Single source of truth for the OpenPA version.
 
 Read by ``pyproject.toml`` (via ``tool.hatch.version``) and by the runtime
-``/version`` endpoint, the ``opa version`` CLI, and the upgrader. Bump this
+``/version`` endpoint, the ``openpa version`` CLI, and the upgrader. Bump this
 on release and the package metadata, the API response, and the CLI output
 all move together.
 

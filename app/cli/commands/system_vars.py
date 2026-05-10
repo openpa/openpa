@@ -1,4 +1,4 @@
-"""`opa system-vars` — list env vars OpenPA injects into exec_shell subprocesses.
+"""`openpa system-vars` — list env vars OpenPA injects into exec_shell subprocesses.
 
 Mirrors `cli/cmd/system_vars.go`.
 """

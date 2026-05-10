@@ -8,17 +8,17 @@ Personal AI Assistant — server + CLI.
 pip install openpa
 ```
 
-After install, the `opa` command is on your PATH. Run `opa --help` for the
+After install, the `openpa` command is on your PATH. Run `openpa --help` for the
 full command tree.
 
 ## Run the server
 
 ```bash
 # Local dev — uses .env / dynaconf settings + SQLite at ~/.openpa/storage/openpa.db
-opa serve
+openpa serve
 
 # Bind explicitly
-opa serve --host 0.0.0.0 --port 1112
+openpa serve --host 0.0.0.0 --port 1112
 ```
 
 ## Use the CLI against a running server
@@ -33,17 +33,17 @@ The CLI is configured via environment variables:
 | `OPA_NO_COLOR`  | (unset)                  | When set, disable ANSI colors          |
 
 Obtain a JWT either from `openpa-ui` after first-run setup, or from
-`opa setup complete` (which posts the setup payload and prints a token):
+`openpa setup complete` (which posts the setup payload and prints a token):
 
 ```bash
 export OPENPA_SERVER="http://localhost:1112"
 export OPENPA_TOKEN="..."
 
-opa me                       # whoami
-opa tools list               # list registered tools
-opa conv list                # list conversations
-opa chat                     # interactive chat REPL
-opa proc attach <pid>        # attach to a long-running PTY process
+openpa me                       # whoami
+openpa tools list               # list registered tools
+openpa conv list                # list conversations
+openpa chat                     # interactive chat REPL
+openpa proc attach <pid>        # attach to a long-running PTY process
 ```
 
 ## Development setup
@@ -53,8 +53,8 @@ opa proc attach <pid>        # attach to a long-running PTY process
 uv sync --all-groups
 
 # Now you can run both the server and the CLI from the project venv:
-uv run opa serve          # in one terminal
-uv run opa me             # in another, after exporting OPENPA_TOKEN
+uv run openpa serve          # in one terminal
+uv run openpa me             # in another, after exporting OPENPA_TOKEN
 ```
 
 ## DBeaver SQLite Configuration
@@ -73,7 +73,7 @@ cascade deletes:
 The CLI lives in [`app/cli/`](app/cli/) and ships in the same wheel as the
 server. It communicates with the running server over HTTP / SSE /
 WebSocket — there is no in-process backdoor for client commands; only
-`opa serve` imports the server modules directly.
+`openpa serve` imports the server modules directly.
 
 | Layer                    | Path                                              |
 | ------------------------ | ------------------------------------------------- |

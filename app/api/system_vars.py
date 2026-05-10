@@ -1,7 +1,7 @@
 """System-variables introspection endpoint.
 
 Exposes the registry from :mod:`app.config.system_vars` over HTTP so the
-`opa` CLI can list the env vars OpenPA injects into ``exec_shell``-spawned
+`openpa` CLI can list the env vars OpenPA injects into ``exec_shell``-spawned
 subprocesses. Returns each variable's name, description, and the value
 the server would inject for the caller's profile (resolved from the JWT).
 The ``OPENPA_TOKEN`` value is the same JWT the caller used to authenticate,

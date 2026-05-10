@@ -1383,7 +1383,7 @@ class ExecShellTool(BuiltInTool):
         auto_retry_allowed = pty_arg is None
 
         # Inject the system-variables env block (OPENPA_SERVER + OPENPA_TOKEN so the
-        # spawned shell can invoke the `opa` CLI against this server, plus the
+        # spawned shell can invoke the `openpa` CLI against this server, plus the
         # _OPENPA_WORKING_DIR_ / _USER_WORKING_DIR_ / _SKILL_DIR_ sentinels).
         # 127.0.0.1:PORT bypasses any external APP_URL / reverse proxy — the
         # CLI runs on the same box as the server. See app/config/system_vars.py.

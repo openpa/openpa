@@ -1,14 +1,14 @@
 ---
-description: "Complete reference for the `opa profile` CLI command — the terminal-side counterpart to the **Profiles** page in the OpenPA web UI — covering how to list, create, inspect, and delete profiles, plus how to read and edit each profile's persona text and skill mode (`manual` vs `automatic`). Documents every subcommand (`list`, `get`, `create`, `delete`, `persona get/set`, `skill-mode get/set`), their arguments, and the exact stdin contract for `persona set`, so admins can script profile bootstrap and persona rollouts without leaving the shell."
+description: "Complete reference for the `openpa profile` CLI command — the terminal-side counterpart to the **Profiles** page in the OpenPA web UI — covering how to list, create, inspect, and delete profiles, plus how to read and edit each profile's persona text and skill mode (`manual` vs `automatic`). Documents every subcommand (`list`, `get`, `create`, `delete`, `persona get/set`, `skill-mode get/set`), their arguments, and the exact stdin contract for `persona set`, so admins can script profile bootstrap and persona rollouts without leaving the shell."
 ---
 
-# `opa profile` — Profile Management
+# `openpa profile` — Profile Management
 
-`opa profile` is the CLI for managing OpenPA profiles. A *profile*
+`openpa profile` is the CLI for managing OpenPA profiles. A *profile*
 isolates a user's conversations, tool overrides, agent registrations,
 persona text, and skill mode. The active profile is resolved
 server-side from the JWT in `OPENPA_TOKEN`, so most other commands implicitly
-act on that profile; `opa profile` is the way to manage profiles
+act on that profile; `openpa profile` is the way to manage profiles
 themselves.
 
 The command groups together three concerns:
@@ -35,33 +35,33 @@ the OpenPA web UI:
 
 The page shows one row per profile with edit/delete buttons. Selecting
 a profile opens a detail panel with two tabs — **Persona** (a Markdown
-editor matching `opa profile persona set`) and **Skill mode** (a
-two-option radio matching `opa profile skill-mode set`). Anything you
-change here is immediately visible to `opa profile get`.
+editor matching `openpa profile persona set`) and **Skill mode** (a
+two-option radio matching `openpa profile skill-mode set`). Anything you
+change here is immediately visible to `openpa profile get`.
 
 ## Global flags
 
-All `opa profile` subcommands accept the root-level `--json` flag to
+All `openpa profile` subcommands accept the root-level `--json` flag to
 force JSON output instead of the default tables/key-value view:
 
 ```bash
-opa profile list --json
+openpa profile list --json
 ```
 
 `OPENPA_TOKEN` is required for every subcommand in this group.
 
 ## Subcommands
 
-`opa profile` has six subcommand groups. Each is documented below.
+`openpa profile` has six subcommand groups. Each is documented below.
 
-### `opa profile list`
+### `openpa profile list`
 
 **Purpose.** Print every profile registered on the server.
 
 **Syntax.**
 
 ```bash
-opa profile list
+openpa profile list
 ```
 
 **Behavior.** Renders a single-column table of profile names. With
@@ -71,14 +71,14 @@ opa profile list
 **Example.**
 
 ```bash
-$ opa profile list
+$ openpa profile list
 PROFILE
 admin
 li
 guest
 ```
 
-### `opa profile get`
+### `openpa profile get`
 
 **Purpose.** Show a profile's persona text and skill mode together.
 This is the equivalent of opening the profile's detail panel in the UI.
@@ -86,7 +86,7 @@ This is the equivalent of opening the profile's detail panel in the UI.
 **Syntax.**
 
 ```bash
-opa profile get <name>
+openpa profile get <name>
 ```
 
 **Arguments** (required):
@@ -101,7 +101,7 @@ persona Markdown. With `--json`, emits a single object with keys
 **Example.**
 
 ```bash
-$ opa profile get admin
+$ openpa profile get admin
 name        admin
 skill_mode  automatic
 
@@ -109,7 +109,7 @@ skill_mode  automatic
 You are an OpenPA admin assistant. Prefer crisp, direct replies.
 ```
 
-### `opa profile create`
+### `openpa profile create`
 
 **Purpose.** Create a new profile. Newly created profiles start with
 the server-default persona and skill mode.
@@ -117,7 +117,7 @@ the server-default persona and skill mode.
 **Syntax.**
 
 ```bash
-opa profile create <name>
+openpa profile create <name>
 ```
 
 **Arguments** (required):
@@ -130,18 +130,18 @@ the new profile name on stdout (so the command is pipe-friendly).
 **Example.**
 
 ```bash
-$ opa profile create alice
+$ openpa profile create alice
 alice
 ```
 
-### `opa profile delete`
+### `openpa profile delete`
 
 **Purpose.** Permanently delete a profile and everything scoped to it.
 
 **Syntax.**
 
 ```bash
-opa profile delete <name>
+openpa profile delete <name>
 ```
 
 **Arguments** (required):
@@ -150,16 +150,16 @@ opa profile delete <name>
 
 **Behavior.** Cascades to the profile's conversations, tool overrides,
 agent OAuth tokens, and skill registrations. **There is no confirmation
-prompt** — pair with a manual `opa profile list` first if you need a
+prompt** — pair with a manual `openpa profile list` first if you need a
 sanity check. Silent on success.
 
 **Example.**
 
 ```bash
-$ opa profile delete alice
+$ openpa profile delete alice
 ```
 
-### `opa profile persona get`
+### `openpa profile persona get`
 
 **Purpose.** Print just the persona text — useful for piping into a
 file, an editor, or a diff.
@@ -167,7 +167,7 @@ file, an editor, or a diff.
 **Syntax.**
 
 ```bash
-opa profile persona get <name>
+openpa profile persona get <name>
 ```
 
 **Arguments** (required):
@@ -181,12 +181,12 @@ beyond what the persona itself contains. With `--json`, wraps it as
 **Example.**
 
 ```bash
-$ opa profile persona get admin > admin.persona.md
+$ openpa profile persona get admin > admin.persona.md
 $ wc -l admin.persona.md
 12 admin.persona.md
 ```
 
-### `opa profile persona set`
+### `openpa profile persona set`
 
 **Purpose.** Replace the persona text for a profile in one shot. The
 new persona is read from **standard input**, so this command composes
@@ -195,7 +195,7 @@ naturally with `cat`, redirection, and editor pipelines.
 **Syntax.**
 
 ```bash
-opa profile persona set <name>      # reads persona from stdin
+openpa profile persona set <name>      # reads persona from stdin
 ```
 
 **Arguments** (required):
@@ -210,28 +210,28 @@ patch/append mode). Silent on success.
 
 ```bash
 # From a file
-$ opa profile persona set admin < admin.persona.md
+$ openpa profile persona set admin < admin.persona.md
 
 # From a heredoc
-$ opa profile persona set admin <<'EOF'
+$ openpa profile persona set admin <<'EOF'
 You are an OpenPA admin assistant. Be concise.
 Always show file paths as clickable links.
 EOF
 
 # Edit-then-replace round-trip
-$ opa profile persona get admin > /tmp/persona.md
+$ openpa profile persona get admin > /tmp/persona.md
 $ $EDITOR /tmp/persona.md
-$ opa profile persona set admin < /tmp/persona.md
+$ openpa profile persona set admin < /tmp/persona.md
 ```
 
-### `opa profile skill-mode get`
+### `openpa profile skill-mode get`
 
 **Purpose.** Read the profile's skill-dispatch mode.
 
 **Syntax.**
 
 ```bash
-opa profile skill-mode get <name>
+openpa profile skill-mode get <name>
 ```
 
 **Behavior.** Prints just the literal mode string (`manual` or
@@ -240,11 +240,11 @@ opa profile skill-mode get <name>
 **Example.**
 
 ```bash
-$ opa profile skill-mode get admin
+$ openpa profile skill-mode get admin
 automatic
 ```
 
-### `opa profile skill-mode set`
+### `openpa profile skill-mode set`
 
 **Purpose.** Switch a profile between manual and automatic skill
 dispatch.
@@ -252,7 +252,7 @@ dispatch.
 **Syntax.**
 
 ```bash
-opa profile skill-mode set <name> <mode>
+openpa profile skill-mode set <name> <mode>
 ```
 
 **Arguments** (both required):
@@ -267,7 +267,7 @@ rejects any other value.
 **Example.**
 
 ```bash
-$ opa profile skill-mode set admin manual
+$ openpa profile skill-mode set admin manual
 ```
 
 ## Skill mode quick reference
@@ -282,11 +282,11 @@ $ opa profile skill-mode set admin manual
 ### Bootstrap a fresh profile and seed its persona from a file
 
 ```bash
-$ opa profile create alice
+$ openpa profile create alice
 alice
-$ opa profile persona set alice < templates/alice.persona.md
-$ opa profile skill-mode set alice manual
-$ opa profile get alice
+$ openpa profile persona set alice < templates/alice.persona.md
+$ openpa profile skill-mode set alice manual
+$ openpa profile get alice
 name        alice
 skill_mode  manual
 
@@ -297,22 +297,22 @@ You are Alice's research assistant ...
 ### Roll out a persona update across all profiles
 
 ```bash
-$ for p in $(opa profile list --json | jq -r '.[]'); do
-    opa profile persona set "$p" < templates/shared.persona.md
+$ for p in $(openpa profile list --json | jq -r '.[]'); do
+    openpa profile persona set "$p" < templates/shared.persona.md
   done
 ```
 
 ### Compare a profile's persona against a checked-in template
 
 ```bash
-$ diff <(opa profile persona get admin) templates/admin.persona.md
+$ diff <(openpa profile persona get admin) templates/admin.persona.md
 ```
 
 ### Tear down a test profile
 
 ```bash
-$ opa profile delete alice
-$ opa profile list
+$ openpa profile delete alice
+$ openpa profile list
 PROFILE
 admin
 li
@@ -325,7 +325,7 @@ collides with an existing profile. Pick a different name, or
 `delete` first.
 
 **`profile not found`** — `get`, `delete`, `persona`, and `skill-mode`
-all require the profile to exist. Run `opa profile list` to confirm
+all require the profile to exist. Run `openpa profile list` to confirm
 spelling.
 
 **`persona set` does nothing / persona is empty** — `persona set`
@@ -337,6 +337,6 @@ file in with `<`.
 accepted; any other string returns a validation error.
 
 **Override of "the" profile vs the current profile** — Every subcommand
-takes an explicit `<name>`; nothing in `opa profile` implicitly targets
+takes an explicit `<name>`; nothing in `openpa profile` implicitly targets
 the active profile. To find out which profile the current token grants,
-run `opa me`.
+run `openpa me`.

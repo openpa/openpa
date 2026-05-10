@@ -1,4 +1,4 @@
-"""`opa upgrade` — full backup → install → migrate → health flow.
+"""`openpa upgrade` — full backup → install → migrate → health flow.
 
 Wraps :mod:`app.upgrade.runner`. Two subcommands:
 
@@ -29,7 +29,7 @@ def _print_event(event) -> None:
 
 @upgrade_app.callback()
 def _root(ctx: typer.Context) -> None:
-    """Default action: ``opa upgrade`` with no subcommand runs ``apply``.
+    """Default action: ``openpa upgrade`` with no subcommand runs ``apply``.
 
     Mirrors what most package-manager-style CLIs do (``brew upgrade``,
     ``cargo install --upgrade``) so users don't have to remember the
@@ -46,7 +46,7 @@ def upgrade_check() -> None:
     from app.upgrade import runner
     release, status = runner.check(callback=_print_event)
     if status == "available" and release is not None:
-        typer.echo(f"\nRun `opa upgrade apply` to install {release.version}.")
+        typer.echo(f"\nRun `openpa upgrade apply` to install {release.version}.")
     raise typer.Exit(code=0 if status in ("up_to_date", "available") else 1)
 
 

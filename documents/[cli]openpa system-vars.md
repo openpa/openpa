@@ -1,10 +1,10 @@
 ---
-description: "Reference for the `opa system-vars` CLI command — a one-shot read-only query that asks the OpenPA server which environment variables it injects into every `exec_shell` subprocess (`OPENPA_SERVER`, `OPENPA_TOKEN`, `OPENPA_SYSTEM_WORKING_DIR`, `OPENPA_USER_WORKING_DIR`, `OPENPA_SKILL_DIR`, plus any extensions registered later) and prints each one's name, currently-resolved value for the caller's profile, and description. Useful for discovering which env vars are available inside agent-spawned shells, confirming what an `exec_shell` run will actually see, and verifying that the server-side registry is in sync with what the CLI expects."
+description: "Reference for the `openpa system-vars` CLI command — a one-shot read-only query that asks the OpenPA server which environment variables it injects into every `exec_shell` subprocess (`OPENPA_SERVER`, `OPENPA_TOKEN`, `OPENPA_SYSTEM_WORKING_DIR`, `OPENPA_USER_WORKING_DIR`, `OPENPA_SKILL_DIR`, plus any extensions registered later) and prints each one's name, currently-resolved value for the caller's profile, and description. Useful for discovering which env vars are available inside agent-spawned shells, confirming what an `exec_shell` run will actually see, and verifying that the server-side registry is in sync with what the CLI expects."
 ---
 
-# `opa system-vars` — List Env Vars Injected Into Shells
+# `openpa system-vars` — List Env Vars Injected Into Shells
 
-`opa system-vars` is a thin client over the server's system-variables
+`openpa system-vars` is a thin client over the server's system-variables
 registry. Every command the OpenPA agent runs through the built-in
 `exec_shell` tool inherits a small block of env vars set by the server
 (loopback URL, profile token, working-directory sentinels). This
@@ -22,11 +22,11 @@ CLI is the canonical place to browse it.
 
 ## Global flags
 
-`opa system-vars` accepts the root-level `--json` flag to emit the raw
+`openpa system-vars` accepts the root-level `--json` flag to emit the raw
 list as JSON instead of a human-readable table:
 
 ```bash
-opa system-vars --json
+openpa system-vars --json
 ```
 
 It also obeys the standard CLI environment variables — most importantly
@@ -35,7 +35,7 @@ It also obeys the standard CLI environment variables — most importantly
 
 ## Behavior
 
-`opa system-vars` performs a single authenticated `GET /api/system-vars`
+`openpa system-vars` performs a single authenticated `GET /api/system-vars`
 and prints the response. The server resolves each variable's value for
 the caller's profile (taken from the JWT), so the output is exactly
 what an `exec_shell` invocation would see.
@@ -61,14 +61,14 @@ endpoint, suitable for piping into `jq`.
 ### List all system variables
 
 ```bash
-$ opa system-vars
+$ openpa system-vars
 ┌───────────────────────────┬───────────────────────────────────┬────────────────────────────────────────────────────────┐
 │ NAME                      │ VALUE                             │ DESCRIPTION                                            │
 ├───────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────┤
 │ OPENPA_SYSTEM_WORKING_DIR │ /home/li/.openpa                  │ OpenPA internal working directory (~/.openpa).         │
 │ OPENPA_USER_WORKING_DIR   │ /home/li/Documents                │ User-facing default working directory.                 │
 │ OPENPA_SKILL_DIR          │ /home/li/.openpa/admin/skills     │ Per-profile skills directory; omitted when no profile. │
-│ OPENPA_SERVER             │ http://127.0.0.1:1112             │ Loopback URL of this server for the `opa` CLI.         │
+│ OPENPA_SERVER             │ http://127.0.0.1:1112             │ Loopback URL of this server for the `openpa` CLI.         │
 │ OPENPA_TOKEN              │ eyJhbGciOi…                       │ Per-profile OPA token; omitted when missing.           │
 └───────────────────────────┴───────────────────────────────────┴────────────────────────────────────────────────────────┘
 ```
@@ -76,14 +76,14 @@ $ opa system-vars
 ### Read just the value of one variable
 
 ```bash
-$ opa system-vars --json | jq -r '.[] | select(.name == "OPENPA_SKILL_DIR") | .value'
+$ openpa system-vars --json | jq -r '.[] | select(.name == "OPENPA_SKILL_DIR") | .value'
 /home/li/.openpa/admin/skills
 ```
 
 ### Confirm a specific variable is registered
 
 ```bash
-$ opa system-vars --json | jq -e '.[] | select(.name == "OPENPA_SKILL_DIR")'
+$ openpa system-vars --json | jq -e '.[] | select(.name == "OPENPA_SKILL_DIR")'
 ```
 
 Exits 0 when the variable is registered, 1 otherwise — handy in CI
@@ -95,7 +95,7 @@ checks that depend on the registry shape.
 JWT (`export OPENPA_TOKEN=<jwt>`) before running it.
 
 **`401 Unauthorized`** — The token has expired or does not match the
-running server. Re-mint via `opa setup complete` or ask your admin.
+running server. Re-mint via `openpa setup complete` or ask your admin.
 
 **Variable I expected is missing** — The registry is the file
 `app/config/system_vars.py` on the server. If something is missing,

@@ -100,8 +100,8 @@ docker compose down -v             # stop and delete all data
    install is needed.
 4. Generate `~/.openpa/.env` from [`templates/local.env`](templates/local.env) or [`templates/server.env.tmpl`](templates/server.env.tmpl) (with `__APP_HOST__` substituted).
 5. Generate `~/.openpa/bootstrap.toml` selecting SQLite.
-6. Run `opa db upgrade` to apply Alembic migrations.
-7. Start `opa serve` in the background. The same process opens two
+6. Run `openpa db upgrade` to apply Alembic migrations.
+7. Start `openpa serve` in the background. The same process opens two
    listeners: the API on `:1112` and the SPA on `:1515`. Wait for
    `/health`.
 8. Open `http://<host>:1515/#/setup` in your browser.
@@ -150,9 +150,9 @@ to wipe and start fresh.
 | `~/.openpa/venv/`                     | Python virtualenv with `openpa` (SPA included). |
 | `~/.openpa/.env`                      | Backend env vars. |
 | `~/.openpa/bootstrap.toml`            | DB-provider selection. |
-| `~/.openpa/install.log`               | Output of `pip install` and `opa db upgrade`. |
+| `~/.openpa/install.log`               | Output of `pip install` and `openpa db upgrade`. |
 | `~/.openpa/install.pid`               | PID of the install-session server. |
-| `~/.openpa/server.log`                | `opa serve` stdout/stderr. |
+| `~/.openpa/server.log`                | `openpa serve` stdout/stderr. |
 
 `OPENPA_WORKING_DIR` overrides `~/.openpa` for side-by-side staging
 installs. `OPENPA_TEMPLATE_BASE` overrides the URL the scripts fetch
@@ -185,7 +185,7 @@ by the daemon and survives logout.
 ## Building the SPA into the wheel
 
 The `openpa` wheel ships the prebuilt openpa-ui SPA at
-`app/static/ui/` so `opa serve` can serve it on `:1515` without a
+`app/static/ui/` so `openpa serve` can serve it on `:1515` without a
 separate UI install. CI runs [`scripts/build_ui.sh`](../scripts/build_ui.sh)
 before `hatch build`; you can run it locally too:
 
@@ -200,7 +200,7 @@ OPENPA_UI_LOCAL=../openpa-ui ./scripts/build_ui.sh
 OPENPA_UI_REF=v0.4.2 ./scripts/build_ui.sh
 ```
 
-The script writes to `app/static/ui/` (gitignored). When `opa serve`
+The script writes to `app/static/ui/` (gitignored). When `openpa serve`
 boots it auto-detects this directory and starts the SPA listener.
 `OPENPA_UI_PORT=0` disables the listener (useful when an external
 nginx is already serving the SPA); `OPENPA_UI_DIR=/elsewhere` points

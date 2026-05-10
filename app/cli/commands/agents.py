@@ -1,4 +1,4 @@
-"""`opa agents ...` — manage A2A and MCP server registrations.
+"""`openpa agents ...` — manage A2A and MCP server registrations.
 
 Mirrors `cli/cmd/agents.go`.
 """

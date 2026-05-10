@@ -1,4 +1,4 @@
-"""`opa tools ...` — list and configure tools & skills.
+"""`openpa tools ...` — list and configure tools & skills.
 
 Mirrors `cli/cmd/tools.go`.
 """

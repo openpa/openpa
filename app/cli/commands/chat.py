@@ -1,4 +1,4 @@
-"""`opa chat` — interactive chat REPL with streamed thinking.
+"""`openpa chat` — interactive chat REPL with streamed thinking.
 
 Mirrors `cli/cmd/chat.go`. With no arg, creates a new conversation. With a
 conversation id, resumes that conversation.

@@ -1,4 +1,4 @@
-"""`opa config ...` — read and write user_config (per-profile general settings).
+"""`openpa config ...` — read and write user_config (per-profile general settings).
 
 Mirrors `cli/cmd/config.go`. Subcommands:
 

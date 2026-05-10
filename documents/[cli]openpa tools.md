@@ -1,10 +1,10 @@
 ---
-description: "Complete reference for the `opa tools` CLI command (alias `opa tool`) — the terminal-side counterpart to the **Tools** page in the OpenPA web UI — covering how to list every tool the agent can call (built-in, mcp, a2a, skill, intrinsic), inspect a tool's current configuration, enable or disable A2A/MCP tools, set tool variables (env-style key/value pairs), set tool arguments from a JSON object, override the LLM the tool uses, reset those overrides, and register a skill's `long_running_app` as an autostart process. Lists the five tool types, the locked-LLM-fields concept, and the rules for partial vs full updates."
+description: "Complete reference for the `openpa tools` CLI command (alias `openpa tool`) — the terminal-side counterpart to the **Tools** page in the OpenPA web UI — covering how to list every tool the agent can call (built-in, mcp, a2a, skill, intrinsic), inspect a tool's current configuration, enable or disable A2A/MCP tools, set tool variables (env-style key/value pairs), set tool arguments from a JSON object, override the LLM the tool uses, reset those overrides, and register a skill's `long_running_app` as an autostart process. Lists the five tool types, the locked-LLM-fields concept, and the rules for partial vs full updates."
 ---
 
-# `opa tools` — Tool & Skill Configuration
+# `openpa tools` — Tool & Skill Configuration
 
-`opa tools` (alias `opa tool`) is the CLI for inspecting and configuring
+`openpa tools` (alias `openpa tool`) is the CLI for inspecting and configuring
 the tools the OpenPA agent can call. A tool here is anything the agent
 can invoke during a turn: built-in functions baked into the server,
 intrinsic agent operations, A2A peer agents, MCP servers, and locally
@@ -31,11 +31,11 @@ each profile can carry its own configuration.
 |-------------|---------------------------------------------------------------------------|-----------------------|
 | `built-in`  | Compiled into the server (filesystem, shell, etc.).                       | No                    |
 | `intrinsic` | Agent-control verbs the loop emits (e.g. `final_answer`, `think`).        | No                    |
-| `mcp`       | MCP server registered via `opa agents add --type mcp`.                    | Yes                   |
-| `a2a`       | Peer A2A agent registered via `opa agents add --type a2a`.                | Yes                   |
+| `mcp`       | MCP server registered via `openpa agents add --type mcp`.                    | Yes                   |
+| `a2a`       | Peer A2A agent registered via `openpa agents add --type a2a`.                | Yes                   |
 | `skill`     | Local skill discovered from a SKILL.md directory.                         | Yes                   |
 
-Use `--type` on `opa tools list` to filter by these labels.
+Use `--type` on `openpa tools list` to filter by these labels.
 
 ## Finding this in the web UI
 
@@ -47,18 +47,18 @@ the OpenPA web UI:
 The page shows one row per tool with type, enabled toggle, and a "..."
 menu opening a configuration drawer. The drawer has tabs for
 **Variables**, **Arguments**, and **LLM Overrides** that map directly to
-`opa tools set-var`, `set-args`, and `set-llm`. Skill rows additionally
+`openpa tools set-var`, `set-args`, and `set-llm`. Skill rows additionally
 expose a **Register long-running app** action that maps to
-`opa tools register-long-running`.
+`openpa tools register-long-running`.
 
 ## Global flags
 
-All `opa tools` subcommands accept the root-level `--json` flag.
+All `openpa tools` subcommands accept the root-level `--json` flag.
 `OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 
-### `opa tools list`
+### `openpa tools list`
 
 **Purpose.** Print every tool registered for the active profile, with
 type and enabled/configured flags.
@@ -66,7 +66,7 @@ type and enabled/configured flags.
 **Syntax.**
 
 ```bash
-opa tools list [--type <type>]
+openpa tools list [--type <type>]
 ```
 
 **Flags.**
@@ -91,16 +91,16 @@ With `--json`, returns the underlying array unchanged.
 
 ```bash
 # Everything
-$ opa tools list
+$ openpa tools list
 
 # Only the locally-registered skills
-$ opa tools list --type skill
+$ openpa tools list --type skill
 TOOL_ID            TYPE   ENABLED  CONFIGURED  NAME
 skill.review-pr    skill  yes      yes         Review PR
 skill.daily-brief  skill  yes      no          Daily Brief
 ```
 
-### `opa tools get`
+### `openpa tools get`
 
 **Purpose.** Show one tool's full configuration, including the
 formatted JSON config blob and any locked LLM fields.
@@ -108,12 +108,12 @@ formatted JSON config blob and any locked LLM fields.
 **Syntax.**
 
 ```bash
-opa tools get <tool_id>
+openpa tools get <tool_id>
 ```
 
 **Arguments** (required):
 
-- `<tool_id>` — The id from `opa tools list`.
+- `<tool_id>` — The id from `openpa tools list`.
 
 **Behavior.** Prints a key-value header followed by a `--- config ---`
 section containing the indented JSON config object, then a
@@ -136,7 +136,7 @@ those fields will fail server-side.
 **Example.**
 
 ```bash
-$ opa tools get mcp.linear
+$ openpa tools get mcp.linear
 tool_id      mcp.linear
 name         Linear
 tool_type    mcp
@@ -153,7 +153,7 @@ configured   yes
 locked_llm_fields: llm_provider
 ```
 
-### `opa tools enable` / `opa tools disable`
+### `openpa tools enable` / `openpa tools disable`
 
 **Purpose.** Enable or disable an A2A or MCP tool for the active
 profile. Built-in / intrinsic tools cannot be disabled this way.
@@ -161,8 +161,8 @@ profile. Built-in / intrinsic tools cannot be disabled this way.
 **Syntax.**
 
 ```bash
-opa tools enable <tool_id>
-opa tools disable <tool_id>
+openpa tools enable <tool_id>
+openpa tools disable <tool_id>
 ```
 
 **Behavior.** Silent on success. The change is profile-scoped: another
@@ -171,13 +171,13 @@ profile's enabled state is unaffected.
 **Example.**
 
 ```bash
-$ opa tools disable mcp.linear
-$ opa tools list --type mcp
+$ openpa tools disable mcp.linear
+$ openpa tools list --type mcp
 TOOL_ID     TYPE  ENABLED  CONFIGURED  NAME
 mcp.linear  mcp   no       yes         Linear
 ```
 
-### `opa tools set-var`
+### `openpa tools set-var`
 
 **Purpose.** Set environment-style variables for a tool — useful for
 MCP servers and skills whose runners read configuration from
@@ -186,7 +186,7 @@ environment variables.
 **Syntax.**
 
 ```bash
-opa tools set-var <tool_id> KEY=VALUE [KEY=VALUE...]
+openpa tools set-var <tool_id> KEY=VALUE [KEY=VALUE...]
 ```
 
 **Arguments** (at least one required):
@@ -202,11 +202,11 @@ not a *replace*). Silent on success.
 **Examples.**
 
 ```bash
-$ opa tools set-var skill.daily-brief INBOX=/var/mail/li REPORT_TIME=09:00
-$ opa tools set-var mcp.linear LINEAR_API_KEY=lin_api_...
+$ openpa tools set-var skill.daily-brief INBOX=/var/mail/li REPORT_TIME=09:00
+$ openpa tools set-var mcp.linear LINEAR_API_KEY=lin_api_...
 ```
 
-### `opa tools set-args`
+### `openpa tools set-args`
 
 **Purpose.** Replace the tool's structured arguments object — for tools
 whose configuration is best expressed as JSON rather than flat
@@ -215,7 +215,7 @@ variables.
 **Syntax.**
 
 ```bash
-opa tools set-args <tool_id> --json '<JSON object>'
+openpa tools set-args <tool_id> --json '<JSON object>'
 ```
 
 **Arguments** (required):
@@ -234,10 +234,10 @@ wholesale. Silent on success.
 **Example.**
 
 ```bash
-$ opa tools set-args mcp.shell --json '{"shells":["bash","pwsh"],"timeout_s":120}'
+$ openpa tools set-args mcp.shell --json '{"shells":["bash","pwsh"],"timeout_s":120}'
 ```
 
-### `opa tools set-llm`
+### `openpa tools set-llm`
 
 **Purpose.** Override the LLM parameters a tool uses — provider,
 model, reasoning effort, and the full-reasoning toggle. Useful for
@@ -247,7 +247,7 @@ for forcing a specific provider.
 **Syntax.**
 
 ```bash
-opa tools set-llm <tool_id> [--provider P] [--model M] [--reasoning-effort low|medium|high] [--full-reasoning true|false]
+openpa tools set-llm <tool_id> [--provider P] [--model M] [--reasoning-effort low|medium|high] [--full-reasoning true|false]
 ```
 
 **Arguments** (required):
@@ -271,11 +271,11 @@ Silent on success.
 **Examples.**
 
 ```bash
-$ opa tools set-llm skill.review-pr --provider anthropic --model claude-opus-4-7 --reasoning-effort high
-$ opa tools set-llm mcp.shell --full-reasoning false
+$ openpa tools set-llm skill.review-pr --provider anthropic --model claude-opus-4-7 --reasoning-effort high
+$ openpa tools set-llm mcp.shell --full-reasoning false
 ```
 
-### `opa tools reset-llm`
+### `openpa tools reset-llm`
 
 **Purpose.** Remove specific LLM-parameter overrides so the tool falls
 back to the code-defined default.
@@ -283,7 +283,7 @@ back to the code-defined default.
 **Syntax.**
 
 ```bash
-opa tools reset-llm <tool_id> <key> [key...]
+openpa tools reset-llm <tool_id> <key> [key...]
 ```
 
 **Arguments** (at least two required):
@@ -297,10 +297,10 @@ opa tools reset-llm <tool_id> <key> [key...]
 **Example.**
 
 ```bash
-$ opa tools reset-llm skill.review-pr llm_provider llm_model reasoning_effort
+$ openpa tools reset-llm skill.review-pr llm_provider llm_model reasoning_effort
 ```
 
-### `opa tools register-long-running`
+### `openpa tools register-long-running`
 
 **Purpose.** Spawn a skill's `long_running_app` (declared in its
 `SKILL.md`) and persist it as an autostart entry so it relaunches at
@@ -309,7 +309,7 @@ boot.
 **Syntax.**
 
 ```bash
-opa tools register-long-running <tool_id> [--force]
+openpa tools register-long-running <tool_id> [--force]
 ```
 
 **Arguments** (required):
@@ -327,8 +327,8 @@ writes a row to the autostart table. Returns a key-value table:
 
 | Row             | Meaning                                                          |
 |-----------------|------------------------------------------------------------------|
-| `process_id`    | The id of the live process (use with `opa proc attach`).         |
-| `autostart_id`  | The id of the autostart registration (use with `opa proc autostart delete` if you want to undo). |
+| `process_id`    | The id of the live process (use with `openpa proc attach`).         |
+| `autostart_id`  | The id of the autostart registration (use with `openpa proc autostart delete` if you want to undo). |
 | `command`       | The exact command line that was launched.                        |
 | `working_dir`   | Working directory for the process.                               |
 
@@ -337,7 +337,7 @@ With `--json`, returns the raw response.
 **Example.**
 
 ```bash
-$ opa tools register-long-running skill.daily-brief
+$ openpa tools register-long-running skill.daily-brief
 process_id    p_e21f
 autostart_id  a_8c14
 command       /usr/bin/python /skills/daily-brief/run.py
@@ -349,44 +349,44 @@ working_dir   /home/li/work
 ### Disable an MCP tool for the active profile only
 
 ```bash
-$ opa tools disable mcp.linear
+$ openpa tools disable mcp.linear
 ```
 
 ### Configure a skill's environment and force it to use Opus
 
 ```bash
-$ opa tools set-var skill.review-pr GITHUB_TOKEN=ghp_...
-$ opa tools set-llm skill.review-pr --provider anthropic --model claude-opus-4-7 --reasoning-effort high
-$ opa tools get skill.review-pr
+$ openpa tools set-var skill.review-pr GITHUB_TOKEN=ghp_...
+$ openpa tools set-llm skill.review-pr --provider anthropic --model claude-opus-4-7 --reasoning-effort high
+$ openpa tools get skill.review-pr
 ```
 
 ### Drop all per-tool LLM overrides in one shot
 
 ```bash
-$ opa tools reset-llm skill.review-pr llm_provider llm_model reasoning_effort full_reasoning
+$ openpa tools reset-llm skill.review-pr llm_provider llm_model reasoning_effort full_reasoning
 ```
 
 ### Find the tool ids of every disabled MCP server
 
 ```bash
-$ opa tools list --type mcp --json | jq -r '.[] | select(.enabled==false) | .tool_id'
+$ openpa tools list --type mcp --json | jq -r '.[] | select(.enabled==false) | .tool_id'
 ```
 
 ### Spin up a skill's daemon and immediately attach to its console
 
 ```bash
-$ pid=$(opa tools register-long-running skill.daily-brief --json | jq -r .process_id)
-$ opa proc attach "$pid"
+$ pid=$(openpa tools register-long-running skill.daily-brief --json | jq -r .process_id)
+$ openpa proc attach "$pid"
 ```
 
 ## Troubleshooting
 
 **`enable` / `disable` rejected** — Built-in and intrinsic tools cannot
-be enabled or disabled — the server rejects the call. Use `opa tools list`
+be enabled or disabled — the server rejects the call. Use `openpa tools list`
 to confirm the type.
 
 **`set-llm` rejected for a locked field** — Some tool definitions lock
-specific LLM fields (visible in `opa tools get` under
+specific LLM fields (visible in `openpa tools get` under
 `locked_llm_fields`). The locked field cannot be changed via
 `set-llm`; pick a different model or relax the lock at the tool
 definition level.
@@ -396,10 +396,10 @@ pass `--json '{}'`. The empty default is a deliberate forcing function.
 
 **Variables seem stale** — `set-var` is a patch, not a replace; old keys
 hang around until you set them to an empty string or restart from
-scratch via the Tools UI. Use `opa tools get` to inspect the live
+scratch via the Tools UI. Use `openpa tools get` to inspect the live
 state.
 
 **`register-long-running` says "duplicate command"** — The tool already
 has an autostart with the same command line. Pass `--force` if you
 genuinely want a second copy, otherwise inspect existing autostarts
-with `opa proc autostart list`.
+with `openpa proc autostart list`.

@@ -12,6 +12,10 @@
 #   --unattended                Use defaults; never prompt. Implies --no-launch
 #                               unless deployment+host are also provided.
 #   --reinstall                 Wipe any existing ~/.openpa/venv before installing.
+#   --auto-install-python       Auto-install isolated Python 3.13 if missing
+#                               (default: prompt; --unattended installs silently).
+#   --no-auto-install-python    Never auto-install; print manual hints and exit.
+#   --no-modify-path            Don't modify shell rc; print the export line instead.
 #   --help                      Show this message.
 #
 # This is the Phase 2 installer: native install only. Docker mode is
@@ -48,20 +52,25 @@ MODE=""           # docker | native (default: prompt if Docker available)
 NO_LAUNCH=0
 UNATTENDED=0
 REINSTALL=0
+AUTO_INSTALL_PYTHON=""   # "" = ask interactively; "1" = yes; "0" = no
+MODIFY_PATH=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --deployment)       DEPLOYMENT="$2"; shift 2 ;;
-        --deployment=*)     DEPLOYMENT="${1#*=}"; shift ;;
-        --host)             APP_HOST="$2"; shift 2 ;;
-        --host=*)           APP_HOST="${1#*=}"; shift ;;
-        --mode)             MODE="$2"; shift 2 ;;
-        --mode=*)           MODE="${1#*=}"; shift ;;
-        --docker)           MODE="docker"; shift ;;
-        --native)           MODE="native"; shift ;;
-        --no-launch)        NO_LAUNCH=1; shift ;;
-        --unattended)       UNATTENDED=1; shift ;;
-        --reinstall)        REINSTALL=1; shift ;;
+        --deployment)             DEPLOYMENT="$2"; shift 2 ;;
+        --deployment=*)           DEPLOYMENT="${1#*=}"; shift ;;
+        --host)                   APP_HOST="$2"; shift 2 ;;
+        --host=*)                 APP_HOST="${1#*=}"; shift ;;
+        --mode)                   MODE="$2"; shift 2 ;;
+        --mode=*)                 MODE="${1#*=}"; shift ;;
+        --docker)                 MODE="docker"; shift ;;
+        --native)                 MODE="native"; shift ;;
+        --no-launch)              NO_LAUNCH=1; shift ;;
+        --unattended)             UNATTENDED=1; shift ;;
+        --reinstall)              REINSTALL=1; shift ;;
+        --auto-install-python)    AUTO_INSTALL_PYTHON=1; shift ;;
+        --no-auto-install-python) AUTO_INSTALL_PYTHON=0; shift ;;
+        --no-modify-path)         MODIFY_PATH=0; shift ;;
         --help|-h)
             sed -n '1,/^set -e/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^set -e/d'
             exit 0
@@ -80,6 +89,11 @@ if [ "$UNATTENDED" -eq 1 ] && [ -z "$APP_HOST" ] && [ "$DEPLOYMENT" = "server" ]
     err "--unattended with --deployment=server requires --host"
     exit 2
 fi
+# --unattended implies "yes" for the auto-install prompt unless the
+# operator explicitly said otherwise.
+if [ "$UNATTENDED" -eq 1 ] && [ -z "$AUTO_INSTALL_PYTHON" ]; then
+    AUTO_INSTALL_PYTHON=1
+fi
 
 # ── paths ─────────────────────────────────────────────────────────────────
 
@@ -90,6 +104,8 @@ VENV_DIR="$OPENPA_HOME/venv"
 ENV_FILE="$OPENPA_HOME/.env"
 BOOTSTRAP_FILE="$OPENPA_HOME/bootstrap.toml"
 LOG_FILE="$OPENPA_HOME/install.log"
+BIN_DIR="$OPENPA_HOME/bin"
+UV_BIN="$BIN_DIR/uv"
 
 mkdir -p "$OPENPA_HOME"
 
@@ -122,25 +138,45 @@ esac
 ARCH="$(uname -m)"
 ok "OS:   $OS ($ARCH)"
 
+# curl is used for fetching templates, downloading uv, and the post-install
+# health check. Fail fast with a clear hint if it's missing — the alternative
+# is a confusing error several screens later.
+if ! command -v curl >/dev/null 2>&1; then
+    err "curl is required but was not found on PATH."
+    cat <<EOF >&2
+
+Install curl, then re-run this script:
+  ${BOLD}macOS${RESET}: brew install curl   (usually preinstalled)
+  ${BOLD}Ubuntu/Debian${RESET}: sudo apt install curl
+  ${BOLD}Fedora/RHEL${RESET}: sudo dnf install curl
+  ${BOLD}Alpine${RESET}: apk add curl
+
+EOF
+    exit 1
+fi
+
 # Find a Python 3.13+ interpreter. Try the most-specific name first so we
 # don't accidentally pick up a system 3.10 named just `python3`.
-PYTHON=""
-for candidate in python3.13 python3.14 python3 python; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        ver="$("$candidate" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "")"
-        case "$ver" in
-            3.13|3.14|3.15|3.16|3.17|3.18|3.19)
-                PYTHON="$(command -v "$candidate")"
-                break
-                ;;
-        esac
-    fi
-done
+find_system_python() {
+    for candidate in python3.13 python3.14 python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            ver="$("$candidate" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "")"
+            case "$ver" in
+                3.13|3.14|3.15|3.16|3.17|3.18|3.19)
+                    command -v "$candidate"
+                    return 0
+                    ;;
+            esac
+        fi
+    done
+    return 1
+}
+PYTHON="$(find_system_python || true)"
 
 if [ -n "$PYTHON" ]; then
     ok "Python: $("$PYTHON" --version) at $PYTHON"
 else
-    info "Python: 3.13+ not found (only required for native mode)"
+    info "Python: 3.13+ not found (will auto-install in native mode)"
 fi
 
 # Docker is detected so we can RECOMMEND it. The actual container bundle
@@ -358,8 +394,9 @@ fi
 # ── native install ────────────────────────────────────────────────────────
 
 # (Reaching here implies MODE=native. The Docker path exited above.)
-if [ -z "$PYTHON" ]; then
-    err "Python 3.13 or newer is required for native mode but was not found."
+
+# Print the manual-install hint shown when auto-install is declined or fails.
+print_python_manual_hint() {
     cat <<EOF >&2
 
 Install options:
@@ -370,7 +407,94 @@ Install options:
 
 Re-run this script after Python is on your PATH (or pass --mode docker).
 EOF
-    exit 1
+}
+
+# Decide whether to auto-install Python. Honors --auto-install-python /
+# --no-auto-install-python / --unattended; otherwise prompts (default Yes).
+prompt_for_python_install() {
+    if [ "$AUTO_INSTALL_PYTHON" = "0" ]; then
+        err "Python 3.13 or newer is required for native mode but was not found."
+        print_python_manual_hint
+        exit 1
+    fi
+    if [ "$AUTO_INSTALL_PYTHON" = "1" ]; then
+        return 0
+    fi
+    cat <<EOF
+
+OpenPA can install an isolated Python 3.13 just for itself
+(~70 MB downloaded into $OPENPA_HOME/python, no admin needed; system
+Python is left untouched).
+
+EOF
+    while :; do
+        read -r -p "Install isolated Python 3.13 now? [Y/n]: " choice </dev/tty || choice=""
+        case "${choice:-y}" in
+            y|Y|yes|YES) return 0 ;;
+            n|N|no|NO)
+                err "Aborted: Python 3.13 is required for native mode."
+                print_python_manual_hint
+                exit 1
+                ;;
+            *) warn "Please answer y or n." ;;
+        esac
+    done
+}
+
+# Download a private copy of `uv` into $OPENPA_HOME/bin so we can manage
+# Python and venv installs without touching system tools. Pinned to a
+# tested major.minor.
+install_uv_locally() {
+    if [ -x "$UV_BIN" ]; then
+        info "uv already installed at $UV_BIN"
+        return 0
+    fi
+    info "Installing uv into $BIN_DIR"
+    mkdir -p "$BIN_DIR"
+    if ! curl -LsSf https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$BIN_DIR" UV_UNMANAGED_INSTALL="$BIN_DIR" \
+                  INSTALLER_NO_MODIFY_PATH=1 sh \
+            >>"$LOG_FILE" 2>&1; then
+        err "Failed to download uv (the Python installer)."
+        cat <<EOF >&2
+
+Possible causes: no internet, corporate TLS interception, or astral.sh
+is blocked. Set HTTPS_PROXY / SSL_CERT_FILE if you're behind a proxy,
+or install Python manually (see hints below).
+EOF
+        print_python_manual_hint
+        exit 1
+    fi
+    if [ ! -x "$UV_BIN" ]; then
+        err "uv installer ran but $UV_BIN is missing — see $LOG_FILE."
+        exit 1
+    fi
+    ok "Installed uv at $UV_BIN"
+}
+
+# Use uv to download an isolated Python 3.13 into $OPENPA_HOME/python and
+# return its absolute path via $PYTHON. The cache and install dir are
+# scoped to OPENPA_HOME so `rm -rf ~/.openpa` removes everything.
+install_python_via_uv() {
+    export UV_PYTHON_INSTALL_DIR="$OPENPA_HOME/python"
+    export UV_CACHE_DIR="$OPENPA_HOME/uv-cache"
+    info "Downloading isolated Python 3.13 (this may take a minute)"
+    if ! "$UV_BIN" python install 3.13 >>"$LOG_FILE" 2>&1; then
+        err "uv failed to install Python 3.13 — see $LOG_FILE."
+        exit 1
+    fi
+    PYTHON="$("$UV_BIN" python find 3.13 2>/dev/null | tr -d '[:space:]')"
+    if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+        err "Python install completed but the interpreter could not be located."
+        exit 1
+    fi
+    ok "Python: $("$PYTHON" --version) at $PYTHON (isolated)"
+}
+
+if [ -z "$PYTHON" ]; then
+    prompt_for_python_install
+    install_uv_locally
+    install_python_via_uv
 fi
 
 # ── existing install detection ────────────────────────────────────────────
@@ -394,8 +518,101 @@ else
     "$VENV_DIR/bin/pip" install openpa >>"$LOG_FILE" 2>&1
 fi
 
-INSTALLED_VERSION="$("$VENV_DIR/bin/opa" version 2>/dev/null | awk '{print $2}' || echo "?")"
+INSTALLED_VERSION="$("$VENV_DIR/bin/openpa" version 2>/dev/null | awk '{print $2}' || echo "?")"
 ok "Installed openpa $INSTALLED_VERSION"
+
+# ── shim & PATH ───────────────────────────────────────────────────────────
+
+# Create a symlink in $BIN_DIR so a single, stable path on PATH points at
+# the venv's `openpa`. This means re-installs (which can rebuild the venv)
+# don't change what the user has on PATH.
+mkdir -p "$BIN_DIR"
+ln -sfn "$VENV_DIR/bin/openpa" "$BIN_DIR/openpa"
+ok "Linked $BIN_DIR/openpa -> $VENV_DIR/bin/openpa"
+
+# Append a marker block to the user's shell rc so $BIN_DIR is on PATH for
+# every new shell. The block is idempotent (re-runs are no-ops) and uses a
+# runtime guard so $PATH doesn't accumulate duplicates if the rc gets
+# sourced more than once.
+PATH_MARKER_BEGIN="# >>> openpa installer >>>"
+PATH_MARKER_END="# <<< openpa installer <<<"
+
+write_path_block_posix() {
+    local rcfile="$1"
+    if [ -f "$rcfile" ] && grep -q "^${PATH_MARKER_BEGIN}\$" "$rcfile" 2>/dev/null; then
+        return 0   # already present
+    fi
+    {
+        printf '\n%s\n' "$PATH_MARKER_BEGIN"
+        printf 'case ":$PATH:" in\n'
+        printf '    *":$HOME/.openpa/bin:"*) ;;\n'
+        printf '    *) export PATH="$HOME/.openpa/bin:$PATH" ;;\n'
+        printf 'esac\n'
+        printf '%s\n' "$PATH_MARKER_END"
+    } >> "$rcfile" 2>/dev/null
+}
+
+write_path_block_fish() {
+    local rcfile="$1"
+    if [ -f "$rcfile" ] && grep -q "^${PATH_MARKER_BEGIN}\$" "$rcfile" 2>/dev/null; then
+        return 0
+    fi
+    mkdir -p "$(dirname "$rcfile")"
+    {
+        printf '\n%s\n' "$PATH_MARKER_BEGIN"
+        printf 'if not contains $HOME/.openpa/bin $fish_user_paths\n'
+        printf '    set -Ux fish_user_paths $HOME/.openpa/bin $fish_user_paths\n'
+        printf 'end\n'
+        printf '%s\n' "$PATH_MARKER_END"
+    } >> "$rcfile" 2>/dev/null
+}
+
+install_path_entry() {
+    local shellname rcfile written=""
+    shellname="$(basename "${SHELL:-}")"
+    case "$shellname" in
+        zsh)
+            rcfile="$HOME/.zshrc"
+            ;;
+        fish)
+            rcfile="$HOME/.config/fish/config.fish"
+            write_path_block_fish "$rcfile" && written="$rcfile"
+            ;;
+        bash)
+            if [ -f "$HOME/.bashrc" ] || [ ! -f "$HOME/.bash_profile" ]; then
+                rcfile="$HOME/.bashrc"
+            else
+                rcfile="$HOME/.bash_profile"
+            fi
+            ;;
+        *)
+            rcfile="$HOME/.profile"
+            ;;
+    esac
+    if [ -z "$written" ] && [ -n "$rcfile" ]; then
+        write_path_block_posix "$rcfile"
+        written="$rcfile"
+    fi
+    # Also drop a copy into ~/.profile if it exists and we haven't already
+    # touched it — covers GUI-launched terminals and `sh` subshells.
+    if [ -f "$HOME/.profile" ] && [ "$written" != "$HOME/.profile" ]; then
+        write_path_block_posix "$HOME/.profile"
+    fi
+    if [ -n "$written" ] && [ -f "$written" ] \
+            && grep -q "^${PATH_MARKER_BEGIN}\$" "$written" 2>/dev/null; then
+        ok "Added $BIN_DIR to PATH via $written"
+    else
+        warn "Couldn't write PATH entry (permission denied?). Add manually:"
+        printf '    export PATH="%s:$PATH"\n' "$BIN_DIR" >&2
+    fi
+}
+
+if [ "$MODIFY_PATH" -eq 1 ]; then
+    install_path_entry
+else
+    info "Skipping PATH modification (--no-modify-path). Add manually:"
+    printf '    export PATH="%s:$PATH"\n' "$BIN_DIR"
+fi
 
 # ── env file ──────────────────────────────────────────────────────────────
 
@@ -432,8 +649,8 @@ fi
 # ── migrate ───────────────────────────────────────────────────────────────
 
 info "Migrating database to current schema"
-"$VENV_DIR/bin/opa" db upgrade >>"$LOG_FILE" 2>&1
-REVISION="$("$VENV_DIR/bin/opa" db current 2>/dev/null || echo "?")"
+"$VENV_DIR/bin/openpa" db upgrade >>"$LOG_FILE" 2>&1
+REVISION="$("$VENV_DIR/bin/openpa" db current 2>/dev/null || echo "?")"
 ok "Database at revision $REVISION"
 
 # ── start the server (foreground-detached for the install session) ───────
@@ -453,7 +670,7 @@ else
     # shellcheck disable=SC1090
     . "$ENV_FILE"
     set +a
-    nohup "$VENV_DIR/bin/opa" serve >>"$OPENPA_HOME/server.log" 2>&1 &
+    nohup "$VENV_DIR/bin/openpa" serve >>"$OPENPA_HOME/server.log" 2>&1 &
     echo $! > "$SERVER_PID_FILE"
     ok "OpenPA started (pid $(cat "$SERVER_PID_FILE"), logs: $OPENPA_HOME/server.log)"
 fi
@@ -485,7 +702,10 @@ profile name, and tool preferences, then activates the server.
   Wizard URL: ${BOLD}$WIZARD_URL${RESET}
   Backend:    http://${HOST:-127.0.0.1}:${PORT:-1112}
   Stop:       kill \$(cat $SERVER_PID_FILE)
-  Re-open:    "$VENV_DIR/bin/opa" serve
+  Re-open:    openpa serve   ${DIM}(or "$VENV_DIR/bin/openpa" serve)${RESET}
+
+  ${BOLD}Tip:${RESET} open a new terminal so \`openpa\` is on your PATH,
+       or run: ${BOLD}export PATH="$BIN_DIR:\$PATH"${RESET}
 
 EOF
 

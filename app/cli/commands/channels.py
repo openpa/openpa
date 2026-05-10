@@ -1,4 +1,4 @@
-"""`opa channels ...` — register and manage external messaging channels.
+"""`openpa channels ...` — register and manage external messaging channels.
 
 Mirrors `cli/cmd/channels.go` for list/catalog/add/delete. The interactive
 `pair` command (and the auto-pair behavior of `add`) lands in Phase 4 — for
@@ -206,7 +206,7 @@ def channels_add(
     if _channel_mode_needs_pairing(catalog, channel.channel_type, channel.mode):
         sys.stdout.write(
             f"\nThis channel needs interactive pairing.\n"
-            f"Run: opa channels pair {channel.id}\n"
+            f"Run: openpa channels pair {channel.id}\n"
             f"(Auto-pairing on `add` lands in Phase 4 of the migration.)\n"
         )
 

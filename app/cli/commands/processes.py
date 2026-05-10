@@ -1,4 +1,4 @@
-"""`opa proc ...` — list and control long-running processes.
+"""`openpa proc ...` — list and control long-running processes.
 
 Mirrors `cli/cmd/proc.go`. Phase 2 covers list/get/stop/stdin/resize plus
 the autostart subgroup. Phase 3 adds `proc stream` (SSE), and Phase 4 adds

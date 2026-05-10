@@ -1,10 +1,10 @@
 ---
-description: "Complete reference for the `opa conv` CLI command (alias `opa conversation`) — the terminal-side counterpart to the **Conversations** view in the OpenPA web UI — covering how to list, create, fetch, rename (`rename` for the title and `set-id` for the conversation id), and delete conversations, send messages and stream responses (`send`), attach to an in-flight run without sending (`attach`), cancel a run (`cancel`), and bulk-delete every conversation for the active profile (`delete-all`). Documents the three streaming modes (default TUI, `--raw` text, root `--json` event-per-line), the `--detail` replay TUI for `get`, the `--no-reasoning` toggle, pagination, the conversation-id format rules, and the contract for piping conversation IDs in scripts."
+description: "Complete reference for the `openpa conv` CLI command (alias `openpa conversation`) — the terminal-side counterpart to the **Conversations** view in the OpenPA web UI — covering how to list, create, fetch, rename (`rename` for the title and `set-id` for the conversation id), and delete conversations, send messages and stream responses (`send`), attach to an in-flight run without sending (`attach`), cancel a run (`cancel`), and bulk-delete every conversation for the active profile (`delete-all`). Documents the three streaming modes (default TUI, `--raw` text, root `--json` event-per-line), the `--detail` replay TUI for `get`, the `--no-reasoning` toggle, pagination, the conversation-id format rules, and the contract for piping conversation IDs in scripts."
 ---
 
-# `opa conv` — Conversation Management and Streaming
+# `openpa conv` — Conversation Management and Streaming
 
-`opa conv` (alias `opa conversation`) is the CLI for managing
+`openpa conv` (alias `openpa conversation`) is the CLI for managing
 conversations — the persistent units of agent dialogue — and for
 streaming agent runs inside them. Each conversation is owned by the
 active profile (resolved server-side from `OPENPA_TOKEN`).
@@ -24,12 +24,12 @@ The group splits into three concerns:
   Response) for every agent turn.
 
 For an interactive REPL that wraps `new` + `send` into a chat loop,
-see `opa chat`. `opa conv send` is the right command when you want to
+see `openpa chat`. `openpa conv send` is the right command when you want to
 script a one-shot question or pipe the answer somewhere.
 
 ## Streaming modes
 
-Both `opa conv send` and `opa conv attach` produce streamed output.
+Both `openpa conv send` and `openpa conv attach` produce streamed output.
 The renderer is picked by flag precedence:
 
 | Mode      | Trigger                        | What you see                                                                                  |
@@ -48,19 +48,19 @@ view of the OpenPA web UI:
 
 > **Sidebar → Conversations**
 
-The list pane on the left mirrors `opa conv list`. Selecting a
-conversation opens the message thread (mirroring `opa conv get`).
-Sending a message in the composer mirrors `opa conv send`; the
+The list pane on the left mirrors `openpa conv list`. Selecting a
+conversation opens the message thread (mirroring `openpa conv get`).
+Sending a message in the composer mirrors `openpa conv send`; the
 "viewer" mode that opens when you click into a conversation that is
-mid-run mirrors `opa conv attach`. Each conversation row exposes a
+mid-run mirrors `openpa conv attach`. Each conversation row exposes a
 **pencil** icon that opens an inline edit dialog with both the **id**
-and **title** fields (mirroring `opa conv set-id` and `opa conv
+and **title** fields (mirroring `openpa conv set-id` and `openpa conv
 rename` together) and an **×** delete button, and a "Delete all"
 action lives in the list pane's overflow menu.
 
 ## Global flags
 
-All `opa conv` subcommands accept the root-level `--json` flag, which
+All `openpa conv` subcommands accept the root-level `--json` flag, which
 both forces JSON output for non-streaming subcommands *and* selects the
 JSON streaming renderer for `send` / `attach`.
 
@@ -68,7 +68,7 @@ JSON streaming renderer for `send` / `attach`.
 
 ## Subcommands
 
-### `opa conv list`
+### `openpa conv list`
 
 **Purpose.** List conversations belonging to the active profile, with
 pagination and optional per-channel filtering.
@@ -76,7 +76,7 @@ pagination and optional per-channel filtering.
 **Syntax.**
 
 ```bash
-opa conv list [--limit N] [--offset N] [--channel <type>]
+openpa conv list [--limit N] [--offset N] [--channel <type>]
 ```
 
 **Flags.**
@@ -93,7 +93,7 @@ opa conv list [--limit N] [--offset N] [--channel <type>]
 |---------------|----------------|----------------------------------------------------------------------------------------------------------------------|
 | `ID`          | `id`           | Conversation id (used by every other subcommand).                                                                    |
 | `TITLE`       | `title`        | Title (may be blank).                                                                                                |
-| `CHANNEL`     | `channel_id`   | UUID of the channel this conversation belongs to. `main` for web/CLI conversations; non-`main` for external platforms. Use `opa channels list` to map id → type. |
+| `CHANNEL`     | `channel_id`   | UUID of the channel this conversation belongs to. `main` for web/CLI conversations; non-`main` for external platforms. Use `openpa channels list` to map id → type. |
 | `CREATED_AT`  | `created_at`   | RFC 3339 creation timestamp.                                                                                         |
 | `TASK_ID`     | `task_id`      | Active run id, if a run is in progress. Blank when idle.                                                             |
 
@@ -104,27 +104,27 @@ With `--json`, returns the full array (including the raw
 
 ```bash
 # All conversations across every channel
-$ opa conv list --limit 5
+$ openpa conv list --limit 5
 ID      TITLE                    CHANNEL                                 CREATED_AT            TASK_ID
 c_82bc  Daily Brief              c1...main                               2026-05-02T08:00:00Z  t_19a8
 c_4d10  PR review #42            c1...main                               2026-05-01T15:30:00Z
 c_92bc  Lee Nguyen               e2e8...d4f1                             2026-05-03T00:30:00Z
 
 # Only web/CLI conversations
-$ opa conv list --channel main
+$ openpa conv list --channel main
 
 # Only conversations sourced from Telegram
-$ opa conv list --channel telegram
+$ openpa conv list --channel telegram
 ```
 
 **Note.** Conversations on non-`main` channels are read-only from
-the OpenPA side: `opa conv send` and the web UI's composer both
+the OpenPA side: `openpa conv send` and the web UI's composer both
 return `403 Read-only channel` for those ids. Inbound messages flow
 through the platform's user; replies are forwarded automatically by
-the channel adapter. See [`opa channels`](./%5Bcli%5Dopa%20channels.md)
+the channel adapter. See [`openpa channels`](./%5Bcli%5Dopa%20channels.md)
 for the model.
 
-### `opa conv new`
+### `openpa conv new`
 
 **Purpose.** Create a new conversation. Useful as a building block
 for scripts that want to send messages programmatically.
@@ -132,7 +132,7 @@ for scripts that want to send messages programmatically.
 **Syntax.**
 
 ```bash
-opa conv new [-t <title>]
+openpa conv new [-t <title>]
 ```
 
 **Flags.**
@@ -152,25 +152,25 @@ channel.** External channels (Telegram, Discord, etc.) only ever spawn
 conversations from inbound platform messages — there is no CLI flag
 to attach a new conversation to one, and the server rejects any such
 attempt over the API with `403 Read-only channel`. See
-[`opa channels`](./%5Bcli%5Dopa%20channels.md) for how those channels
+[`openpa channels`](./%5Bcli%5Dopa%20channels.md) for how those channels
 work.
 
 **Examples.**
 
 ```bash
 # Interactive (TTY) — see the metadata
-$ opa conv new -t "Daily Brief"
+$ openpa conv new -t "Daily Brief"
 id          c_82bc
 title       Daily Brief
 created_at  2026-05-02T14:00:00Z
 
 # In a pipeline — just the id
-$ id=$(opa conv new -t "Auto")
+$ id=$(openpa conv new -t "Auto")
 $ echo "$id"
 c_82bc
 ```
 
-### `opa conv get`
+### `openpa conv get`
 
 **Purpose.** Fetch a conversation with its full message history, or
 open a TUI that replays the entire thinking-process trace.
@@ -178,7 +178,7 @@ open a TUI that replays the entire thinking-process trace.
 **Syntax.**
 
 ```bash
-opa conv get <id> [--detail]
+openpa conv get <id> [--detail]
 ```
 
 **Flags.**
@@ -200,7 +200,7 @@ object plus a `messages` array).
 **Example.**
 
 ```bash
-$ opa conv get c_82bc
+$ openpa conv get c_82bc
 id          c_82bc
 title       Daily Brief
 task_id
@@ -211,7 +211,7 @@ created_at  2026-05-02T08:00:00Z
 [assistant] Here's your brief for May 2: ...
 ```
 
-### `opa conv history`
+### `openpa conv history`
 
 **Purpose.** Print paginated message history for one conversation —
 the lighter-weight cousin of `get`, useful for long threads.
@@ -219,7 +219,7 @@ the lighter-weight cousin of `get`, useful for long threads.
 **Syntax.**
 
 ```bash
-opa conv history <id> [--limit N] [--offset N]
+openpa conv history <id> [--limit N] [--offset N]
 ```
 
 **Flags.**
@@ -235,20 +235,20 @@ opa conv history <id> [--limit N] [--offset N]
 **Example.**
 
 ```bash
-$ opa conv history c_82bc --limit 3 --offset 0
+$ openpa conv history c_82bc --limit 3 --offset 0
 [user]      Give me today's brief
 [assistant] Here's your brief for May 2: ...
 [user]      Anything urgent?
 ```
 
-### `opa conv send`
+### `openpa conv send`
 
 **Purpose.** Send a user message and stream the agent's response.
 
 **Syntax.**
 
 ```bash
-opa conv send <id> <message> [--raw] [--no-reasoning]
+openpa conv send <id> <message> [--raw] [--no-reasoning]
 ```
 
 **Arguments** (both required):
@@ -275,19 +275,19 @@ returned to its idle state once the run completes.
 
 ```bash
 # Interactive TUI (default)
-$ opa conv send c_82bc "Anything urgent?"
+$ openpa conv send c_82bc "Anything urgent?"
 
 # Pipe-friendly raw stream — just the assistant text
-$ opa conv send c_82bc "Anything urgent?" --raw | tee answer.txt
+$ openpa conv send c_82bc "Anything urgent?" --raw | tee answer.txt
 
 # Structured event stream
-$ opa conv send c_82bc "Anything urgent?" --json | jq -r 'select(.type=="text").data.token'
+$ openpa conv send c_82bc "Anything urgent?" --json | jq -r 'select(.type=="text").data.token'
 
 # One-shot answer, no reasoning steps
-$ opa conv send c_82bc "Summarize in one sentence" --raw --no-reasoning
+$ openpa conv send c_82bc "Summarize in one sentence" --raw --no-reasoning
 ```
 
-### `opa conv attach`
+### `openpa conv attach`
 
 **Purpose.** Subscribe to an in-flight conversation run without
 sending a new message. Use this to peek at an agent run started
@@ -296,7 +296,7 @@ elsewhere (e.g. by the web UI or a skill event).
 **Syntax.**
 
 ```bash
-opa conv attach <id> [--raw]
+openpa conv attach <id> [--raw]
 ```
 
 **Flags.**
@@ -315,20 +315,20 @@ begins.
 **Example.**
 
 ```bash
-$ opa conv attach c_82bc --json | jq .type
+$ openpa conv attach c_82bc --json | jq .type
 "thinking"
 "text"
 "complete"
 ```
 
-### `opa conv rename`
+### `openpa conv rename`
 
 **Purpose.** Set a conversation's title.
 
 **Syntax.**
 
 ```bash
-opa conv rename <id> <title>
+openpa conv rename <id> <title>
 ```
 
 **Behavior.** Silent on success.
@@ -336,10 +336,10 @@ opa conv rename <id> <title>
 **Example.**
 
 ```bash
-$ opa conv rename c_82bc "Daily Brief – May 2"
+$ openpa conv rename c_82bc "Daily Brief – May 2"
 ```
 
-### `opa conv set-id`
+### `openpa conv set-id`
 
 **Purpose.** Change a conversation's id. Useful for turning a
 server-allocated UUID into a memorable slug like `mkt_1` so scripts
@@ -348,7 +348,7 @@ and skill-event subscriptions can reference the conversation by name.
 **Syntax.**
 
 ```bash
-opa conv set-id <old_id> <new_id>
+openpa conv set-id <old_id> <new_id>
 ```
 
 **Format.** The new id must match the regex
@@ -369,7 +369,7 @@ opa conv set-id <old_id> <new_id>
 **Behavior.** Silent on success. The rename cascades atomically to all
 referencing tables (`messages.conversation_id`, skill-event
 subscriptions). The conversation's **title is reset to the new id** —
-if you want a different title, run `opa conv rename <new_id> <title>`
+if you want a different title, run `openpa conv rename <new_id> <title>`
 right after.
 
 **Restrictions.** The rename is rejected with an error message in
@@ -378,34 +378,34 @@ these cases:
 - The new id is malformed (`400 Invalid id format`).
 - A different conversation already uses that id (`409 Id already in use`).
 - The conversation has an active streaming run (`409 Conversation is
-  streaming`). Wait for the run to finish (or `opa conv cancel` it)
+  streaming`). Wait for the run to finish (or `openpa conv cancel` it)
   before retrying.
 
 **Example.**
 
 ```bash
 # Rename a UUID-style id to a friendly slug
-$ opa conv set-id c_82bc mkt_1
-$ opa conv get mkt_1
+$ openpa conv set-id c_82bc mkt_1
+$ openpa conv get mkt_1
 id          mkt_1
 title       mkt_1
 task_id
 created_at  2026-05-02T08:00:00Z
 
 # Optional: give it a human-readable title afterward
-$ opa conv rename mkt_1 "Marketing thread"
+$ openpa conv rename mkt_1 "Marketing thread"
 ```
 
-### `opa conv cancel`
+### `openpa conv cancel`
 
 **Purpose.** Cancel an in-flight agent run by its **run id** (also
 called `task_id`). The run id is the value shown in the `TASK_ID`
-column of `opa conv list` while a conversation is running.
+column of `openpa conv list` while a conversation is running.
 
 **Syntax.**
 
 ```bash
-opa conv cancel <run_id>
+openpa conv cancel <run_id>
 ```
 
 **Behavior.** Prints `cancelled` if a run was active and was
@@ -413,29 +413,29 @@ cancelled, or `no active run for that id` if no run was active. With
 `--json`, emits `{"cancelled": true|false}`.
 
 **Note.** This takes a run id, not a conversation id. Use
-`opa conv list --json` and select the `task_id` of the conversation
+`openpa conv list --json` and select the `task_id` of the conversation
 you want to cancel.
 
 **Examples.**
 
 ```bash
 # Cancel by explicit run id
-$ opa conv cancel t_19a8
+$ openpa conv cancel t_19a8
 cancelled
 
 # Cancel whatever is running in conversation c_82bc (one-liner)
-$ run=$(opa conv list --json | jq -r '.[] | select(.id=="c_82bc") | .task_id')
-$ opa conv cancel "$run"
+$ run=$(openpa conv list --json | jq -r '.[] | select(.id=="c_82bc") | .task_id')
+$ openpa conv cancel "$run"
 ```
 
-### `opa conv delete`
+### `openpa conv delete`
 
 **Purpose.** Delete a single conversation and all its messages.
 
 **Syntax.**
 
 ```bash
-opa conv delete <id>
+openpa conv delete <id>
 ```
 
 **Behavior.** Silent on success. **No confirmation prompt.**
@@ -443,10 +443,10 @@ opa conv delete <id>
 **Example.**
 
 ```bash
-$ opa conv delete c_3a02
+$ openpa conv delete c_3a02
 ```
 
-### `opa conv delete-all`
+### `openpa conv delete-all`
 
 **Purpose.** Delete every conversation belonging to the active
 profile. Useful for clearing a noisy test profile.
@@ -454,7 +454,7 @@ profile. Useful for clearing a noisy test profile.
 **Syntax.**
 
 ```bash
-opa conv delete-all
+openpa conv delete-all
 ```
 
 **Behavior.** Prints `deleted N conversation(s)`. With `--json`,
@@ -464,7 +464,7 @@ careful, this is profile-wide.
 **Example.**
 
 ```bash
-$ opa conv delete-all
+$ openpa conv delete-all
 deleted 17 conversation(s)
 ```
 
@@ -473,15 +473,15 @@ deleted 17 conversation(s)
 ### One-shot question, capture only the assistant text
 
 ```bash
-$ id=$(opa conv new -t "Quick" )
-$ opa conv send "$id" "What is the capital of Australia?" --raw
+$ id=$(openpa conv new -t "Quick" )
+$ openpa conv send "$id" "What is the capital of Australia?" --raw
 Canberra.
 ```
 
 ### Replay a finished conversation in detail mode
 
 ```bash
-$ opa conv get c_82bc --detail
+$ openpa conv get c_82bc --detail
 # (full-screen TUI — ESC to exit)
 ```
 
@@ -490,43 +490,43 @@ $ opa conv get c_82bc --detail
 ```bash
 # Shell A: kick off a slow run via the UI or a skill event.
 # Shell B:
-$ opa conv attach c_82bc
+$ openpa conv attach c_82bc
 ```
 
 ### Tail every event into a structured log
 
 ```bash
-$ opa conv attach c_82bc --json >> events.jsonl
+$ openpa conv attach c_82bc --json >> events.jsonl
 ```
 
 ### Cancel any conversation that has been running for >5 minutes (rough sketch)
 
 ```bash
 $ now=$(date +%s)
-$ opa conv list --json | jq -c '.[] | select(.task_id != "")' | while read row; do
+$ openpa conv list --json | jq -c '.[] | select(.task_id != "")' | while read row; do
     started=$(jq -r .created_at <<<"$row" | xargs -I{} date -d "{}" +%s)
     if (( now - started > 300 )); then
       run=$(jq -r .task_id <<<"$row")
       echo "cancelling $run"
-      opa conv cancel "$run"
+      openpa conv cancel "$run"
     fi
   done
 ```
 
 ## Troubleshooting
 
-**`opa conv send` opens a TUI when I want raw text** — Pass `--raw`
+**`openpa conv send` opens a TUI when I want raw text** — Pass `--raw`
 (plain text) or `--json` (structured events). The TUI is the default
 only when stdout is a TTY.
 
 **`Ctrl-C` killed the CLI but the run kept going** — Almost always
 caused by exiting before the TUI handed Ctrl-C to the cancel hook.
-Reattach with `opa conv attach <id>` and Ctrl-C from there, or use
-`opa conv cancel <task_id>` directly.
+Reattach with `openpa conv attach <id>` and Ctrl-C from there, or use
+`openpa conv cancel <task_id>` directly.
 
-**`opa conv cancel` says `no active run for that id`** — You passed
+**`openpa conv cancel` says `no active run for that id`** — You passed
 a conversation id, not a run id. Run ids live in the `task_id` column
-of `opa conv list`.
+of `openpa conv list`.
 
 **TUI rendering looks broken on Windows** — The CLI uses ANSI
 escapes. Set `OPA_NO_COLOR=1` to strip color (the layout still works);

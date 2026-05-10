@@ -58,5 +58,5 @@ docker-compose.yml
 
 .playwright-mcp/
 
-cli/opa
-cli/opa.exe
+cli/openpa
+cli/openpa.exe

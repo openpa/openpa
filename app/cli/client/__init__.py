@@ -2,7 +2,7 @@
 
 Mirrors `cli/internal/client/` (Go). Imports of this package may not be free
 of httpx/websockets cost; keep them inside command function bodies rather
-than at module top level so `opa --help` stays snappy.
+than at module top level so `openpa --help` stays snappy.
 """
 
 from app.cli.client._base import APIError, Client

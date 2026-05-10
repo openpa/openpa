@@ -1,6 +1,6 @@
-"""`opa db ...` — schema and database operations against the local DB.
+"""`openpa db ...` — schema and database operations against the local DB.
 
-Unlike most ``opa`` subcommands these don't go through the HTTP API; they
+Unlike most ``openpa`` subcommands these don't go through the HTTP API; they
 operate on the database directly via :mod:`app.storage.migrations` and
 :mod:`app.storage.backup`. They typically run with the OpenPA service
 stopped — Alembic and SQLite's write-ahead log don't appreciate
@@ -112,7 +112,7 @@ def db_backup(
 
 @db_app.command("restore")
 def db_restore(
-    src: Path = typer.Argument(..., help="Path to a backup file produced by `opa db backup`."),
+    src: Path = typer.Argument(..., help="Path to a backup file produced by `openpa db backup`."),
     yes: bool = typer.Option(
         False,
         "--yes",

@@ -1,4 +1,4 @@
-"""`opa skill-events ...` — manage skill event subscriptions.
+"""`openpa skill-events ...` — manage skill event subscriptions.
 
 Mirrors `cli/cmd/skillevents.go`. Phase 2 covers the non-streaming
 subcommands; `stream` and `notifications` (SSE) are added in Phase 3.

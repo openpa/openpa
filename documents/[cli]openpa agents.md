@@ -1,15 +1,15 @@
 ---
-description: "Complete reference for the `opa agents` CLI command (alias `opa agent`) — the terminal-side counterpart to the **Agents** page in the OpenPA web UI — covering how to register and remove A2A and MCP servers, enable/disable them per profile, retry stub connections, run the OAuth authorize flow (`auth-url`), drop a profile's stored OAuth token (`unlink`), and read or patch the per-profile LLM and meta config attached to each agent. Documents the two ways to register an MCP server (`--url` vs `--json-config`), the per-server LLM override flags, and how `agents config set` differs from `tools set-llm`."
+description: "Complete reference for the `openpa agents` CLI command (alias `openpa agent`) — the terminal-side counterpart to the **Agents** page in the OpenPA web UI — covering how to register and remove A2A and MCP servers, enable/disable them per profile, retry stub connections, run the OAuth authorize flow (`auth-url`), drop a profile's stored OAuth token (`unlink`), and read or patch the per-profile LLM and meta config attached to each agent. Documents the two ways to register an MCP server (`--url` vs `--json-config`), the per-server LLM override flags, and how `agents config set` differs from `tools set-llm`."
 ---
 
-# `opa agents` — A2A and MCP Server Registration
+# `openpa agents` — A2A and MCP Server Registration
 
-`opa agents` (alias `opa agent`) is the CLI for managing the external
+`openpa agents` (alias `openpa agent`) is the CLI for managing the external
 agents the OpenPA agent can delegate to: A2A peer agents and MCP
 servers. Once registered, an agent shows up as a tool in
-`opa tools list` (with `tool_type` of `a2a` or `mcp`), which is why
+`openpa tools list` (with `tool_type` of `a2a` or `mcp`), which is why
 some flags overlap between the two commands. The dividing line:
-`opa agents` handles **registration and OAuth**, while `opa tools`
+`openpa agents` handles **registration and OAuth**, while `openpa tools`
 handles **per-tool variables and arguments**.
 
 The group covers:
@@ -26,7 +26,7 @@ The group covers:
 
 ## Two ways to register an agent
 
-`opa agents add` supports two distinct registration styles, picked via
+`openpa agents add` supports two distinct registration styles, picked via
 the `--type` flag and the choice between `--url` and `--json-config`:
 
 | Style                              | Command                                                          | When to use                                                                                |
@@ -54,12 +54,12 @@ opens a drawer with **OAuth** (matching `auth-url` / `unlink`) and
 
 ## Global flags
 
-All `opa agents` subcommands accept the root-level `--json` flag.
+All `openpa agents` subcommands accept the root-level `--json` flag.
 `OPENPA_TOKEN` is required for every subcommand.
 
 ## Subcommands
 
-### `opa agents list`
+### `openpa agents list`
 
 **Purpose.** Show every registered A2A and MCP agent with its
 type, profile-level enabled flag, status, and URL.
@@ -67,7 +67,7 @@ type, profile-level enabled flag, status, and URL.
 **Syntax.**
 
 ```bash
-opa agents list
+openpa agents list
 ```
 
 **Behavior.** Renders a five-column table:
@@ -85,23 +85,23 @@ With `--json`, the underlying array is returned.
 **Example.**
 
 ```bash
-$ opa agents list
+$ openpa agents list
 TOOL_ID         TYPE  ENABLED  STATUS         URL
 a2a.team-bot    a2a   yes      connected      https://team-bot.internal/a2a
 mcp.linear      mcp   yes      auth required  https://mcp.linear.app
 mcp.shell       mcp   yes      connected
 ```
 
-### `opa agents add`
+### `openpa agents add`
 
 **Purpose.** Register a new A2A or MCP server.
 
 **Syntax.**
 
 ```bash
-opa agents add --type a2a --url <url> [meta/llm flags]
-opa agents add --type mcp --url <url> [meta/llm flags]
-opa agents add --type mcp --json-config '<json>' [meta/llm flags]
+openpa agents add --type a2a --url <url> [meta/llm flags]
+openpa agents add --type mcp --url <url> [meta/llm flags]
+openpa agents add --type mcp --json-config '<json>' [meta/llm flags]
 ```
 
 **Required flags.**
@@ -127,30 +127,30 @@ the full agent record (including any auth metadata).
 
 ```bash
 # A2A peer
-$ opa agents add --type a2a --url https://team-bot.internal/a2a
+$ openpa agents add --type a2a --url https://team-bot.internal/a2a
 
 # HTTP MCP server with a per-server prompt
-$ opa agents add --type mcp --url https://mcp.linear.app \
+$ openpa agents add --type mcp --url https://mcp.linear.app \
     --system-prompt "Always cite issue ids" \
     --description "Linear issue tracker"
 
 # stdio MCP server via VS Code-style JSON
-$ opa agents add --type mcp --json-config '{
+$ openpa agents add --type mcp --json-config '{
     "command": "/usr/bin/mcp-shell",
     "args": ["--root", "/srv"],
     "env": {"SHELL_TIMEOUT": "120"}
   }'
 ```
 
-### `opa agents delete`
+### `openpa agents delete`
 
 **Purpose.** Unregister an A2A or MCP agent. The matching tool
-disappears from `opa tools list`.
+disappears from `openpa tools list`.
 
 **Syntax.**
 
 ```bash
-opa agents delete <tool_id>
+openpa agents delete <tool_id>
 ```
 
 **Behavior.** Silent on success. Cascades: any per-profile config,
@@ -159,10 +159,10 @@ OAuth tokens, and live connections for the agent are dropped.
 **Example.**
 
 ```bash
-$ opa agents delete mcp.experimental
+$ openpa agents delete mcp.experimental
 ```
 
-### `opa agents enable` / `opa agents disable`
+### `openpa agents enable` / `openpa agents disable`
 
 **Purpose.** Per-profile enable / disable toggle. Equivalent to the
 toggle in the agent row of the web UI.
@@ -170,21 +170,21 @@ toggle in the agent row of the web UI.
 **Syntax.**
 
 ```bash
-opa agents enable <tool_id>
-opa agents disable <tool_id>
+openpa agents enable <tool_id>
+openpa agents disable <tool_id>
 ```
 
 **Behavior.** Silent on success. Profile-scoped — disabling an agent
 under one profile does not affect another. Note that this is the same
-state read by `opa tools list`'s `ENABLED` column.
+state read by `openpa tools list`'s `ENABLED` column.
 
 **Example.**
 
 ```bash
-$ opa agents disable mcp.linear
+$ openpa agents disable mcp.linear
 ```
 
-### `opa agents reconnect`
+### `openpa agents reconnect`
 
 **Purpose.** Retry the connection for a stub agent (one that failed at
 startup or returned a transient error). Useful after rotating
@@ -193,21 +193,21 @@ credentials or fixing a network issue.
 **Syntax.**
 
 ```bash
-opa agents reconnect <tool_id>
+openpa agents reconnect <tool_id>
 ```
 
-**Behavior.** Silent on success. The next `opa agents list` reflects
+**Behavior.** Silent on success. The next `openpa agents list` reflects
 the new status.
 
 **Example.**
 
 ```bash
-$ opa agents reconnect mcp.linear
-$ opa agents list | grep mcp.linear
+$ openpa agents reconnect mcp.linear
+$ openpa agents list | grep mcp.linear
 mcp.linear  mcp  yes  connected  https://mcp.linear.app
 ```
 
-### `opa agents auth-url`
+### `openpa agents auth-url`
 
 **Purpose.** Print the OAuth authorize URL for an agent. The user
 opens it in a browser to grant access; the resulting token is stored
@@ -216,7 +216,7 @@ server-side, scoped to the active profile.
 **Syntax.**
 
 ```bash
-opa agents auth-url <tool_id> [--return-url <url>]
+openpa agents auth-url <tool_id> [--return-url <url>]
 ```
 
 **Flags.**
@@ -232,14 +232,14 @@ or `start`). With `--json`, wraps it as `{"auth_url": "..."}`.
 
 ```bash
 # Just print the URL
-$ opa agents auth-url mcp.linear
+$ openpa agents auth-url mcp.linear
 https://mcp.linear.app/oauth/authorize?...
 
 # Open the URL automatically (Linux example)
-$ xdg-open "$(opa agents auth-url mcp.linear)"
+$ xdg-open "$(openpa agents auth-url mcp.linear)"
 ```
 
-### `opa agents unlink`
+### `openpa agents unlink`
 
 **Purpose.** Drop the active profile's OAuth token for an agent,
 forcing the next call to re-authorize.
@@ -247,7 +247,7 @@ forcing the next call to re-authorize.
 **Syntax.**
 
 ```bash
-opa agents unlink <tool_id>
+openpa agents unlink <tool_id>
 ```
 
 **Behavior.** Silent on success. Other profiles' tokens are
@@ -256,12 +256,12 @@ unaffected.
 **Example.**
 
 ```bash
-$ opa agents unlink mcp.linear
-$ opa agents list | grep mcp.linear
+$ openpa agents unlink mcp.linear
+$ openpa agents list | grep mcp.linear
 mcp.linear  mcp  yes  auth required  https://mcp.linear.app
 ```
 
-### `opa agents config get`
+### `openpa agents config get`
 
 **Purpose.** Read the per-profile LLM and meta config for an agent —
 the same fields shown in the agent's **Config** tab in the UI.
@@ -269,7 +269,7 @@ the same fields shown in the agent's **Config** tab in the UI.
 **Syntax.**
 
 ```bash
-opa agents config get <tool_id>
+openpa agents config get <tool_id>
 ```
 
 **Behavior.** Pretty-prints the JSON config object. With `--json`, the
@@ -278,7 +278,7 @@ same JSON is emitted unindented.
 **Example.**
 
 ```bash
-$ opa agents config get mcp.linear
+$ openpa agents config get mcp.linear
 {
   "llm_provider": "anthropic",
   "llm_model": "claude-sonnet-4-6",
@@ -288,7 +288,7 @@ $ opa agents config get mcp.linear
 }
 ```
 
-### `opa agents config set`
+### `openpa agents config set`
 
 **Purpose.** Patch one or more agent config fields. Only the supplied
 flags change; everything else is left untouched.
@@ -296,7 +296,7 @@ flags change; everything else is left untouched.
 **Syntax.**
 
 ```bash
-opa agents config set <tool_id> [--llm-provider P] [--llm-model M] [--reasoning-effort E] [--full-reasoning true|false] [--system-prompt S] [--description D]
+openpa agents config set <tool_id> [--llm-provider P] [--llm-model M] [--reasoning-effort E] [--full-reasoning true|false] [--system-prompt S] [--description D]
 ```
 
 **Flags** (at least one required):
@@ -314,17 +314,17 @@ opa agents config set <tool_id> [--llm-provider P] [--llm-model M] [--reasoning-
 
 **Note.** This is the right command for MCP/A2A wrapper config
 (`system_prompt`, `description`, plus the LLM fields). For built-in or
-intrinsic tools, use `opa tools set-llm` and `opa tools set-var`.
+intrinsic tools, use `openpa tools set-llm` and `openpa tools set-var`.
 
 **Examples.**
 
 ```bash
 # Switch the per-server model and bump reasoning effort
-$ opa agents config set mcp.linear --llm-model claude-opus-4-7 --reasoning-effort high
+$ openpa agents config set mcp.linear --llm-model claude-opus-4-7 --reasoning-effort high
 
 # Clear the description (current implementation requires a non-empty value;
 # to truly clear, use the JSON API directly)
-$ opa agents config set mcp.linear --description "Linear issue tracker (read-only)"
+$ openpa agents config set mcp.linear --description "Linear issue tracker (read-only)"
 ```
 
 ## Worked examples
@@ -332,18 +332,18 @@ $ opa agents config set mcp.linear --description "Linear issue tracker (read-onl
 ### Register an MCP server, OAuth-link it, and verify
 
 ```bash
-$ opa agents add --type mcp --url https://mcp.linear.app \
+$ openpa agents add --type mcp --url https://mcp.linear.app \
     --description "Linear" --llm-model claude-sonnet-4-6
-$ xdg-open "$(opa agents auth-url mcp.linear)"
+$ xdg-open "$(openpa agents auth-url mcp.linear)"
 # ... finish browser flow ...
-$ opa agents list | grep mcp.linear
+$ openpa agents list | grep mcp.linear
 mcp.linear  mcp  yes  connected  https://mcp.linear.app
 ```
 
 ### Add a stdio MCP server from VS Code-style JSON
 
 ```bash
-$ opa agents add --type mcp --json-config "$(cat <<'EOF'
+$ openpa agents add --type mcp --json-config "$(cat <<'EOF'
 {
   "command": "/usr/bin/mcp-shell",
   "args": ["--root", "/srv"],
@@ -356,22 +356,22 @@ EOF
 ### Re-authorize an agent after rotating its credentials
 
 ```bash
-$ opa agents unlink mcp.linear
-$ xdg-open "$(opa agents auth-url mcp.linear)"
+$ openpa agents unlink mcp.linear
+$ xdg-open "$(openpa agents auth-url mcp.linear)"
 ```
 
 ### Use a heavier model for one specific agent only
 
 ```bash
-$ opa agents config set mcp.linear --llm-model claude-opus-4-7 --reasoning-effort high
-$ opa agents config get mcp.linear
+$ openpa agents config set mcp.linear --llm-model claude-opus-4-7 --reasoning-effort high
+$ openpa agents config get mcp.linear
 ```
 
 ### Disable every MCP agent for the active profile in one shot
 
 ```bash
-$ for id in $(opa agents list --json | jq -r '.[] | select(.agent_type=="mcp") | .tool_id'); do
-    opa agents disable "$id"
+$ for id in $(openpa agents list --json | jq -r '.[] | select(.agent_type=="mcp") | .tool_id'); do
+    openpa agents disable "$id"
   done
 ```
 
@@ -384,12 +384,12 @@ Pick `a2a` or `mcp`.
 empty registration. Provide one of the two.
 
 **`STATUS = auth required`** — The agent needs OAuth. Run
-`opa agents auth-url <tool_id>`, open the URL, complete the flow, then
-re-check with `opa agents list`. If the status persists, check the
+`openpa agents auth-url <tool_id>`, open the URL, complete the flow, then
+re-check with `openpa agents list`. If the status persists, check the
 server logs — the OAuth callback may have failed.
 
 **`STATUS = connection error` after a network change** — Run
-`opa agents reconnect <tool_id>`; if it still fails, the agent
+`openpa agents reconnect <tool_id>`; if it still fails, the agent
 configuration itself is bad — re-add it with the correct URL.
 
 **`config set` rejected** — At least one config flag must be supplied.
@@ -399,6 +399,6 @@ The CLI does not allow an empty patch.
 If you are seeing the same agent's token under another profile, switch
 tokens (`OPENPA_TOKEN`) and unlink there as well.
 
-**Agent appears in `opa tools list` but not `opa agents list`** — Only
-`a2a` and `mcp` types are surfaced under `opa agents`. Built-in,
-intrinsic, and skill tools are managed by `opa tools` instead.
+**Agent appears in `openpa tools list` but not `openpa agents list`** — Only
+`a2a` and `mcp` types are surfaced under `openpa agents`. Built-in,
+intrinsic, and skill tools are managed by `openpa tools` instead.

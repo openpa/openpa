@@ -1,4 +1,4 @@
-"""`opa setup ...` — first-run setup and server-wide configuration.
+"""`openpa setup ...` — first-run setup and server-wide configuration.
 
 Mirrors `cli/cmd/setup.go`. Subcommands:
 

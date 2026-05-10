@@ -1,6 +1,6 @@
-"""`opa serve` — boot the OpenPA HTTP server in-process.
+"""`openpa serve` — boot the OpenPA HTTP server in-process.
 
-The `app.server` import is lazy (inside the function) to keep `opa --help`
+The `app.server` import is lazy (inside the function) to keep `openpa --help`
 fast — starlette/uvicorn pull in a lot at module-import time.
 """
 

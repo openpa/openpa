@@ -1,10 +1,10 @@
 ---
-description: "Complete reference for the `opa llm` CLI command — the terminal-side counterpart to the **Settings → LLM Providers** page in the OpenPA web UI — covering how to list and configure LLM providers, browse the models each provider exposes, assign the high/low/default model groups the agent picks from, and run the GitHub Copilot device-code authentication flow. Documents every subcommand under `providers`, `model-groups`, and `device-code`, the JSON shape sent to `providers configure`, the exact polling behavior of `device-code poll`, and the fields rendered in each table."
+description: "Complete reference for the `openpa llm` CLI command — the terminal-side counterpart to the **Settings → LLM Providers** page in the OpenPA web UI — covering how to list and configure LLM providers, browse the models each provider exposes, assign the high/low/default model groups the agent picks from, and run the GitHub Copilot device-code authentication flow. Documents every subcommand under `providers`, `model-groups`, and `device-code`, the JSON shape sent to `providers configure`, the exact polling behavior of `device-code poll`, and the fields rendered in each table."
 ---
 
-# `opa llm` — LLM Providers, Model Groups, and Device-Code Auth
+# `openpa llm` — LLM Providers, Model Groups, and Device-Code Auth
 
-`opa llm` is the CLI for managing the LLM side of OpenPA: which
+`openpa llm` is the CLI for managing the LLM side of OpenPA: which
 providers are configured, what models each one exposes, which models
 the agent should reach for at "high" and "low" reasoning effort, and
 the GitHub Copilot device-code OAuth dance.
@@ -34,20 +34,20 @@ page of the OpenPA web UI:
 
 The page lists each provider as a card showing whether it is
 configured, the active auth method, and the model count (mirroring
-`opa llm providers list`). The card's "Configure" panel matches
-`opa llm providers configure`, and the **Model groups** section at the
-top of the page matches `opa llm model-groups get/set`. The
+`openpa llm providers list`). The card's "Configure" panel matches
+`openpa llm providers configure`, and the **Model groups** section at the
+top of the page matches `openpa llm model-groups get/set`. The
 **Sign in with GitHub Copilot** button kicks off the same device-code
-flow that `opa llm device-code start` runs.
+flow that `openpa llm device-code start` runs.
 
 ## Global flags
 
-All `opa llm` subcommands accept the root-level `--json` flag.
+All `openpa llm` subcommands accept the root-level `--json` flag.
 `OPENPA_TOKEN` is required for every subcommand in this group.
 
 ## Subcommands
 
-### `opa llm providers list`
+### `openpa llm providers list`
 
 **Purpose.** Show every provider the server knows about, with
 configuration status.
@@ -55,7 +55,7 @@ configuration status.
 **Syntax.**
 
 ```bash
-opa llm providers list
+openpa llm providers list
 ```
 
 **Behavior.** Prints a five-column table:
@@ -73,21 +73,21 @@ With `--json`, returns the underlying array unchanged.
 **Example.**
 
 ```bash
-$ opa llm providers list
+$ openpa llm providers list
 NAME       DISPLAY              CONFIGURED  MODELS  ACTIVE_AUTH
 anthropic  Anthropic            yes         8       anthropic
 openai     OpenAI               no          0
 copilot    GitHub Copilot       yes         12      oauth_personal
 ```
 
-### `opa llm providers models`
+### `openpa llm providers models`
 
 **Purpose.** List the models a single provider exposes.
 
 **Syntax.**
 
 ```bash
-opa llm providers models <provider>
+openpa llm providers models <provider>
 ```
 
 **Arguments** (required):
@@ -101,14 +101,14 @@ extra metadata such as context windows and capability flags).
 **Example.**
 
 ```bash
-$ opa llm providers models anthropic
+$ openpa llm providers models anthropic
 ID                            NAME
 claude-opus-4-7               Claude Opus 4.7
 claude-sonnet-4-6             Claude Sonnet 4.6
 claude-haiku-4-5-20251001     Claude Haiku 4.5
 ```
 
-### `opa llm providers configure`
+### `openpa llm providers configure`
 
 **Purpose.** Set provider configuration — typically the API key and
 the active auth method, plus any extra fields the provider supports.
@@ -116,7 +116,7 @@ the active auth method, plus any extra fields the provider supports.
 **Syntax.**
 
 ```bash
-opa llm providers configure <provider> [--api-key K] [--auth-method M] [--json '{...}']
+openpa llm providers configure <provider> [--api-key K] [--auth-method M] [--json '{...}']
 ```
 
 **Arguments** (required):
@@ -143,16 +143,16 @@ nothing is changed.
 
 ```bash
 # Standard API key
-$ opa llm providers configure anthropic --api-key sk-ant-...
+$ openpa llm providers configure anthropic --api-key sk-ant-...
 
 # Switch the active auth method without touching the key
-$ opa llm providers configure copilot --auth-method oauth_business
+$ openpa llm providers configure copilot --auth-method oauth_business
 
 # Extra fields (e.g. base URL or organization id) via JSON
-$ opa llm providers configure openai --json '{"organization":"org-...","base_url":"https://api.openai.com/v1"}'
+$ openpa llm providers configure openai --json '{"organization":"org-...","base_url":"https://api.openai.com/v1"}'
 ```
 
-### `opa llm providers delete-config`
+### `openpa llm providers delete-config`
 
 **Purpose.** Remove every stored config field for a provider — API
 keys, OAuth tokens, base URLs, the lot.
@@ -160,7 +160,7 @@ keys, OAuth tokens, base URLs, the lot.
 **Syntax.**
 
 ```bash
-opa llm providers delete-config <provider>
+openpa llm providers delete-config <provider>
 ```
 
 **Behavior.** Silent on success. The provider remains *known* (it will
@@ -170,10 +170,10 @@ still appear in `providers list`), but its `configured` flag flips to
 **Example.**
 
 ```bash
-$ opa llm providers delete-config openai
+$ openpa llm providers delete-config openai
 ```
 
-### `opa llm model-groups get`
+### `openpa llm model-groups get`
 
 **Purpose.** Show the current `high` and `low` model assignments and
 the default provider.
@@ -181,7 +181,7 @@ the default provider.
 **Syntax.**
 
 ```bash
-opa llm model-groups get
+openpa llm model-groups get
 ```
 
 **Behavior.** Pretty-prints the JSON document the server returns. With
@@ -190,7 +190,7 @@ opa llm model-groups get
 **Example.**
 
 ```bash
-$ opa llm model-groups get
+$ openpa llm model-groups get
 {
   "default_provider": "anthropic",
   "model_groups": {
@@ -200,7 +200,7 @@ $ opa llm model-groups get
 }
 ```
 
-### `opa llm model-groups set`
+### `openpa llm model-groups set`
 
 **Purpose.** Update the high/low/default assignments. Each flag is
 optional, but at least one must be supplied.
@@ -208,7 +208,7 @@ optional, but at least one must be supplied.
 **Syntax.**
 
 ```bash
-opa llm model-groups set [--high <id>] [--low <id>] [--default-provider <name>]
+openpa llm model-groups set [--high <id>] [--low <id>] [--default-provider <name>]
 ```
 
 **Flags.**
@@ -226,13 +226,13 @@ their existing value. Silent on success.
 
 ```bash
 # Bump the high group to Opus
-$ opa llm model-groups set --high anthropic/claude-opus-4-7
+$ openpa llm model-groups set --high anthropic/claude-opus-4-7
 
 # Switch the default provider away from Anthropic in one call
-$ opa llm model-groups set --default-provider openai --high openai/gpt-5
+$ openpa llm model-groups set --default-provider openai --high openai/gpt-5
 ```
 
-### `opa llm device-code start`
+### `openpa llm device-code start`
 
 **Purpose.** Begin a device-code OAuth flow (currently used for GitHub
 Copilot). The server returns a verification URL and a short user code
@@ -241,7 +241,7 @@ that you enter on that page.
 **Syntax.**
 
 ```bash
-opa llm device-code start
+openpa llm device-code start
 ```
 
 **Behavior.** Prints the response as a key-value table:
@@ -250,14 +250,14 @@ opa llm device-code start
 |--------------------|--------------------------------------------------------------|
 | `verification_uri` | URL the user opens in a browser.                             |
 | `user_code`        | Short code the user types into the page above.               |
-| `device_code`      | Opaque string passed to `opa llm device-code poll`.          |
+| `device_code`      | Opaque string passed to `openpa llm device-code poll`.          |
 | `expires_in`       | Seconds until the device code becomes invalid.               |
 | `interval`         | Recommended seconds between poll attempts.                   |
 
 **Example.**
 
 ```bash
-$ opa llm device-code start
+$ openpa llm device-code start
 verification_uri  https://github.com/login/device
 user_code         ABCD-1234
 device_code       4fe...e8c
@@ -265,7 +265,7 @@ expires_in        900
 interval          5
 ```
 
-### `opa llm device-code poll`
+### `openpa llm device-code poll`
 
 **Purpose.** Block until the user finishes the OAuth flow in their
 browser, then store the resulting access token server-side.
@@ -273,7 +273,7 @@ browser, then store the resulting access token server-side.
 **Syntax.**
 
 ```bash
-opa llm device-code poll <device_code>
+openpa llm device-code poll <device_code>
 ```
 
 **Arguments** (required):
@@ -295,7 +295,7 @@ server returned it.
 **Example.**
 
 ```bash
-$ opa llm device-code poll 4fe...e8c
+$ openpa llm device-code poll 4fe...e8c
 complete (token stored server-side)
 ```
 
@@ -304,43 +304,43 @@ complete (token stored server-side)
 ### Bootstrap Anthropic and verify the model list
 
 ```bash
-$ opa llm providers configure anthropic --api-key sk-ant-...
-$ opa llm providers list
+$ openpa llm providers configure anthropic --api-key sk-ant-...
+$ openpa llm providers list
 NAME       DISPLAY    CONFIGURED  MODELS  ACTIVE_AUTH
 anthropic  Anthropic  yes         8       anthropic
-$ opa llm providers models anthropic
+$ openpa llm providers models anthropic
 ```
 
 ### One-shot GitHub Copilot login
 
 ```bash
-$ resp=$(opa llm device-code start --json)
+$ resp=$(openpa llm device-code start --json)
 $ echo "$resp" | jq -r .verification_uri
 https://github.com/login/device
 $ echo "$resp" | jq -r .user_code
 ABCD-1234
 
 # Open the URL, enter the code, then:
-$ opa llm device-code poll "$(echo "$resp" | jq -r .device_code)"
+$ openpa llm device-code poll "$(echo "$resp" | jq -r .device_code)"
 ```
 
 ### Switch the agent to a faster low-tier model
 
 ```bash
-$ opa llm model-groups get --json | jq .model_groups
-$ opa llm model-groups set --low anthropic/claude-haiku-4-5-20251001
+$ openpa llm model-groups get --json | jq .model_groups
+$ openpa llm model-groups set --low anthropic/claude-haiku-4-5-20251001
 ```
 
 ### Rotate an Anthropic API key
 
 ```bash
-$ opa llm providers configure anthropic --api-key sk-ant-NEWKEY
+$ openpa llm providers configure anthropic --api-key sk-ant-NEWKEY
 ```
 
 ### Pipe a provider list into `jq` to find unconfigured ones
 
 ```bash
-$ opa llm providers list --json | jq -r '.[] | select(.configured==false) | .name'
+$ openpa llm providers list --json | jq -r '.[] | select(.configured==false) | .name'
 openai
 ```
 
@@ -357,7 +357,7 @@ the current values.
 while the user has not yet completed the browser flow. Ctrl-C is safe
 and does not invalidate the device code.
 
-**`device code expired`** — Run `opa llm device-code start` again to
+**`device code expired`** — Run `openpa llm device-code start` again to
 obtain a new code; codes are short-lived (`expires_in` seconds, usually
 ~15 minutes).
 
