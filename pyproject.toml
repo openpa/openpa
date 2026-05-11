@@ -90,6 +90,13 @@ path = "app/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+# The bundled SPA at app/static/ui/ is populated by scripts/build_ui.sh
+# at release time. Those files are .gitignored (they're build output),
+# so hatchling's default VCS-tracked-only filter drops them from the
+# wheel. ``artifacts`` is the documented escape hatch: include matching
+# paths even when ignored. Without this, ``openpa serve`` logs
+# "SPA not present" and the 1515 listener never opens.
+artifacts = ["app/static/ui/**"]
 
 [tool.hatch.build.targets.sdist]
 include = [
