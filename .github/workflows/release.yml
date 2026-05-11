@@ -43,26 +43,84 @@ on:
         type: string
 
 jobs:
+  # Discipline gates the rest of the workflow:
+  #   1. The tag matches the production pattern.
+  #   2. ``app/__version__.py`` agrees with the tag.
+  #   3. A matching ``v<X.Y.Z>-test*`` tag already exists at this commit,
+  #      so prod is provably promoting a commit that went through the
+  #      test-release path. See RELEASING.md.
+  # Failing here means no draft, no PyPI upload, no Electron build — the
+  # release never starts.
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Resolve tag and bare version
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "name=$tag" >> "$GITHUB_OUTPUT"
+          version=$(echo "$tag" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?)$/\1/')
+          if [ "$version" = "$tag" ]; then
+            echo "::error::Tag $tag does not match v<major>.<minor>.<patch>[.<hotfix>]. Production releases use that pattern; test releases use release-test.yml."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check out at tag (full history for tag lookups)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+          fetch-depth: 0
+
+      - name: Verify tag matches app/__version__.py
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+          EXPECTED: ${{ steps.tag.outputs.version }}
+        run: |
+          src=$(grep -oE '^__version__[[:space:]]*=[[:space:]]*"[^"]+"' app/__version__.py | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$EXPECTED" != "$src" ]; then
+            echo "::error::Tag $TAG implies version $EXPECTED but app/__version__.py is $src."
+            echo "::error::Bump app/__version__.py to $EXPECTED on main and retag."
+            exit 1
+          fi
+          echo "OK: tag $TAG matches app/__version__.py = $src"
+
+      - name: Verify a v<version>-test* tag exists at this commit
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          matching=$(git tag --points-at "$commit" --list "v${VERSION}-test*")
+          if [ -z "$matching" ]; then
+            echo "::error::No v${VERSION}-test* tag at commit $commit."
+            echo "::error::Production releases must promote a tested commit. Run a test cycle first:"
+            echo "::error::  git tag v${VERSION}-test1 && git push origin v${VERSION}-test1"
+            echo "::error::Iterate testN until the test workflow succeeds, then tag v${VERSION} on the green commit."
+            exit 1
+          fi
+          echo "OK: found matching test tag(s) at commit $commit:"
+          echo "$matching"
+
   prepare-draft:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      tag: ${{ steps.tag.outputs.name }}
+      tag: ${{ needs.verify.outputs.tag }}
     steps:
-      - name: Resolve tag
-        id: tag
-        run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check out openpa
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.tag.outputs.name }}
+          ref: ${{ needs.verify.outputs.tag }}
 
       # Creates the draft release that wheel + electron jobs upload into.
       # generate_release_notes: true fills the body from PR titles since
@@ -71,8 +129,8 @@ jobs:
       - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          name: ${{ steps.tag.outputs.name }}
+          tag_name: ${{ needs.verify.outputs.tag }}
+          name: ${{ needs.verify.outputs.tag }}
           draft: true
           generate_release_notes: true
 
