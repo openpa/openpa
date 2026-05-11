@@ -1,19 +1,32 @@
-# Backend release workflow.
+# Unified release workflow for the merged openpa repo.
 #
-# Trigger: push a tag matching ``v*`` (e.g., ``v0.1.1``). On every such
-# push, this workflow:
-#   1. Builds the openpa-ui SPA via scripts/build_ui.sh (so the wheel
-#      includes the runtime web UI on app/static/ui/).
-#   2. Builds the wheel + sdist via hatch.
-#   3. Publishes to PyPI using the API token in repo secrets.
-#   4. Creates a GitHub Release at the tag, attaching the wheel + sdist.
-#      The release is what `app/upgrade/manifest.py` reads via the
-#      GitHub API to detect available upgrades.
+# Trigger: push a tag matching ``v*`` (e.g., ``v0.1.7``). The workflow
+# produces a single GitHub Release with:
+#   - openpa-X.Y.Z-py3-none-any.whl + openpa-X.Y.Z.tar.gz (PyPI + GH)
+#   - Windows NSIS installer + latest.yml
+#   - macOS DMG + latest-mac.yml
+#   - Linux AppImage + latest-linux.yml
+#
+# Flow:
+#   1. ``prepare-draft`` creates a draft GitHub Release with auto-generated
+#      notes from PR titles since the previous tag.
+#   2. ``wheel`` (one Linux job) builds the SPA via scripts/build_ui.sh,
+#      then ``hatch build``. Smoke-tests the wheel. Publishes to PyPI.
+#      Uploads wheel + sdist to the draft.
+#   3. ``electron`` (matrix: ubuntu, macos, windows) runs ``npm run build``
+#      in ui/. electron-builder with ``releaseType: "draft"`` uploads each
+#      platform's installer + update manifest to the same draft.
+#   4. ``publish`` promotes the draft only after wheel AND every electron
+#      matrix job succeed. Half-finished releases never reach users.
 #
 # Required repo secrets:
-#   PYPI_API_TOKEN   — created at https://pypi.org/manage/account/token/.
-#                      Scope it to the openpa project once that exists,
-#                      otherwise account-wide for the very first release.
+#   PYPI_API_TOKEN      — for PyPI publish.
+#   GITHUB_TOKEN        — auto-provided; used by electron-builder + gh CLI.
+# Optional (for code signing):
+#   CSC_LINK + CSC_KEY_PASSWORD                     — Windows + macOS certs.
+#   APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD
+#     + APPLE_TEAM_ID                               — macOS notarization.
+# Missing optional secrets produce unsigned builds, not job failures.
 
 name: release
 
@@ -21,26 +34,21 @@ on:
   push:
     tags:
       - "v*"
-      # Test-release tags (``v*-test*``) belong to release-test.yml, which
-      # publishes to Test PyPI. The negation keeps both workflows from
-      # firing on the same tag.
       - "!v*-test*"
-  # ``workflow_dispatch`` lets you re-run a release manually from the
-  # Actions tab (e.g. if PyPI was down). It accepts the tag name so the
-  # build artifacts are versioned correctly.
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.1.1)"
+        description: "Tag to release (e.g. v0.1.7)"
         required: true
         type: string
 
 jobs:
-  release:
+  prepare-draft:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # needed for creating the GitHub Release
-
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
     steps:
       - name: Resolve tag
         id: tag
@@ -56,23 +64,45 @@ jobs:
         with:
           ref: ${{ steps.tag.outputs.name }}
 
+      # Creates the draft release that wheel + electron jobs upload into.
+      # generate_release_notes: true fills the body from PR titles since
+      # the previous tag — runs once here so we don't re-generate on every
+      # upload step.
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          draft: true
+          generate_release_notes: true
+
+  wheel:
+    needs: prepare-draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out openpa
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-draft.outputs.tag }}
+
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      # Build the SPA into app/static/ui/. By default scripts/build_ui.sh
-      # clones openpa-ui at OPENPA_UI_REF (main). To pin the SPA to the
-      # same release tag, set OPENPA_UI_REF here — but only after you've
-      # tagged openpa-ui with the same name, otherwise the clone fails.
+      # Builds the SPA into app/static/ui/ from the in-tree ui/ source.
+      # scripts/build_ui.sh defaults to $REPO_ROOT/ui after the merger —
+      # no OPENPA_UI_REF needed because the UI lives in this repo now.
       - name: Build openpa-ui SPA
-        env:
-          OPENPA_UI_REF: ${{ vars.OPENPA_UI_REF || 'main' }}
         run: bash scripts/build_ui.sh
 
       - name: Install hatch
@@ -84,7 +114,6 @@ jobs:
       # Catch the class of bug where a Python subpackage is accidentally
       # gitignored out of the wheel: install the freshly built wheel into
       # a throwaway venv and import the modules the CLI actually loads.
-      # If anything is missing this fails the release before publish.
       - name: Smoke-test built wheel
         run: |
           python -m venv /tmp/smoke
@@ -99,12 +128,108 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload wheel + sdist to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare-draft.outputs.tag }}" \
+            dist/*.whl dist/*.tar.gz \
+            --repo "${{ github.repository }}"
+
+  electron:
+    needs: prepare-draft
+    strategy:
+      # ``fail-fast: false`` keeps a Linux build from being discarded
+      # because (say) macOS notarization hit a transient hiccup. We want
+      # every successful platform's artifacts on the Release.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - name: Check out openpa
+        uses: actions/checkout@v4
         with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          name: ${{ steps.tag.outputs.name }}
-          generate_release_notes: true   # auto-fill from PR titles since last tag
-          files: |
-            dist/*.whl
-            dist/*.tar.gz
+          ref: ${{ needs.prepare-draft.outputs.tag }}
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      # ui/package.json's ``prebuild`` hook runs
+      # ``python ../scripts/sync_ui_version.py`` before vite/electron-builder,
+      # so each matrix runner needs Python on PATH.
+      - name: Set up Python 3.13 (for prebuild version sync)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Workaround for npm bug #4828: optionalDependencies (the
+      # platform-specific @rollup/rollup-* binaries) are not recorded in a
+      # package-lock.json generated on a single OS. The lockfile here was
+      # created on Windows, so Linux/macOS runners must install their binary
+      # explicitly. --no-save / --no-package-lock keep both files untouched.
+      - name: Install platform Rollup binary (workaround npm#4828)
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)  pkg="@rollup/rollup-linux-x64-gnu" ;;
+            macos-latest)   pkg="@rollup/rollup-darwin-arm64" ;;
+            windows-latest) exit 0 ;;
+          esac
+          npm install --no-save --no-package-lock "$pkg"
+
+      # Export signing env vars only when the corresponding secret is
+      # non-empty. GitHub passes "" for missing secrets, and electron-builder
+      # treats CSC_LINK="" as "resolve as relative path", which fails. Gating
+      # per-job also lets us add per-platform certs later (e.g. macOS-only)
+      # without touching the Windows job.
+      - name: Configure code-signing env (only if secrets present)
+        shell: bash
+        env:
+          CSC_LINK_SECRET: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD_SECRET: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          [ -n "$CSC_LINK_SECRET" ]                    && echo "CSC_LINK=$CSC_LINK_SECRET"                                       >> "$GITHUB_ENV" || true
+          [ -n "$CSC_KEY_PASSWORD_SECRET" ]            && echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD_SECRET"                       >> "$GITHUB_ENV" || true
+          [ -n "$APPLE_ID_SECRET" ]                    && echo "APPLE_ID=$APPLE_ID_SECRET"                                       >> "$GITHUB_ENV" || true
+          [ -n "$APPLE_APP_SPECIFIC_PASSWORD_SECRET" ] && echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD_SECRET" >> "$GITHUB_ENV" || true
+          [ -n "$APPLE_TEAM_ID_SECRET" ]               && echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET"                             >> "$GITHUB_ENV" || true
+
+      # ``--publish always`` tells electron-builder to upload artifacts to
+      # the GitHub provider configured in electron-builder.json5. Because
+      # that file declares ``releaseType: "draft"`` and the draft already
+      # exists (created by prepare-draft), each matrix job uploads to it
+      # rather than creating a new release.
+      - name: Build & publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build -- --publish always
+
+  publish:
+    needs: [prepare-draft, wheel, electron]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Promote draft release to published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ needs.prepare-draft.outputs.tag }}" \
+            --draft=false \
+            --repo "${{ github.repository }}"

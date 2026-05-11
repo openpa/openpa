@@ -9,11 +9,12 @@
 #     by ``openpa serve`` from a checkout.
 #
 # Sources, in priority order:
-#   1. OPENPA_UI_LOCAL=/path/to/openpa-ui   — use a local checkout
-#                                             (skips the git clone).
-#   2. OPENPA_UI_REPO + OPENPA_UI_REF       — clone from a fork / tag.
-#                                             Defaults to the public
-#                                             repo @ main.
+#   1. OPENPA_UI_REPO + OPENPA_UI_REF       — clone from a fork / tag.
+#                                             Opt-in escape hatch for
+#                                             emergency rebuilds.
+#   2. OPENPA_UI_LOCAL=/path/to/openpa-ui   — override the source path.
+#   3. Default: the in-tree ./ui/ directory (since the UI lives in this
+#      repo alongside the backend).
 #
 # Output layout:
 #   app/static/ui/
@@ -28,25 +29,26 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATIC_DIR="$REPO_ROOT/app/static/ui"
 
-UI_LOCAL="${OPENPA_UI_LOCAL:-}"
-UI_REPO="${OPENPA_UI_REPO:-https://github.com/openpa/openpa-ui.git}"
+UI_LOCAL="${OPENPA_UI_LOCAL:-$REPO_ROOT/ui}"
+UI_REPO="${OPENPA_UI_REPO:-}"
 UI_REF="${OPENPA_UI_REF:-main}"
 
 cleanup_dir=""
 trap '[ -n "$cleanup_dir" ] && rm -rf "$cleanup_dir"' EXIT
 
-if [ -n "$UI_LOCAL" ]; then
-    if [ ! -d "$UI_LOCAL" ]; then
-        echo "OPENPA_UI_LOCAL=$UI_LOCAL is not a directory" >&2
-        exit 1
-    fi
-    src="$UI_LOCAL"
-    echo "[build_ui] using local checkout at $src"
-else
+if [ -n "$UI_REPO" ]; then
     cleanup_dir="$(mktemp -d)"
     src="$cleanup_dir/openpa-ui"
     echo "[build_ui] cloning $UI_REPO @ $UI_REF"
     git clone --depth 1 --branch "$UI_REF" "$UI_REPO" "$src"
+elif [ -d "$UI_LOCAL" ]; then
+    src="$UI_LOCAL"
+    echo "[build_ui] using local source at $src"
+else
+    echo "[build_ui] no UI source: $UI_LOCAL does not exist." >&2
+    echo "  Run from the openpa repo root (ui/ subdir is the default source)" >&2
+    echo "  or set OPENPA_UI_REPO=<git url> to clone from a fork/tag." >&2
+    exit 1
 fi
 
 # Pin Node deps with ``ci`` (lockfile-strict) so the wheel build is
