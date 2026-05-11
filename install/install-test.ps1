@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     OpenPA TEST installer for Windows (PowerShell).
 
@@ -67,6 +67,12 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 defaults [Console]::OutputEncoding to the OEM
+# code page (cp437 on US-English Windows), which mojibakes multi-byte
+# UTF-8 like the em-dashes and box-drawing chars in our section headers
+# when stdout is consumed by a UTF-8 reader (the Electron log viewer).
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
 
 # ── logging helpers ───────────────────────────────────────────────────────
 
@@ -75,6 +81,22 @@ function Write-Ok    { param($Msg) Write-Host " OK $Msg"      -ForegroundColor G
 function Write-Warn2 { param($Msg) Write-Host "!!! $Msg"      -ForegroundColor Yellow }
 function Write-Err2  { param($Msg) Write-Host "ERR $Msg"      -ForegroundColor Red }
 function Write-Step  { param($Msg) Write-Host "`n── $Msg ──"  -ForegroundColor White }
+# Native executables (docker, uv, pip) write progress to stderr; PS 5.1
+# wraps each line as a NativeCommandError record, which trips
+# $ErrorActionPreference='Stop' on benign output. We scope it to
+# 'Continue' for the duration so the *>> redirect captures everything
+# into $LogFile without aborting the script.
+function Invoke-NativeLogged {
+    param([Parameter(Mandatory)][scriptblock]$Action)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # Redirect through Out-File -Encoding utf8 so the log isn't written
+        # as PS 5.1's default UTF-16 LE (which makes every byte appear
+        # spaced out in any UTF-8 reader).
+        & $Action 2>&1 | Out-File -FilePath $script:LogFile -Encoding utf8 -Append
+    } finally { $ErrorActionPreference = $prev }
+}
 
 # ── unattended sanity check ──────────────────────────────────────────────
 
@@ -349,12 +371,12 @@ if ($Mode -eq 'docker') {
     Write-Info "Pulling images (this may take a few minutes the first time)"
     Push-Location $DockerDir
     try {
-        & docker compose pull --ignore-pull-failures *>> $LogFile
+        Invoke-NativeLogged { & docker compose pull --ignore-pull-failures }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn2 "Some images couldn't be pulled; will build locally."
         }
         Write-Info "Starting bundle"
-        & docker compose up -d --build *>> $LogFile
+        Invoke-NativeLogged { & docker compose up -d --build }
         if ($LASTEXITCODE -ne 0) {
             throw "docker compose up failed (see $LogFile)"
         }
@@ -466,7 +488,7 @@ function Install-UvLocally {
     $env:UV_UNMANAGED_INSTALL  = $BinDir
     $env:INSTALLER_NO_MODIFY_PATH = '1'
     try {
-        Invoke-Expression (Invoke-WebRequest -UseBasicParsing 'https://astral.sh/uv/install.ps1').Content *>> $LogFile
+        Invoke-NativeLogged { Invoke-Expression (Invoke-WebRequest -UseBasicParsing 'https://astral.sh/uv/install.ps1').Content }
     } catch {
         Write-Err2 "Failed to download uv (the Python installer)."
         Write-Host ""
@@ -487,7 +509,7 @@ function Install-PythonViaUv {
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $OpenpaHome 'python'
     $env:UV_CACHE_DIR          = Join-Path $OpenpaHome 'uv-cache'
     Write-Info "Downloading isolated Python 3.13 (this may take a minute)"
-    & $UvExe python install 3.13 *>> $LogFile
+    Invoke-NativeLogged { & $UvExe python install 3.13 }
     if ($LASTEXITCODE -ne 0) {
         Write-Err2 "uv failed to install Python 3.13 - see $LogFile."
         exit 1
@@ -539,14 +561,14 @@ Write-Ok ("Test wheel: " + (Split-Path $OpenpaWheelUrl -Leaf))
 
 if (Test-Path $VenvDir) {
     Write-Info "Existing install detected at $VenvDir - upgrading in place."
-    & $VenvPip install --upgrade pip *>> $LogFile
-    & $VenvPip install --upgrade $OpenpaWheelUrl *>> $LogFile
+    Invoke-NativeLogged { & $VenvPip install --upgrade pip }
+    Invoke-NativeLogged { & $VenvPip install --upgrade $OpenpaWheelUrl }
 } else {
     Write-Info "Creating venv at $VenvDir"
-    & $Python -m venv $VenvDir *>> $LogFile
+    Invoke-NativeLogged { & $Python -m venv $VenvDir }
     Write-Info "Installing openpa from Test PyPI (this may take a few minutes)"
-    & $VenvPip install --upgrade pip *>> $LogFile
-    & $VenvPip install $OpenpaWheelUrl *>> $LogFile
+    Invoke-NativeLogged { & $VenvPip install --upgrade pip }
+    Invoke-NativeLogged { & $VenvPip install $OpenpaWheelUrl }
 }
 
 $InstalledVersion = ''
@@ -657,7 +679,7 @@ db_provider = "sqlite"
 # ── migrate ───────────────────────────────────────────────────────────────
 
 Write-Info "Migrating database to current schema"
-& $VenvOpenpa db upgrade *>> $LogFile
+Invoke-NativeLogged { & $VenvOpenpa db upgrade }
 $Revision = '?'
 try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
 Write-Ok "Database at revision $Revision"
