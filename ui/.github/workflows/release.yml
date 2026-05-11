@@ -1,0 +1,152 @@
+# Electron app release workflow.
+#
+# Trigger: push a tag matching ``v*`` (e.g., ``v0.1.1``). On every such
+# push, this workflow runs three matrix jobs (Windows, macOS, Linux),
+# each builds the binary for its platform via electron-builder, and
+# uploads it directly to a GitHub Release on this repo.
+#
+# Why electron-builder does the publish itself: it generates platform-
+# specific update manifests (latest.yml / latest-mac.yml / latest-linux.yml)
+# next to each binary. Those manifests are what the running app reads
+# via electron-updater to discover the new version. Manual upload would
+# get the binaries there but not the manifests, breaking auto-update.
+#
+# Required repo secrets:
+#   GITHUB_TOKEN     — auto-provided by GitHub Actions; nothing to set.
+#                      electron-builder uses it via GH_TOKEN to upload.
+#
+# Optional (for code signing — see notes at the bottom):
+#   APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+#                    — for macOS notarization.
+#   CSC_LINK + CSC_KEY_PASSWORD
+#                    — base64-encoded code signing cert + password,
+#                      used for both macOS and Windows code signing.
+# Missing secrets are handled by the "Configure code-signing env" step
+# below: each var is only exported when its secret is non-empty, so an
+# unset secret produces an unsigned build instead of a path-resolution
+# error from electron-builder.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.1)"
+        required: true
+        type: string
+
+jobs:
+  release:
+    strategy:
+      # ``fail-fast: false`` keeps a Linux build from being thrown away
+      # because (say) the macOS notarization job hit a transient hiccup.
+      # We want every successful platform's artifacts on the Release.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write   # needed for creating the GitHub Release
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out openpa-ui
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Workaround for npm bug #4828: optionalDependencies (specifically the
+      # platform-specific @rollup/rollup-* binaries) are not recorded in a
+      # package-lock.json generated on a single OS. The lockfile here was
+      # created on Windows, so Linux/macOS runners must install their binary
+      # explicitly. --no-save / --no-package-lock keep both files untouched.
+      - name: Install platform Rollup binary (workaround npm#4828)
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)  pkg="@rollup/rollup-linux-x64-gnu" ;;
+            macos-latest)   pkg="@rollup/rollup-darwin-arm64" ;;
+            windows-latest) exit 0 ;;  # already in lockfile
+          esac
+          npm install --no-save --no-package-lock "$pkg"
+
+      # Export signing env vars only when the corresponding secret is
+      # non-empty. GitHub passes "" for missing secrets, and electron-builder
+      # treats CSC_LINK="" as "resolve as relative path", which fails on the
+      # empty string. Gating per-job also lets us add per-platform certs later
+      # (e.g. macOS-only) without touching the Windows job.
+      - name: Configure code-signing env (only if secrets present)
+        shell: bash
+        env:
+          CSC_LINK_SECRET: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD_SECRET: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          [ -n "$CSC_LINK_SECRET" ]                    && echo "CSC_LINK=$CSC_LINK_SECRET"                                       >> "$GITHUB_ENV" || true
+          [ -n "$CSC_KEY_PASSWORD_SECRET" ]            && echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD_SECRET"                       >> "$GITHUB_ENV" || true
+          [ -n "$APPLE_ID_SECRET" ]                    && echo "APPLE_ID=$APPLE_ID_SECRET"                                       >> "$GITHUB_ENV" || true
+          [ -n "$APPLE_APP_SPECIFIC_PASSWORD_SECRET" ] && echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD_SECRET" >> "$GITHUB_ENV" || true
+          [ -n "$APPLE_TEAM_ID_SECRET" ]               && echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET"                             >> "$GITHUB_ENV" || true
+
+      # ``--publish always`` tells electron-builder to upload artifacts
+      # to whatever provider is configured in electron-builder.json5
+      # (GitHub for us). It also generates the latest*.yml update
+      # manifests in the same release, which is what the auto-updater
+      # in installed apps reads. Each matrix job uploads to the same
+      # *draft* release (``releaseType: draft`` in electron-builder.json5);
+      # the ``publish`` job below promotes it to published only after
+      # every matrix job succeeds.
+      - name: Build & publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build -- --publish always
+
+  # Promote the draft release to published, but only if every matrix job
+  # above succeeded (default ``needs:`` semantics). If any platform fails
+  # the matrix, this job is skipped and the draft stays hidden — users
+  # never see a half-finished release, and we don't have to clean up.
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Promote draft release to published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ steps.tag.outputs.name }}" --draft=false --repo "${{ github.repository }}"
