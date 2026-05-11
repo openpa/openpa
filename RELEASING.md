@@ -14,7 +14,11 @@ sole source. Every other version reference derives from it:
 - `ui/package.json` is regenerated from it by
   [`scripts/sync_ui_version.py`](scripts/sync_ui_version.py), which runs
   as the `predev`/`prebuild`/`preweb:dev`/`preweb:build` npm hook. You
-  never edit `ui/package.json`'s version manually.
+  never edit `ui/package.json`'s version manually. When you bump
+  `app/__version__.py`, run the sync script once and commit both files
+  together so the committed state is internally consistent (CI re-syncs
+  on every build either way, so this is hygiene, not a functional
+  requirement).
 
 ## Day-to-day: working on a feature
 
@@ -57,7 +61,8 @@ A release cycle covers ONE version. It starts when you decide to ship
    ```powershell
    git checkout main ; git pull
    # edit app/__version__.py:  __version__ = "0.1.8"
-   git add app/__version__.py
+   python scripts/sync_ui_version.py        # mirrors into ui/package.json
+   git add app/__version__.py ui/package.json
    git commit -m "Bump version to 0.1.8"
    git push
    ```
@@ -205,7 +210,8 @@ git push -u origin my-feature
 # Release cycle for X.Y.Z (replace 0.1.8 below)
 git checkout main ; git pull
 # bump app/__version__.py to "0.1.8"
-git add app/__version__.py
+python scripts/sync_ui_version.py
+git add app/__version__.py ui/package.json
 git commit -m "Bump version to 0.1.8"
 git push
 
@@ -219,7 +225,8 @@ git tag v0.1.8 ; git push origin v0.1.8
 
 # Hotfix (X.Y.Z.N)
 # bump app/__version__.py to "0.1.8.1"
-git add app/__version__.py
+python scripts/sync_ui_version.py
+git add app/__version__.py ui/package.json
 git commit -m "Hotfix: ..."
 git push
 git tag v0.1.8.1-test1 ; git push origin v0.1.8.1-test1
