@@ -90,7 +90,12 @@ function Invoke-NativeLogged {
     param([Parameter(Mandatory)][scriptblock]$Action)
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { & $Action } finally { $ErrorActionPreference = $prev }
+    try {
+        # Redirect through Out-File -Encoding utf8 so the log isn't written
+        # as PS 5.1's default UTF-16 LE (which makes every byte appear
+        # spaced out in any UTF-8 reader).
+        & $Action 2>&1 | Out-File -FilePath $script:LogFile -Encoding utf8 -Append
+    } finally { $ErrorActionPreference = $prev }
 }
 
 # ── unattended sanity check ──────────────────────────────────────────────
@@ -366,12 +371,12 @@ if ($Mode -eq 'docker') {
     Write-Info "Pulling images (this may take a few minutes the first time)"
     Push-Location $DockerDir
     try {
-        Invoke-NativeLogged { & docker compose pull --ignore-pull-failures *>> $LogFile }
+        Invoke-NativeLogged { & docker compose pull --ignore-pull-failures }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn2 "Some images couldn't be pulled; will build locally."
         }
         Write-Info "Starting bundle"
-        Invoke-NativeLogged { & docker compose up -d --build *>> $LogFile }
+        Invoke-NativeLogged { & docker compose up -d --build }
         if ($LASTEXITCODE -ne 0) {
             throw "docker compose up failed (see $LogFile)"
         }
@@ -483,7 +488,7 @@ function Install-UvLocally {
     $env:UV_UNMANAGED_INSTALL  = $BinDir
     $env:INSTALLER_NO_MODIFY_PATH = '1'
     try {
-        Invoke-NativeLogged { Invoke-Expression (Invoke-WebRequest -UseBasicParsing 'https://astral.sh/uv/install.ps1').Content *>> $LogFile }
+        Invoke-NativeLogged { Invoke-Expression (Invoke-WebRequest -UseBasicParsing 'https://astral.sh/uv/install.ps1').Content }
     } catch {
         Write-Err2 "Failed to download uv (the Python installer)."
         Write-Host ""
@@ -504,7 +509,7 @@ function Install-PythonViaUv {
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $OpenpaHome 'python'
     $env:UV_CACHE_DIR          = Join-Path $OpenpaHome 'uv-cache'
     Write-Info "Downloading isolated Python 3.13 (this may take a minute)"
-    Invoke-NativeLogged { & $UvExe python install 3.13 *>> $LogFile }
+    Invoke-NativeLogged { & $UvExe python install 3.13 }
     if ($LASTEXITCODE -ne 0) {
         Write-Err2 "uv failed to install Python 3.13 - see $LogFile."
         exit 1
@@ -556,14 +561,14 @@ Write-Ok ("Test wheel: " + (Split-Path $OpenpaWheelUrl -Leaf))
 
 if (Test-Path $VenvDir) {
     Write-Info "Existing install detected at $VenvDir - upgrading in place."
-    Invoke-NativeLogged { & $VenvPip install --upgrade pip *>> $LogFile }
-    Invoke-NativeLogged { & $VenvPip install --upgrade $OpenpaWheelUrl *>> $LogFile }
+    Invoke-NativeLogged { & $VenvPip install --upgrade pip }
+    Invoke-NativeLogged { & $VenvPip install --upgrade $OpenpaWheelUrl }
 } else {
     Write-Info "Creating venv at $VenvDir"
-    Invoke-NativeLogged { & $Python -m venv $VenvDir *>> $LogFile }
+    Invoke-NativeLogged { & $Python -m venv $VenvDir }
     Write-Info "Installing openpa from Test PyPI (this may take a few minutes)"
-    Invoke-NativeLogged { & $VenvPip install --upgrade pip *>> $LogFile }
-    Invoke-NativeLogged { & $VenvPip install $OpenpaWheelUrl *>> $LogFile }
+    Invoke-NativeLogged { & $VenvPip install --upgrade pip }
+    Invoke-NativeLogged { & $VenvPip install $OpenpaWheelUrl }
 }
 
 $InstalledVersion = ''
@@ -674,7 +679,7 @@ db_provider = "sqlite"
 # ── migrate ───────────────────────────────────────────────────────────────
 
 Write-Info "Migrating database to current schema"
-Invoke-NativeLogged { & $VenvOpenpa db upgrade *>> $LogFile }
+Invoke-NativeLogged { & $VenvOpenpa db upgrade }
 $Revision = '?'
 try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
 Write-Ok "Database at revision $Revision"
