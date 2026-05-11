@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     OpenPA TEST installer for Windows (PowerShell).
 

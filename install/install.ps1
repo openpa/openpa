@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     OpenPA installer for Windows (PowerShell).
 
