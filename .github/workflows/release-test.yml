@@ -63,10 +63,17 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Map ``vMAJOR.MINOR.PATCH-testN`` → ``MAJOR.MINOR.PATCH.devN`` and
-      # rewrite app/__version__.py so hatch picks it up. PEP 440 ``.devN``
+      # Map ``vMAJOR.MINOR.PATCH[.HOTFIX]-testN`` → ``MAJOR.MINOR.PATCH[.HOTFIX].devN``
+      # and rewrite app/__version__.py so hatch picks it up. PEP 440 ``.devN``
       # is the canonical pre-release suffix; pip needs ``--pre`` to install
       # it, which the test installers pass.
+      #
+      # Guards:
+      #   1. Tag must match the test-release pattern.
+      #   2. The tag's base version (e.g. 0.1.8) must equal app/__version__.py
+      #      as committed. Mismatch ⇒ refuse, so a stale source can never
+      #      ship pre-releases with a different version number than the
+      #      eventual prod tag will require.
       - name: Compute test version
         id: version
         env:
@@ -78,10 +85,10 @@ jobs:
           import sys
 
           tag = os.environ["TAG"]
-          m = re.match(r"^v(\d+\.\d+\.\d+)-test(\d+)$", tag)
+          m = re.match(r"^v(\d+\.\d+\.\d+(?:\.\d+)?)-test(\d+)$", tag)
           if not m:
               sys.exit(
-                  f"Tag {tag!r} does not match v<major>.<minor>.<patch>-test<N>; "
+                  f"Tag {tag!r} does not match v<major>.<minor>.<patch>[.<hotfix>]-test<N>; "
                   "refusing to publish."
               )
           base, dev = m.group(1), m.group(2)
@@ -89,6 +96,18 @@ jobs:
 
           path = "app/__version__.py"
           src = open(path).read()
+
+          src_m = re.search(r'^__version__\s*=\s*"([^"]+)"', src, re.M)
+          if not src_m:
+              sys.exit(f"Could not find __version__ in {path}")
+          src_version = src_m.group(1)
+          if src_version != base:
+              sys.exit(
+                  f"Tag {tag!r} implies version {base!r} but app/__version__.py "
+                  f"is {src_version!r}. Bump app/__version__.py to {base} on main "
+                  "and retag."
+              )
+
           new = re.sub(
               r'^__version__\s*=\s*"[^"]*"',
               f'__version__ = "{version}"',
