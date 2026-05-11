@@ -13,7 +13,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Lockfiles. We track ui/package-lock.json only — every other lockfile
+# (e.g. app/channels/sidecars/whatsapp/) is build-machine state, not
+# something we want creeping into PRs.
 package-lock.json
+!ui/package-lock.json
 yarn.lock
 
 # Editor directories and files
@@ -54,3 +58,15 @@ cli/openpa.exe
 # regenerated on every release so we don't track them in git.
 app/static/ui/*
 !app/static/ui/.gitkeep
+
+# UI source build outputs (ui/.gitignore also covers these, but root-level
+# entries help tools that don't traverse nested gitignores).
+ui/node_modules/
+ui/dist/
+ui/dist-electron/
+ui/dist-web/
+ui/dist-server/
+ui/release/
+ui/components.d.ts
+ui/*.tsbuildinfo
+ui/.cache/

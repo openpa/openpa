@@ -56,15 +56,18 @@
   //   2. ``electron-updater`` ignores drafts, so the live app keeps
   //      using the previous version until promotion.
   //
-  // The repo metadata MUST match the openpa-ui GitHub repo. If we
-  // ever rename or fork, update this in lockstep with any in-flight
-  // installs (electron-updater caches the feed URL per install).
+  // The repo metadata MUST match the GitHub repo that hosts releases.
+  // After the openpa-ui → openpa repo merger, releases live on openpa.
+  // electron-updater caches the feed URL per install, so a one-time
+  // bridging release on the OLD openpa-ui repo (containing this updated
+  // config) is required to retarget already-installed clients before any
+  // unified release ships from openpa.
   // ──────────────────────────────────────────────────────────────────────
   "publish": [
     {
       "provider": "github",
       "owner": "openpa",
-      "repo": "openpa-ui",
+      "repo": "openpa",
       "releaseType": "draft"
     }
   ]

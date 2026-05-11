@@ -114,6 +114,11 @@ exclude = [
     "dist/",
     "build/",
     ".pytest_cache/",
+    # UI source — wheel ships the built artifact at app/static/ui/ instead,
+    # so sdist consumers (rare path; PyPI installs use the wheel) don't
+    # need the Vue source.
+    "/ui/",
+    "/release/",
 ]
 
 [tool.uv]

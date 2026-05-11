@@ -105,11 +105,10 @@ jobs:
               fh.write(f"value={version}\n")
           PY
 
-      # Same SPA build step as prod. Default ref is main; override via the
-      # ``OPENPA_UI_REF`` repo variable if you need to pin to a UI tag.
+      # Same SPA build step as prod. After the openpa-ui merger, the UI
+      # source lives at ./ui/ in this repo, so scripts/build_ui.sh picks
+      # it up automatically — no OPENPA_UI_REF needed.
       - name: Build openpa-ui SPA
-        env:
-          OPENPA_UI_REF: ${{ vars.OPENPA_UI_REF || 'main' }}
         run: bash scripts/build_ui.sh
 
       - name: Install hatch

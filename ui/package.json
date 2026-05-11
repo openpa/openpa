@@ -1,9 +1,14 @@
 {
   "name": "openpa-client-ui",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.6",
   "type": "module",
   "scripts": {
+    "version:sync": "python ../scripts/sync_ui_version.py",
+    "predev": "npm run version:sync",
+    "prebuild": "npm run version:sync",
+    "preweb:dev": "npm run version:sync",
+    "preweb:build": "npm run version:sync",
     "dev": "vite",
     "build": "vue-tsc && vite build && electron-builder",
     "preview": "vite preview",
