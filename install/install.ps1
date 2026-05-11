@@ -465,7 +465,17 @@ function Install-UvLocally {
     $env:UV_UNMANAGED_INSTALL  = $BinDir
     $env:INSTALLER_NO_MODIFY_PATH = '1'
     try {
-        Invoke-NativeLogged { Invoke-Expression (Invoke-WebRequest -UseBasicParsing 'https://astral.sh/uv/install.ps1').Content }
+        # Run uv's official installer in a fresh powershell.exe so it gets a
+        # clean environment. Inline ``Invoke-Expression`` would force the
+        # upstream script through our ``Set-StrictMode -Version Latest``
+        # (which faults on its uninitialised ``$LASTEXITCODE`` read) and our
+        # ``$ErrorActionPreference='Stop'``. The child inherits our env
+        # vars (UV_INSTALL_DIR, UV_UNMANAGED_INSTALL, INSTALLER_NO_MODIFY_PATH)
+        # so the binary still lands in $BinDir.
+        Invoke-NativeLogged {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://astral.sh/uv/install.ps1' | iex"
+        }
+        if ($LASTEXITCODE -ne 0) { throw "uv installer exited with code $LASTEXITCODE" }
     } catch {
         Write-Err2 "Failed to download uv (the Python installer)."
         Write-Host ""
