@@ -50,6 +50,23 @@ def _bootstrap_path() -> Path:
     return Path(BaseConfig.OPENPA_WORKING_DIR) / "bootstrap.toml"
 
 
+def bootstrap_exists() -> bool:
+    """True iff a durable provider choice exists (file OR env override).
+
+    Distinguishes "user has committed to a backend" from "we'd silently
+    fall back to SQLite". ``read_bootstrap()`` is unsuitable for this check
+    because it returns ``sqlite`` for both cases.
+
+    The server uses this signal to decide whether to boot fully (initialize
+    storage, run migrations, persist built-in tools) or to enter the
+    deferred-storage mode in which the Setup Wizard's POST /api/config/setup
+    is the trigger that materialises storage.
+    """
+    if os.environ.get("OPENPA_DB_PROVIDER"):
+        return True
+    return _bootstrap_path().is_file()
+
+
 def read_bootstrap() -> dict[str, Any]:
     """Return the parsed bootstrap config, or sane defaults if the file is missing.
 

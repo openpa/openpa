@@ -34,7 +34,10 @@ env/
 
 # Documentation
 *.md
-README.md
+# README.md is referenced by pyproject.toml's ``readme`` field; hatchling
+# reads it during editable installs (--channel dev --mode docker), so
+# keep it in the build context even though we ignore other markdown.
+!README.md
 docs/
 
 # Tests

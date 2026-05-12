@@ -37,14 +37,29 @@ class ConversationStorage:
     def __init__(self, provider: DatabaseProvider | None = None):
         # ``provider`` is allowed to be None so the storage singleton getters
         # can stay agnostic about whether the global has been initialized
-        # yet. The async engine is grabbed eagerly here (it's used as a
-        # ``self.engine`` attribute by the rest of the class), which means
-        # the wizard's hot-swap path must rebuild this instance after
-        # changing providers — handled by ``invalidate_storage_singletons``.
+        # yet. Engine acquisition is deferred to first access — on SQLite,
+        # ``provider.async_engine()`` calls ``_ensure_parent_dir()`` which
+        # would create ``~/.openpa/storage/`` before the Setup Wizard has
+        # picked a backend. The wizard's hot-swap path still relies on
+        # ``invalidate_storage_singletons()`` to rebuild this instance.
         self.provider = provider or get_database_provider()
-        self.engine: AsyncEngine = self.provider.async_engine()
-        self.async_session_maker = async_sessionmaker(self.engine, expire_on_commit=False)
+        self._engine: AsyncEngine | None = None
+        self._session_maker: async_sessionmaker | None = None
         self._initialized = False
+
+    @property
+    def engine(self) -> AsyncEngine:
+        if self._engine is None:
+            self._engine = self.provider.async_engine()
+            self._session_maker = async_sessionmaker(self._engine, expire_on_commit=False)
+        return self._engine
+
+    @property
+    def async_session_maker(self) -> async_sessionmaker:
+        if self._session_maker is None:
+            # Trigger engine construction (also builds the session maker).
+            _ = self.engine
+        return self._session_maker  # type: ignore[return-value]
 
     async def initialize(self):
         """Bring the schema to the latest revision and run idempotent backfills.

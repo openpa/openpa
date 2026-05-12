@@ -62,6 +62,15 @@ contextBridge.exposeInMainWorld('openpa', {
     },
   },
 
+  // Backend lifecycle bridge. The renderer calls ``server.start()`` on
+  // the Continue-to-Setup-Wizard click; the main process spawns
+  // ``openpa serve`` and resolves once the health endpoint is reachable
+  // (or rejects with an error string).
+  server: {
+    start: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('openpa:server:start'),
+  },
+
   // Auto-updater bridge — fronts ``electron-updater`` running in the
   // main process. The renderer calls ``check``/``download``/``install``
   // explicitly; the user is always in control of when the new build

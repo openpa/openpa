@@ -40,6 +40,12 @@
 
 .PARAMETER NoModifyPath
     Don't modify the User-scope PATH; print the manual setx instead.
+
+.PARAMETER Dev
+    Install from the local checkout (developer mode). Requires running
+    this script from a clone of the repo; rejected when piped via iwr|iex.
+    Works with both -Mode native (pip install -e from the checkout) and
+    -Mode docker (compose override bind-mounts the checkout at /src).
 #>
 
 [CmdletBinding()]
@@ -52,11 +58,52 @@ param(
     [switch] $Reinstall,
     [switch] $AutoInstallPython,
     [switch] $NoAutoInstallPython,
-    [switch] $NoModifyPath
+    [switch] $ModifyPath,
+    [switch] $NoModifyPath,
+    [switch] $Dev
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# ── channel resolution (hidden) ──────────────────────────────────────────
+#
+# The install source is one of production / test / dev. End users never
+# set this; CI/maintainers set $env:OPENPA_INSTALL_CHANNEL='test' before
+# invoking the installer. -Dev is the visible alias that overrides any
+# env-var setting and forces channel=dev.
+#
+# Note: bash exposes a hidden --channel CLI flag, but PowerShell can't
+# truly hide a param() entry from Get-Help (DontShow only suppresses
+# IntelliSense, not the help system on PS 5.1). We therefore drop the PS
+# flag entirely and route through the env var, which keeps PS Get-Help
+# clean of internal-only knobs.
+if ($Dev) {
+    $Channel = 'dev'
+} elseif ($env:OPENPA_INSTALL_CHANNEL) {
+    $Channel = $env:OPENPA_INSTALL_CHANNEL
+} else {
+    $Channel = 'production'
+}
+if ($Channel -notin @('production','test','dev')) {
+    Write-Host "ERR Invalid OPENPA_INSTALL_CHANNEL: $Channel (must be production, test, or dev)" -ForegroundColor Red
+    exit 2
+}
+
+# RepoRoot is the repo containing this script. Required for dev mode (we
+# install from there and read templates from there). Empty when piped via
+# iwr|iex — the dev-mode check below uses that to reject pipe invocation.
+$RepoRoot = ''
+if ($PSCommandPath) {
+    $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+}
+if ($Channel -eq 'dev') {
+    if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot 'pyproject.toml'))) {
+        Write-Host "ERR -Dev requires running install.ps1 from a checkout (not via iwr|iex)." -ForegroundColor Red
+        Write-Host "    Usage: .\install\install.ps1 -Dev" -ForegroundColor Red
+        exit 2
+    }
+}
 # Windows PowerShell 5.1 defaults [Console]::OutputEncoding to the OEM
 # code page (cp437 on US-English Windows), which mojibakes multi-byte
 # UTF-8 like the em-dashes and box-drawing chars in our section headers
@@ -127,11 +174,47 @@ $env:PIP_CACHE_DIR = Join-Path $OpenpaHome 'pip-cache'
 
 if (-not (Test-Path $OpenpaHome)) { New-Item -ItemType Directory -Path $OpenpaHome | Out-Null }
 
-# Templates fetched at install time. OPENPA_TEMPLATE_BASE override is for testing.
-$TemplateBase = if ($env:OPENPA_TEMPLATE_BASE) {
-    $env:OPENPA_TEMPLATE_BASE
+# Default ModifyPath: only modify User PATH for the canonical install dir
+# so a staging/test install at OPENPA_WORKING_DIR=~\.openpa-test doesn't
+# clobber the prod PATH entry. -ModifyPath / -NoModifyPath override.
+$DefaultOpenpaHome = Join-Path $env:USERPROFILE '.openpa'
+if (-not $ModifyPath -and -not $NoModifyPath) {
+    if ($OpenpaHome -ieq $DefaultOpenpaHome) {
+        $ModifyPath = $true
+    } else {
+        $NoModifyPath = $true
+    }
+}
+
+# Templates fetched at install time. Production/test fetch from GitHub;
+# dev reads from the checkout's install\templates\ directly. The
+# $TemplateMode flag tells Get-TemplateContent which branch to use.
+if ($Channel -eq 'dev') {
+    $TemplateBase = Join-Path $RepoRoot 'install\templates'
+    $TemplateMode = 'local'
 } else {
-    'https://raw.githubusercontent.com/openpa/openpa/main/install/templates'
+    $TemplateBase = if ($env:OPENPA_TEMPLATE_BASE) {
+        $env:OPENPA_TEMPLATE_BASE
+    } else {
+        'https://raw.githubusercontent.com/openpa/openpa/main/install/templates'
+    }
+    $TemplateMode = 'remote'
+}
+
+# Centralized template loader. Returns the raw text of a template; the
+# caller writes it to disk (after rendering) or to stdout. Local mode
+# reads from the checkout; remote mode does an HTTP GET.
+function Get-TemplateContent {
+    param([Parameter(Mandatory)][string] $Name)
+    if ($script:TemplateMode -eq 'local') {
+        # Templates are authored as UTF-8 (em-dashes, box-drawing chars).
+        # Windows PowerShell 5.1's ``Get-Content -Raw`` defaults to the
+        # system ANSI codepage (Windows-1252 on US-English Windows), which
+        # mojibakes multi-byte UTF-8. Force UTF8 so the rendered output
+        # matches the template byte-for-byte.
+        return Get-Content -Raw -Encoding UTF8 -Path (Join-Path $script:TemplateBase $Name)
+    }
+    return (Invoke-WebRequest -UseBasicParsing -Uri "$script:TemplateBase/$Name").Content
 }
 
 # ── banner ────────────────────────────────────────────────────────────────
@@ -140,6 +223,17 @@ Write-Host ""
 Write-Host "OpenPA installer" -ForegroundColor White
 Write-Host "Logs: $LogFile" -ForegroundColor DarkGray
 Write-Host ""
+
+# Channel stamp: visible ONLY when non-production. End users never see it;
+# CI / maintainers / devs do.
+if ($Channel -ne 'production') {
+    if ($Channel -eq 'dev') {
+        Write-Host "==> channel: dev (source: $RepoRoot)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "==> channel: $Channel" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+}
 
 # ── detection ─────────────────────────────────────────────────────────────
 
@@ -322,11 +416,10 @@ if ($Mode -eq 'docker') {
         }
 
         Write-Info "Fetching docker-compose template"
-        Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/docker-compose.yml.tmpl" -OutFile $ComposeFile
+        Get-TemplateContent 'docker-compose.yml.tmpl' | Set-Content -Path $ComposeFile -Encoding utf8
 
         Write-Info "Writing $EnvDocker (secrets, do not commit)"
-        $tmpl = Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/docker.env.tmpl"
-        $rendered = $tmpl.Content `
+        $rendered = (Get-TemplateContent 'docker.env.tmpl') `
             -replace '__OPENPA_VERSION__', $OpenpaVer `
             -replace '__OPENPA_UI_REF__',  $UiRef `
             -replace '__APP_URL__',        $DockerAppUrl `
@@ -335,6 +428,30 @@ if ($Mode -eq 'docker') {
             -replace '__PG_PASSWORD__',    $PgPwd `
             -replace '__VNC_PASSWORD__',   $VncPwd
         $rendered | Set-Content -Path $EnvDocker -Encoding utf8
+
+        # Test channel: forward Test PyPI indices into the Dockerfile build
+        # via the compose .env. Prod leaves both unset (Dockerfile treats
+        # empty as default PyPI). Dev uses ``-e /src`` via the override
+        # file below, so pip index overrides don't apply.
+        if ($Channel -eq 'test') {
+            Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/' -Encoding utf8
+            Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/' -Encoding utf8
+        }
+
+        # Dev channel: emit a docker-compose.override.yml that points the
+        # build context at the local checkout, switches the pip install
+        # to ``-e /src``, and bind-mounts the checkout for runtime
+        # imports. Compose auto-merges this when running from $DockerDir.
+        # Backslashes are converted to forward slashes — Docker Desktop
+        # accepts either, and forward slashes keep the YAML readable.
+        if ($Channel -eq 'dev') {
+            $OverrideFile = Join-Path $DockerDir 'docker-compose.override.yml'
+            $RepoRootCompose = $RepoRoot -replace '\\', '/'
+            Write-Info "Writing $OverrideFile (bind-mounts $RepoRoot at /src)"
+            $overrideRendered = (Get-TemplateContent 'docker-compose.override.yml.tmpl') `
+                -replace '__REPO_ROOT__', $RepoRootCompose
+            $overrideRendered | Set-Content -Path $OverrideFile -Encoding utf8
+        }
 
         Write-Ok "Wrote $ComposeFile + .env"
     }
@@ -372,13 +489,17 @@ if ($Mode -eq 'docker') {
         }
     }
 
-    Write-Step "Setup wizard"
-
+    # Suppress the human-handoff block when the Electron app is driving —
+    # it navigates to the in-window wizard via vue-router and a "Wizard
+    # URL: ..." instruction would mislead the user.
     $WizardUrl = "http://${HealthHost}:1515/#/setup"
-    $NoVncUrl  = "http://${HealthHost}:6080/vnc.html"
-    $StoredVnc = (Get-Content $EnvDocker | Where-Object { $_ -like 'VNC_PASSWORD=*' } | Select-Object -First 1) -replace '^VNC_PASSWORD=', ''
+    if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
+        Write-Step "Setup wizard"
 
-    Write-Host @"
+        $NoVncUrl  = "http://${HealthHost}:6080/vnc.html"
+        $StoredVnc = (Get-Content $EnvDocker | Where-Object { $_ -like 'VNC_PASSWORD=*' } | Select-Object -First 1) -replace '^VNC_PASSWORD=', ''
+
+        Write-Host @"
 The setup wizard is the next step. It collects your LLM API keys,
 profile name, and tool preferences, then activates the server.
 
@@ -394,11 +515,16 @@ profile name, and tool preferences, then activates the server.
 
 "@
 
-    if (-not $NoLaunch -and -not $Unattended) {
-        Start-Process $WizardUrl
+        if (-not $NoLaunch -and -not $Unattended) {
+            Start-Process $WizardUrl
+        }
     }
 
-    Write-Ok "Done. Welcome to OpenPA."
+    if ($Channel -eq 'test') {
+        Write-Ok "Done. Welcome to OpenPA (test build)."
+    } else {
+        Write-Ok "Done. Welcome to OpenPA."
+    }
     exit 0
 }
 
@@ -465,7 +591,17 @@ function Install-UvLocally {
     $env:UV_UNMANAGED_INSTALL  = $BinDir
     $env:INSTALLER_NO_MODIFY_PATH = '1'
     try {
-        Invoke-NativeLogged { Invoke-Expression (Invoke-WebRequest -UseBasicParsing 'https://astral.sh/uv/install.ps1').Content }
+        # Run uv's official installer in a fresh powershell.exe so it gets a
+        # clean environment. Inline ``Invoke-Expression`` would force the
+        # upstream script through our ``Set-StrictMode -Version Latest``
+        # (which faults on its uninitialised ``$LASTEXITCODE`` read) and our
+        # ``$ErrorActionPreference='Stop'``. The child inherits our env
+        # vars (UV_INSTALL_DIR, UV_UNMANAGED_INSTALL, INSTALLER_NO_MODIFY_PATH)
+        # so the binary still lands in $BinDir.
+        Invoke-NativeLogged {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://astral.sh/uv/install.ps1' | iex"
+        }
+        if ($LASTEXITCODE -ne 0) { throw "uv installer exited with code $LASTEXITCODE" }
     } catch {
         Write-Err2 "Failed to download uv (the Python installer)."
         Write-Host ""
@@ -503,7 +639,10 @@ function Install-PythonViaUv {
     Write-Ok "Python: $(& $Python --version) at $Python (isolated)"
 }
 
-if (-not $Python) {
+# Dev channel reuses the developer's local .venv (managed by uv) for the
+# install, so we don't need a separate Python here. Skip the prompt and
+# the isolated-Python bootstrap entirely.
+if (-not $Python -and $Channel -ne 'dev') {
     Confirm-AutoInstallPython
     Install-UvLocally
     Install-PythonViaUv
@@ -513,49 +652,110 @@ if (-not $Python) {
 
 Write-Step "Install"
 
-if ($Reinstall -and (Test-Path $VenvDir)) {
-    Write-Info "Removing existing venv (-Reinstall): $VenvDir"
-    Remove-Item -Recurse -Force $VenvDir
-}
-
-$VenvPip = Join-Path $VenvDir 'Scripts\pip.exe'
-$VenvOpenpa = Join-Path $VenvDir 'Scripts\openpa.exe'
-
-if (Test-Path $VenvDir) {
-    Write-Info "Existing install detected at $VenvDir — upgrading in place."
-    Invoke-NativeLogged { & $VenvPip install --upgrade pip }
-    Invoke-NativeLogged { & $VenvPip install --upgrade openpa }
+if ($Channel -eq 'dev') {
+    # Dev channel: reuse the developer's local .venv (managed by
+    # ``uv sync`` from <repo>\pyproject.toml) instead of building a
+    # parallel venv at $OpenpaHome\venv. The dev already has openpa +
+    # every transitive dep installed in editable mode; reinstalling
+    # them into a separate venv takes minutes for no benefit.
+    if ($Reinstall) {
+        Write-Warn2 "-Reinstall has no effect in dev mode (the dev .venv is shared; refusing to wipe)."
+    }
+    $UiBundle = Join-Path $RepoRoot 'app\static\ui'
+    if (-not (Test-Path $UiBundle)) {
+        Write-Warn2 "Dev: $UiBundle is empty."
+        Write-Warn2 "Run scripts\build_ui.sh once so the SPA listener can start."
+    }
+    $VenvDir    = Join-Path $RepoRoot '.venv'
+    $VenvPip    = Join-Path $VenvDir 'Scripts\pip.exe'
+    $VenvOpenpa = Join-Path $VenvDir 'Scripts\openpa.exe'
+    if (-not (Test-Path $VenvOpenpa)) {
+        Write-Err2 "Dev mode expects $VenvOpenpa to exist."
+        Write-Err2 "Run 'uv sync' from $RepoRoot first, then re-run this installer."
+        exit 1
+    }
+    Write-Info "Reusing dev .venv at $VenvDir (no pip install)"
+    $InstalledVersion = ''
+    try { $InstalledVersion = (& $VenvOpenpa version 2>$null).Split(' ')[-1] } catch {}
+    if (-not $InstalledVersion) { $InstalledVersion = '?' }
+    Write-Ok "Using openpa $InstalledVersion from dev .venv"
 } else {
-    Write-Info "Creating venv at $VenvDir"
-    Invoke-NativeLogged { & $Python -m venv $VenvDir }
-    Write-Info "Installing openpa from PyPI (this may take a few minutes)"
-    Invoke-NativeLogged { & $VenvPip install --upgrade pip }
-    Invoke-NativeLogged { & $VenvPip install openpa }
-}
+    if ($Reinstall -and (Test-Path $VenvDir)) {
+        Write-Info "Removing existing venv (-Reinstall): $VenvDir"
+        Remove-Item -Recurse -Force $VenvDir
+    }
 
-$InstalledVersion = ''
-try { $InstalledVersion = (& $VenvOpenpa version 2>$null).Split(' ')[-1] } catch {}
-if (-not $InstalledVersion) { $InstalledVersion = '?' }
-Write-Ok "Installed openpa $InstalledVersion"
+    $VenvPip = Join-Path $VenvDir 'Scripts\pip.exe'
+    $VenvOpenpa = Join-Path $VenvDir 'Scripts\openpa.exe'
+
+    # Resolve the spec passed to ``pip install``. Test pins a direct
+    # wheel URL (Test PyPI's simple index is polluted, see the lengthy
+    # rationale in the bash installer); production uses the bare
+    # package name.
+    $InstallSpec = $null
+    $InstallSourceLabel = ''
+    switch ($Channel) {
+        'production' {
+            $InstallSpec = 'openpa'
+            $InstallSourceLabel = 'PyPI'
+        }
+        'test' {
+            Write-Info "Locating latest openpa test wheel"
+            # PS 5.1 has no built-in HTML parser; regex the simple-index page.
+            $indexBody = (Invoke-WebRequest -UseBasicParsing -Uri 'https://test.pypi.org/simple/openpa/').Content
+            $wheelUrls = [regex]::Matches($indexBody, 'https://[^"]*openpa-[^"]*-py3-none-any\.whl') |
+                ForEach-Object { $_.Value } |
+                Select-Object -Unique |
+                Sort-Object -Property @{ Expression = { Split-Path $_ -Leaf } }
+            $InstallSpec = $wheelUrls | Select-Object -Last 1
+            if (-not $InstallSpec) {
+                Write-Err2 "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                exit 1
+            }
+            Write-Ok ("Test wheel: " + (Split-Path $InstallSpec -Leaf))
+            $InstallSourceLabel = 'Test PyPI'
+        }
+    }
+
+    if (Test-Path $VenvDir) {
+        Write-Info "Existing install detected at $VenvDir — upgrading in place."
+        Invoke-NativeLogged { & $VenvPip install --upgrade pip }
+        Invoke-NativeLogged { & $VenvPip install --upgrade $InstallSpec }
+    } else {
+        Write-Info "Creating venv at $VenvDir"
+        Invoke-NativeLogged { & $Python -m venv $VenvDir }
+        Write-Info "Installing openpa from $InstallSourceLabel (this may take a few minutes)"
+        Invoke-NativeLogged { & $VenvPip install --upgrade pip }
+        Invoke-NativeLogged { & $VenvPip install $InstallSpec }
+    }
+
+    $InstalledVersion = ''
+    try { $InstalledVersion = (& $VenvOpenpa version 2>$null).Split(' ')[-1] } catch {}
+    if (-not $InstalledVersion) { $InstalledVersion = '?' }
+    Write-Ok "Installed openpa $InstalledVersion"
+}
 
 # ── shim & PATH ───────────────────────────────────────────────────────────
 
 # Drop a small wrapper into $BinDir so a single, stable path on PATH
-# points at the venv's openpa.exe even after re-installs.
+# points at the venv's openpa.exe even after re-installs. In dev mode
+# the target lives in $RepoRoot\.venv, not $OpenpaHome\venv, so we emit
+# the absolute path of $VenvOpenpa rather than a relative ``..\venv``
+# walk that would dangle.
 if (-not (Test-Path $BinDir)) {
     New-Item -ItemType Directory -Path $BinDir | Out-Null
 }
 $OpenpaCmd = Join-Path $BinDir 'openpa.cmd'
 @"
 @echo off
-"%~dp0..\venv\Scripts\openpa.exe" %*
+"$VenvOpenpa" %*
 "@ | Set-Content -Path $OpenpaCmd -Encoding ascii
 
 $OpenpaPs1 = Join-Path $BinDir 'openpa.ps1'
-@'
-& "$PSScriptRoot\..\venv\Scripts\openpa.exe" $args
-exit $LASTEXITCODE
-'@ | Set-Content -Path $OpenpaPs1 -Encoding utf8
+@"
+& '$VenvOpenpa' `$args
+exit `$LASTEXITCODE
+"@ | Set-Content -Path $OpenpaPs1 -Encoding utf8
 
 Write-Ok "Wrote shim $OpenpaCmd (-> venv\Scripts\openpa.exe)"
 
@@ -598,16 +798,16 @@ if (-not (Test-Path $EnvFile)) {
     Write-Info "Generating $EnvFile"
     switch ($Deployment) {
         'local' {
-            Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/local.env" -OutFile $EnvFile
+            Get-TemplateContent 'local.env' | Set-Content -Path $EnvFile -Encoding utf8
         }
         'container' {
-            Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/container.env" -OutFile $EnvFile
+            Get-TemplateContent 'container.env' | Set-Content -Path $EnvFile -Encoding utf8
         }
         'server' {
-            $tmpl = Invoke-WebRequest -UseBasicParsing -Uri "$TemplateBase/server.env.tmpl"
             # __APP_HOST__ is the only placeholder; the user-provided host
             # gets substituted as-is (validated above).
-            ($tmpl.Content -replace '__APP_HOST__', $AppHost) | Set-Content -Path $EnvFile -Encoding utf8
+            ((Get-TemplateContent 'server.env.tmpl') -replace '__APP_HOST__', $AppHost) |
+                Set-Content -Path $EnvFile -Encoding utf8
         }
     }
     Write-Ok "Wrote $EnvFile"
@@ -615,88 +815,146 @@ if (-not (Test-Path $EnvFile)) {
     Write-Info ".env already exists — keeping it. Edit $EnvFile if you need to."
 }
 
-# Stamp the upgrade channel into .env so the running app reads
-# "production" via the .env loader. Idempotent: skipped if a value is
-# already present. Switching channels means reinstalling via
-# install-test.ps1, which overwrites the line.
-if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_UPGRADE_CHANNEL=' -Quiet)) {
-    Add-Content -Path $EnvFile -Value "`nOPENPA_UPGRADE_CHANNEL=production" -Encoding utf8
+# Stamp the channel-specific keys into .env so the running app's upgrader
+# reads them via the .env loader. Each write is idempotent (skipped if
+# the key is already present) so re-runs don't accumulate duplicates.
+switch ($Channel) {
+    'production' {
+        if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_UPGRADE_CHANNEL=' -Quiet)) {
+            Add-Content -Path $EnvFile -Value "`nOPENPA_UPGRADE_CHANNEL=production" -Encoding utf8
+        }
+    }
+    'test' {
+        if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_UPGRADE_CHANNEL=' -Quiet)) {
+            Add-Content -Path $EnvFile -Value "`nOPENPA_UPGRADE_CHANNEL=test" -Encoding utf8
+        }
+        if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_PIP_INDEX_URL=' -Quiet)) {
+            Add-Content -Path $EnvFile -Value 'OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/' -Encoding utf8
+        }
+        if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_PIP_EXTRA_INDEX_URL=' -Quiet)) {
+            Add-Content -Path $EnvFile -Value 'OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/' -Encoding utf8
+        }
+    }
+    'dev' {
+        # Deliberately leave OPENPA_UPGRADE_CHANNEL unset. get_channel()
+        # defaults to "production" when missing (app/upgrade/channel.py),
+        # which is harmless: ``openpa upgrade`` from a dev editable install
+        # is a footgun anyway and the dev path is to ``git pull``.
+    }
 }
 
 # ── bootstrap.toml (DB selection) ─────────────────────────────────────────
 
-if (-not (Test-Path $BootstrapFile)) {
-    Write-Info "Generating $BootstrapFile (SQLite, the recommended default)"
-    @"
+# Skip the default-SQLite bootstrap.toml when the Electron app is driving
+# — the Setup Wizard will write the file once the user picks a backend,
+# and the backend boots in deferred-storage mode until then so no DB is
+# materialised under ~/.openpa/storage before the user has chosen.
+# Native installs (curl | sh, no Electron) get the SQLite default here,
+# matching the legacy behavior; the wizard can still flip them to
+# Postgres on first setup.
+if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
+    if (-not (Test-Path $BootstrapFile)) {
+        Write-Info "Generating $BootstrapFile (SQLite, the recommended default)"
+        @"
 # Database selection. SQLite is the recommended default for native
 # installs; switch to "postgres" via the setup wizard if you want a
 # multi-process or networked DB.
 db_provider = "sqlite"
 "@ | Set-Content -Path $BootstrapFile -Encoding utf8
-    Write-Ok "Wrote $BootstrapFile"
+        Write-Ok "Wrote $BootstrapFile"
+    }
 }
 
 # ── migrate ───────────────────────────────────────────────────────────────
 
-Write-Info "Migrating database to current schema"
-Invoke-NativeLogged { & $VenvOpenpa db upgrade }
-$Revision = '?'
-try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
-Write-Ok "Database at revision $Revision"
+# Skip Alembic's ``upgrade head`` (and therefore creating the SQLite DB
+# file) when the Electron app is driving — the app starts the backend
+# only after the user clicks "Continue to Setup Wizard", and the backend
+# is what eventually creates the DB. Keeping this here means a stray
+# ~/.openpa/storage/openpa.db never shows up between the installer
+# finishing and the user choosing to continue.
+if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
+    Write-Info "Migrating database to current schema"
+    Invoke-NativeLogged { & $VenvOpenpa db upgrade }
+    $Revision = '?'
+    try { $Revision = (& $VenvOpenpa db current 2>$null) } catch {}
+    Write-Ok "Database at revision $Revision"
+}
 
 # ── start the server ──────────────────────────────────────────────────────
 
-Write-Step "Starting OpenPA"
+# Skip starting ``openpa serve`` when the Electron app is driving —
+# the app spawns the backend itself once the user clicks Continue, and
+# that's also when the SQLite DB is created.
+if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
+    Write-Step "Starting OpenPA"
 
-# Load .env into the process so HOST/PORT propagate to the child without
-# us needing a TOML parser. Keys that look like KEY=VALUE are honored;
-# anything else is ignored.
-$ParsedEnv = @{}
-Get-Content $EnvFile | ForEach-Object {
-    $line = $_.Trim()
-    if ($line -and -not $line.StartsWith('#') -and $line.Contains('=')) {
-        $idx = $line.IndexOf('=')
-        $k = $line.Substring(0, $idx).Trim()
-        $v = $line.Substring($idx + 1).Trim()
-        $ParsedEnv[$k] = $v
-        Set-Item -Path "Env:$k" -Value $v
+    # Load .env into the process so HOST/PORT propagate to the child
+    # without us needing a TOML parser. Keys that look like KEY=VALUE
+    # are honored; anything else is ignored.
+    $ParsedEnv = @{}
+    Get-Content $EnvFile | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith('#') -and $line.Contains('=')) {
+            $idx = $line.IndexOf('=')
+            $k = $line.Substring(0, $idx).Trim()
+            $v = $line.Substring($idx + 1).Trim()
+            $ParsedEnv[$k] = $v
+            Set-Item -Path "Env:$k" -Value $v
+        }
     }
-}
 
-$ServerHost = if ($ParsedEnv.ContainsKey('HOST')) { $ParsedEnv['HOST'] } else { '127.0.0.1' }
-$ServerPort = if ($ParsedEnv.ContainsKey('PORT')) { $ParsedEnv['PORT'] } else { '1112' }
+    $ServerHost = if ($ParsedEnv.ContainsKey('HOST')) { $ParsedEnv['HOST'] } else { '127.0.0.1' }
+    $ServerPort = if ($ParsedEnv.ContainsKey('PORT')) { $ParsedEnv['PORT'] } else { '1112' }
 
-$running = $false
-if (Test-Path $PidFile) {
-    $existingPid = Get-Content $PidFile | Select-Object -First 1
-    if ($existingPid -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)) {
-        Write-Info "OpenPA is already running (pid $existingPid)."
-        $running = $true
+    $running = $false
+    if (Test-Path $PidFile) {
+        $existingPid = Get-Content $PidFile | Select-Object -First 1
+        if ($existingPid -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)) {
+            Write-Info "OpenPA is already running (pid $existingPid)."
+            $running = $true
+        }
     }
-}
 
-if (-not $running) {
-    $proc = Start-Process -FilePath $VenvOpenpa -ArgumentList 'serve' `
-        -RedirectStandardOutput $ServerLogFile -RedirectStandardError $ServerLogFile `
-        -WindowStyle Hidden -PassThru
-    $proc.Id | Set-Content -Path $PidFile -Encoding ascii
-    Write-Ok "OpenPA started (pid $($proc.Id), logs: $ServerLogFile)"
-}
+    # Detect a server that's already bound to the port without going
+    # through this installer (typical dev case: ``uv run openpa serve``
+    # in a separate terminal). Starting a second openpa would just
+    # collide on the bind, so treat it as already-running and skip the
+    # spawn.
+    if (-not $running) {
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "http://${ServerHost}:${ServerPort}/health" -TimeoutSec 2 | Out-Null
+            Write-Info "OpenPA is already responding at http://${ServerHost}:${ServerPort} — skipping server start."
+            $running = $true
+        } catch { }
+    }
 
-# Wait briefly for the HTTP listener so the wizard URL doesn't 404.
-$healthUrl = "http://${ServerHost}:${ServerPort}/health"
-for ($i = 0; $i -lt 10; $i++) {
-    try {
-        Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2 | Out-Null
-        break
-    } catch {
-        Start-Sleep -Seconds 1
+    if (-not $running) {
+        # Start-Process refuses identical stdout / stderr paths on PS
+        # 5.1, so write stderr to a sibling file. They're both rotated
+        # together via ``rm ~/.openpa/server*.log`` if the user wants a
+        # clean slate.
+        $ServerErrFile = Join-Path $OpenpaHome 'server.err.log'
+        $proc = Start-Process -FilePath $VenvOpenpa -ArgumentList 'serve' `
+            -RedirectStandardOutput $ServerLogFile -RedirectStandardError $ServerErrFile `
+            -WindowStyle Hidden -PassThru
+        $proc.Id | Set-Content -Path $PidFile -Encoding ascii
+        Write-Ok "OpenPA started (pid $($proc.Id), logs: $ServerLogFile)"
+    }
+
+    # Wait briefly for the HTTP listener so the wizard URL doesn't 404.
+    $healthUrl = "http://${ServerHost}:${ServerPort}/health"
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2 | Out-Null
+            break
+        } catch {
+            Start-Sleep -Seconds 1
+        }
     }
 }
 
 # ── wizard handoff ────────────────────────────────────────────────────────
-
-Write-Step "Setup wizard"
 
 # 'container' binds to 0.0.0.0 inside the container, but the user
 # browses from the docker host (where the published port surfaces as
@@ -707,7 +965,13 @@ if ($Deployment -eq 'server') {
     $WizardUrl = 'http://localhost:1515/#/setup'
 }
 
-Write-Host @"
+# Suppress the human-handoff block when the Electron app is driving —
+# it navigates to the in-window wizard via vue-router and a "Wizard
+# URL: ..." instruction would mislead the user.
+if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
+    Write-Step "Setup wizard"
+
+    Write-Host @"
 The setup wizard is the next step. It collects your LLM API keys,
 profile name, and tool preferences, then activates the server.
 
@@ -721,8 +985,13 @@ profile name, and tool preferences, then activates the server.
 
 "@
 
-if (-not $NoLaunch -and -not $Unattended) {
-    Start-Process $WizardUrl
+    if (-not $NoLaunch -and -not $Unattended) {
+        Start-Process $WizardUrl
+    }
 }
 
-Write-Ok "Done. Welcome to OpenPA."
+switch ($Channel) {
+    'test' { Write-Ok "Done. Welcome to OpenPA (test build)." }
+    'dev'  { Write-Ok "Done. Welcome to OpenPA (dev install from $RepoRoot)." }
+    default { Write-Ok "Done. Welcome to OpenPA." }
+}

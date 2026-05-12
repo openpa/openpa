@@ -2,7 +2,6 @@ from starlette.routing import Route
 
 from app.api.agents import get_agent_routes
 from app.api.channels import get_channel_routes
-from app.api.config import get_config_routes
 from app.api.conversations import get_conversation_routes
 from app.api.events import get_event_routes
 from app.api.file_watchers import get_file_watcher_routes
@@ -16,9 +15,7 @@ from app.api.settings_stream import get_settings_stream_routes
 from app.api.system_vars import get_system_vars_routes
 from app.api.tokens import get_token_routes
 from app.api.tools import get_tool_routes
-from app.api.upgrade import get_upgrade_routes
 from app.api.user_config import get_user_config_routes
-from app.api.version import get_version_routes
 
 
 def get_api_routes(
@@ -26,22 +23,25 @@ def get_api_routes(
     registry,
     pending_return_urls,
     mcp_llm_factory=None,
-    conversation_storage=None,
-    config_storage=None,
-    on_first_setup=None,
+    conversation_storage,
+    config_storage,
     connect_persisted_tool=None,
     drop_profile_embeddings=None,
     agent_executor=None,
 ) -> list[Route]:
-    """Collect all API routes.
+    """Collect the post-storage API routes.
+
+    Returned routes assume storage is initialized and the agent has been
+    built. Pre-storage routes (``/version``, ``/health``, ``/api/upgrade``,
+    and the wizard's ``/api/config/*`` endpoints) are registered separately
+    in :func:`app.server.main` so the Setup Wizard can run before any DB
+    file exists.
 
     ``connect_persisted_tool`` is an async callable ``(tool_id) -> (bool, err)``
     used by enable-toggle endpoints to lazily connect a stub MCP/A2A tool
     when a profile turns it on.
     """
     routes = []
-    routes.extend(get_version_routes())
-    routes.extend(get_upgrade_routes())
     routes.extend(get_agent_routes(
         registry=registry,
         pending_return_urls=pending_return_urls,
@@ -60,18 +60,12 @@ def get_api_routes(
     routes.extend(get_token_routes())
     routes.extend(get_system_vars_routes())
     routes.extend(get_file_routes())
-    if conversation_storage:
-        routes.extend(get_conversation_routes(
-            conversation_storage, agent_executor=agent_executor,
-        ))
-        routes.extend(get_channel_routes(conversation_storage))
-    if config_storage:
-        routes.extend(get_config_routes(
-            config_storage, conversation_storage,
-            on_first_setup=on_first_setup, registry=registry,
-        ))
-        routes.extend(get_llm_routes(config_storage))
-        routes.extend(get_user_config_routes(config_storage))
+    routes.extend(get_conversation_routes(
+        conversation_storage, agent_executor=agent_executor,
+    ))
+    routes.extend(get_channel_routes(conversation_storage))
+    routes.extend(get_llm_routes(config_storage))
+    routes.extend(get_user_config_routes(config_storage))
     routes.extend(get_tool_routes(
         registry, config_storage=config_storage,
         connect_persisted_tool=connect_persisted_tool,

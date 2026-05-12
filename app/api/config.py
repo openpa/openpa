@@ -14,9 +14,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from app.api._auth import require_admin
-from app.config.bootstrap import write_bootstrap
+from app.config.bootstrap import bootstrap_exists, write_bootstrap
 from app.config.settings import BaseConfig, set_dynamic_config_storage
 from app.config.setup_profiles import get_active_setup_profile_id, list_setup_profiles
+from app.runtime import BootedState, get_state
 from app.storage import (
     get_conversation_storage,
     get_dynamic_config_storage,
@@ -34,23 +35,6 @@ from app.utils.persona import ensure_persona_file
 # ``server_config`` table.
 _BOOTSTRAP_ONLY_KEYS = {"db_provider", "postgres"}
 
-
-def _purge_sqlite_bootstrap_files() -> None:
-    """Delete the boot-time SQLite database (and its WAL/SHM/journal siblings).
-
-    Called from the wizard handler after a successful switch to a non-SQLite
-    backend so a Postgres install ends up with no SQLite footprint at all.
-    Idempotent: missing files are silently skipped.
-    """
-    main = Path(BaseConfig.SQLITE_DB_PATH)
-    siblings = (main, Path(str(main) + "-wal"), Path(str(main) + "-shm"), Path(str(main) + "-journal"))
-    for path in siblings:
-        try:
-            if path.exists():
-                path.unlink()
-                logger.info(f"Removed boot-time SQLite leftover: {path}")
-        except OSError as exc:
-            logger.warning(f"Could not remove {path}: {exc}")
 
 # Profile name validation: lowercase, numbers, underscore, hyphen only
 PROFILE_NAME_PATTERN = re.compile(r'^[a-z0-9_-]+$')
@@ -84,28 +68,28 @@ def _generate_token(jwt_secret: str, profile: str, hours: int | None = None) -> 
     return token, expires_at
 
 
-def get_config_routes(
-    config_storage: DynamicConfigStorage,
-    conversation_storage: ConversationStorage,
-    *,
-    on_first_setup=None,
-    registry=None,
-) -> list[Route]:
+def get_config_routes(state: BootedState) -> list[Route]:
     """Setup-wizard / server-config endpoints.
 
-    ``registry`` (optional) is a :class:`ToolRegistry`; when provided, the
-    setup wizard will write per-tool initial values into the new scoped
-    ``tool_configs`` table via the registry's config manager.
+    Always registered — pre-storage too — so the Setup Wizard can run before
+    any DB file exists. Handlers that need post-storage objects resolve them
+    via ``state`` at call time. Endpoints that strictly require storage
+    return 503 with ``"Setup is not complete"`` while ``state.storage_ready``
+    is False.
+
+    The DB-provider choice in ``server_config`` is what flips the server
+    out of deferred-storage mode: :func:`handle_setup` validates the choice,
+    writes ``bootstrap.toml``, then calls ``state.boot_fn`` to materialise
+    storage, register the rest of the API routes, and start channel
+    adapters in-process.
     """
-    # Mutable closure-bound handles. The wizard hot-swaps the DB provider
-    # mid-request when the admin picks Postgres, which means the storage
-    # instances captured at startup are no longer the right ones to write
-    # into. We rebind these locals after the swap so subsequent reads in the
-    # same handler hit the freshly-installed backend.
-    nonlocal_state = {
-        "config_storage": config_storage,
-        "conversation_storage": conversation_storage,
-    }
+
+    def _require_storage() -> JSONResponse | None:
+        if not state.storage_ready:
+            return JSONResponse(
+                {"error": "Setup is not complete"}, status_code=503,
+            )
+        return None
 
     async def handle_setup_profiles(request: Request) -> JSONResponse:
         """Return the wizard's environment-preset catalogue plus the active id.
@@ -139,11 +123,25 @@ def get_config_routes(
         """Check if first-time setup has been completed. No auth required.
 
         Also accepts ?profile=xxx to check if a specific profile exists.
+
+        In deferred-storage mode (no ``bootstrap.toml`` yet — Setup Wizard
+        hasn't run) this answers ``setup_complete=false`` without touching
+        the database, because doing so would create a SQLite file before
+        the user has picked a backend.
         """
         profile = request.query_params.get("profile")
+        if not state.storage_ready:
+            result = {"setup_complete": False, "storage_ready": False}
+            if profile:
+                result["profile_exists"] = False
+            return JSONResponse(result)
+
+        config_storage = state.config_storage
+        conversation_storage = state.conversation_storage
         setup_complete = config_storage.is_setup_complete()
         result = {
             "setup_complete": setup_complete,
+            "storage_ready": True,
         }
         if profile:
             result["profile_exists"] = await conversation_storage.profile_exists(profile)
@@ -156,24 +154,28 @@ def get_config_routes(
             result["has_profiles"] = len(visible) > 0
         return JSONResponse(result)
 
-    async def _switch_database_provider_if_requested(server_config: dict) -> str | None:
-        """If the wizard payload requests Postgres, validate it and hot-swap.
+    async def _persist_db_provider_choice(server_config: dict) -> str | None:
+        """Validate the wizard's ``db_provider`` choice and write bootstrap.toml.
 
-        Returns ``None`` on success (provider is now active and storage
-        singletons have been rebound) or an error string for the caller to
-        surface as a 400 response. SQLite is the silent default; nothing is
-        rewritten if the user kept the default.
+        Returns ``None`` on success or an error string for the caller to
+        surface as a 400 response. Three cases:
 
-        The DB-provider choice is locked the moment bootstrap.toml exists.
-        ``handle_reconfigure`` lets the admin re-run the wizard but it must
-        never silently move the data to a different DB — anything in the
-        wizard payload that disagrees with the persisted provider is
-        silently dropped.
+        - ``bootstrap.toml`` already exists: the provider choice is locked.
+          Silently drop any disagreement in the body. The wizard UI hides
+          the field after first setup, but treat the server as authoritative.
+        - ``db_provider=sqlite`` (or missing): just write bootstrap.toml and
+          rebuild the singleton from it. No connection to validate.
+        - ``db_provider=postgres``: build a candidate provider, verify the
+          connection, then write bootstrap.toml. Only persist if validation
+          passed — a failed Postgres check must leave the working dir
+          untouched so the next attempt re-enters deferred mode cleanly.
+
+        Storage initialization (migrations, tool persistence, agent build)
+        is the caller's job — see :func:`handle_setup`, which invokes
+        ``state.boot_fn`` after this returns.
         """
-        from pathlib import Path
         from app.databases import (
             create_database_provider,
-            get_database_provider,
             set_database_provider,
         )
         from app.databases.postgres import PostgresDatabaseProvider
@@ -182,22 +184,9 @@ def get_config_routes(
         if requested not in ("sqlite", "postgres"):
             return f"Unknown db_provider: {requested!r}"
 
-        # Lock: once a provider has been chosen, the choice survives any
-        # later reconfigure pass. The wizard UI hides the field after first
-        # setup, but treat the server as authoritative — never trust the
-        # client to enforce the lock.
         bootstrap_path = Path(BaseConfig.OPENPA_WORKING_DIR) / "bootstrap.toml"
         if bootstrap_path.exists():
-            return None
-
-        # Already on the requested backend? No-op. The default-SQLite path
-        # also lands here on every fresh install.
-        current_provider = get_database_provider()
-        if current_provider.name == requested:
-            # Still write bootstrap.toml on first-setup-with-SQLite so the
-            # explicit choice is durable; otherwise an empty bootstrap file
-            # would be indistinguishable from "user never picked anything".
-            write_bootstrap({"db_provider": "sqlite"})
+            # Choice is locked; silently ignore any disagreement.
             return None
 
         if requested == "postgres":
@@ -207,7 +196,8 @@ def get_config_routes(
             if missing:
                 return f"Postgres connection requires: {', '.join(missing)}"
 
-            # Build a candidate provider and verify creds before persisting.
+            # Validate the connection BEFORE touching the working dir, so
+            # a failed Postgres check leaves bootstrap.toml unchanged.
             candidate = PostgresDatabaseProvider(
                 host=pg_in["host"],
                 port=int(pg_in.get("port") or 5432),
@@ -221,10 +211,8 @@ def get_config_routes(
             except Exception as exc:  # noqa: BLE001
                 await candidate.dispose()
                 return f"Could not connect to PostgreSQL: {exc}"
+            await candidate.dispose()
 
-            # Persist choice durably BEFORE swapping in-memory state — if
-            # the process dies right after the swap, the next boot reads
-            # bootstrap.toml and lands on the same DB.
             write_bootstrap({
                 "db_provider": "postgres",
                 "postgres": {
@@ -236,53 +224,32 @@ def get_config_routes(
                     "sslmode": pg_in.get("sslmode", "prefer"),
                 },
             })
+        else:
+            # SQLite path: nothing to validate, just lock in the choice.
+            write_bootstrap({"db_provider": "sqlite"})
 
-            # Drop the old SQLite-bound storage instances and re-resolve.
-            # The new conversation storage will create its tables on
-            # ``initialize()``; the wizard handler calls that after this
-            # function returns.
-            await current_provider.dispose()
-            invalidate_storage_singletons()
-            set_database_provider(create_database_provider())
+        # Rebuild the provider singleton from the freshly-written
+        # bootstrap.toml. Clear caches so the next ``get_*_storage()`` call
+        # builds against the new provider. In deferred mode no engine was
+        # ever materialised, so there's nothing to dispose; in the legacy
+        # reconfigure path the caller's lock check above already short-
+        # circuited.
+        set_database_provider(None)
+        invalidate_storage_singletons()
+        set_database_provider(create_database_provider())
 
-            new_conv = get_conversation_storage()
-            await new_conv.initialize()
-            new_cfg = get_dynamic_config_storage()
-            set_dynamic_config_storage(new_cfg)
-
-            nonlocal_state["config_storage"] = new_cfg
-            nonlocal_state["conversation_storage"] = new_conv
-
-            # Built-in tool rows were written to the boot-time SQLite ``tools``
-            # table by ``register_builtin_tools``; the Postgres ``tools`` table
-            # is empty until we replay them. Without this, any subsequent
-            # ``tool_configs`` write would FK-violate against the missing
-            # parent row (e.g. ``exec_shell``).
-            if registry is not None:
-                replayed = registry.repersist_builtin_tools()
-                logger.info(
-                    f"Re-persisted {replayed} built-in tool row(s) to the new database."
-                )
-
-            # Remove the boot-time SQLite footprint. The server boots into
-            # SQLite-by-default before bootstrap.toml exists (we don't yet
-            # know which backend the admin will pick), which materialises
-            # ``openpa.db`` plus its WAL/SHM/journal siblings. Once the
-            # admin chooses Postgres these files are dead weight; delete
-            # them so a Postgres install ends up with zero SQLite footprint.
-            _purge_sqlite_bootstrap_files()
-
-            logger.info("Database provider switched to PostgreSQL during first setup.")
-
+        logger.info(f"Database provider configured: {requested} (first-setup).")
         return None
 
     async def handle_setup(request: Request) -> JSONResponse:
         """Complete setup for a profile.
 
         First profile (admin): unauthenticated — this is the bootstrap
-        window before any JWT can possibly exist. Saves server config,
-        LLM config, tool configs, creates the profile, generates the
-        token, and marks setup complete.
+        window before any JWT can possibly exist. Validates the DB-provider
+        choice, writes ``bootstrap.toml``, runs the deferred boot
+        (storage init + tool registration + agent build) **if it hasn't run
+        yet**, then saves server / LLM / tool config, creates the profile,
+        generates the token, and marks setup complete.
 
         Subsequent profiles: requires the admin profile's JWT. Creates
         the profile, saves LLM and tool configs, and generates a token.
@@ -294,11 +261,13 @@ def get_config_routes(
         - llm_config: dict of LLM settings
         - tool_configs: dict of {tool_name: {key: value}}
         """
-        # Resolve storage from the closure-bound state. These get rebound by
-        # _switch_database_provider_if_requested() if first-setup picks Postgres.
-        config_storage = nonlocal_state["config_storage"]
-        conversation_storage = nonlocal_state["conversation_storage"]
-        is_first_setup = not config_storage.is_setup_complete()
+        # In deferred-storage mode (no ``bootstrap.toml`` yet), this is a
+        # first-setup by definition — there is no DB to ask. Once storage
+        # is up, defer to the persisted ``setup_complete`` flag.
+        if not state.storage_ready:
+            is_first_setup = True
+        else:
+            is_first_setup = not state.config_storage.is_setup_complete()
 
         # Only the admin can onboard additional profiles. The first-run
         # bootstrap is intentionally unauthenticated because no JWT can
@@ -328,21 +297,56 @@ def get_config_routes(
             )
 
         # ── Database provider selection ──────────────────────────────────
-        # First-setup-only. The admin may pick Postgres in the wizard; we
-        # validate the connection, persist the choice to bootstrap.toml, and
-        # hot-swap the in-process storage instances. After this returns, all
-        # subsequent writes in this handler land in the chosen DB.
+        # First-setup-only. Validate the requested DB provider (Postgres
+        # connection check if applicable), write bootstrap.toml, then run
+        # the deferred boot to materialise storage and the rest of the
+        # API. After this returns, all subsequent writes in this handler
+        # land in the chosen DB.
         #
         # For non-first-setup calls, any db_provider field in the body is
         # silently ignored — the choice was made on first setup and is
         # locked. Other profiles can never see or change it.
         if is_first_setup:
-            err = await _switch_database_provider_if_requested(body.get("server_config", {}) or {})
+            err = await _persist_db_provider_choice(body.get("server_config", {}) or {})
             if err is not None:
                 return JSONResponse({"error": err}, status_code=400)
-            # Re-read storage handles in case the swap installed new ones.
-            config_storage = nonlocal_state["config_storage"]
-            conversation_storage = nonlocal_state["conversation_storage"]
+
+            # Run the deferred boot if we haven't yet. ``state.boot_fn`` is
+            # idempotent (guarded by ``state.boot_lock`` + ``storage_ready``),
+            # so this is also safe on the legacy reconfigure-from-already-
+            # booted path.
+            if not state.storage_ready and state.boot_fn is not None:
+                try:
+                    await state.boot_fn()
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Deferred storage boot failed during setup")
+                    # Roll back ``bootstrap.toml`` so the next attempt
+                    # re-enters deferred mode cleanly. Best-effort —
+                    # surface a 500 either way.
+                    try:
+                        (Path(BaseConfig.OPENPA_WORKING_DIR) / "bootstrap.toml").unlink()
+                    except OSError:
+                        pass
+                    from app.databases import set_database_provider as _sdp
+                    _sdp(None)
+                    invalidate_storage_singletons()
+                    state.reset_storage()
+                    return JSONResponse(
+                        {"error": f"Failed to initialize storage: {exc}"},
+                        status_code=500,
+                    )
+
+        # Resolve storage handles from the now-booted state.
+        if not state.storage_ready:
+            # Defensive: only reachable if ``boot_fn`` is missing entirely
+            # (misconfigured server). Avoid an opaque AttributeError below.
+            return JSONResponse(
+                {"error": "Setup is not complete"}, status_code=503,
+            )
+        config_storage = state.config_storage
+        conversation_storage = state.conversation_storage
+        registry = state.registry
+        on_first_setup = state.on_first_setup
 
         # For subsequent profiles, check the profile doesn't already exist
         if not is_first_setup:
@@ -578,7 +582,9 @@ def get_config_routes(
 
         Requires admin auth. Does NOT delete profiles or data.
         """
-        config_storage.delete("server_config", "setup_complete")
+        if (gate := _require_storage()):
+            return gate
+        state.config_storage.delete("server_config", "setup_complete")
         return JSONResponse({"success": True, "message": "Setup status reset. Reload to reconfigure."})
 
     async def handle_reset_orphaned_setup(request: Request) -> JSONResponse:
@@ -588,6 +594,10 @@ def get_config_routes(
         visible profiles exist. This handles the edge case where the DB was
         partially wiped externally.
         """
+        if (gate := _require_storage()):
+            return gate
+        config_storage = state.config_storage
+        conversation_storage = state.conversation_storage
         if not config_storage.is_setup_complete():
             return JSONResponse({"error": "Setup is not complete"}, status_code=400)
 
@@ -643,8 +653,10 @@ def get_config_routes(
                 **embedding_state.to_dict(),
             })
 
+        if (gate := _require_storage()):
+            return gate
         profile_names = [
-            row["name"] for row in await conversation_storage.list_profiles()
+            row["name"] for row in await state.conversation_storage.list_profiles()
             if not row["name"].startswith("__")
         ]
         apply_embedding_config_in_background(profiles=profile_names, force_rebuild=True)
@@ -664,10 +676,12 @@ def get_config_routes(
         denied = require_admin(request)
         if denied is not None:
             return denied
+        if (gate := _require_storage()):
+            return gate
         from app.config.embedding_state import embedding_state
         from app.lib.embedding_lifecycle import read_embedding_config
         return JSONResponse({
-            "config": read_embedding_config(config_storage),
+            "config": read_embedding_config(state.config_storage),
             **embedding_state.to_dict(),
         })
 
@@ -682,6 +696,8 @@ def get_config_routes(
         denied = require_admin(request)
         if denied is not None:
             return denied
+        if (gate := _require_storage()):
+            return gate
 
         from app.config.embedding_state import embedding_state
         from app.lib.embedding_lifecycle import (
@@ -707,12 +723,12 @@ def get_config_routes(
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         try:
-            persist_embedding_config(body, config_storage)
+            persist_embedding_config(body, state.config_storage)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
         profile_names = [
-            row["name"] for row in await conversation_storage.list_profiles()
+            row["name"] for row in await state.conversation_storage.list_profiles()
             if not row["name"].startswith("__")
         ]
         apply_embedding_config_in_background(profiles=profile_names, force_rebuild=True)
@@ -736,18 +752,22 @@ def get_config_routes(
 
     async def handle_get_server_config(request: Request) -> JSONResponse:
         """Get server configuration (non-secret values). Requires auth."""
-        config = config_storage.get_all("server_config", include_secrets=False)
+        if (gate := _require_storage()):
+            return gate
+        config = state.config_storage.get_all("server_config", include_secrets=False)
         return JSONResponse({"config": config})
 
     async def handle_update_server_config(request: Request) -> JSONResponse:
         """Update server configuration. Requires auth (admin only)."""
+        if (gate := _require_storage()):
+            return gate
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         config = body.get("config", {})
-        cfg_storage = nonlocal_state["config_storage"]
+        cfg_storage = state.config_storage
         for key, value in config.items():
             # The DB-provider choice can only change during the very first
             # setup wizard. Silently drop any later attempt to override it

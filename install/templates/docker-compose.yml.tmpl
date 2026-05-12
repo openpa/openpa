@@ -83,7 +83,7 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:v1.10.1
+    image: qdrant/qdrant:latest
     volumes:
       - qdrant-data:/qdrant/storage
     restart: unless-stopped
