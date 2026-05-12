@@ -45,13 +45,25 @@ async def get_health(_request: Request) -> JSONResponse:
     Used as the post-upgrade gate by the upgrader — a 200 here means the
     new build came up cleanly and the upgrade flow can commit (drop the
     backup retention window). On 503 the upgrader rolls back.
+
+    When the server is in deferred-storage mode (no ``bootstrap.toml``
+    yet — first-run before the Setup Wizard completes), ``db`` reports
+    ``"deferred"`` and the response is still 200 with ``status =
+    "setup_pending"`` so Electron's healthcheck succeeds and the wizard
+    can render.
     """
     db_status = await _probe_db()
     vs_status = _probe_vectorstore()
 
-    overall_ok = db_status == "ok" and vs_status in ("ok", "disabled")
+    overall_ok = db_status in ("ok", "deferred") and vs_status in ("ok", "disabled")
+    if db_status == "deferred":
+        status_text = "setup_pending"
+    elif overall_ok:
+        status_text = "ok"
+    else:
+        status_text = "degraded"
     body = {
-        "status": "ok" if overall_ok else "degraded",
+        "status": status_text,
         "db": db_status,
         "vectorstore": vs_status,
     }
@@ -64,7 +76,14 @@ def _current_schema_revision() -> str:
     Reading from the live database (rather than hardcoding) keeps this in
     sync with whatever migration ran last — important during the rollout
     window where the runtime version and the schema may briefly disagree.
+
+    Returns ``"unknown"`` early when no ``bootstrap.toml`` exists — the
+    Setup Wizard hasn't run yet so building a sync engine would
+    materialise a SQLite file before the user has chosen a backend.
     """
+    from app.config.bootstrap import bootstrap_exists
+    if not bootstrap_exists():
+        return "unknown"
     try:
         from app.databases import get_database_provider
 
@@ -79,6 +98,11 @@ def _current_schema_revision() -> str:
 
 
 async def _probe_db() -> str:
+    # Pre-bootstrap: don't touch the provider — calling ``health_check()``
+    # on SQLite would open a connection and create ``openpa.db``.
+    from app.config.bootstrap import bootstrap_exists
+    if not bootstrap_exists():
+        return "deferred"
     try:
         from app.databases import get_database_provider
 

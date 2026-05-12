@@ -56,6 +56,16 @@ def db_upgrade(
     ),
 ) -> None:
     """Apply migrations forward to ``target``."""
+    # ``openpa serve`` runs in deferred-storage mode when ``bootstrap.toml``
+    # is missing — it won't materialise a DB until the wizard's first-setup
+    # request. The CLI path bypasses the wizard, so committing to a backend
+    # at the moment we're about to materialise one keeps the two modes
+    # self-consistent: a later ``openpa serve`` boots normally instead of
+    # re-entering deferred mode and creating a parallel DB via the wizard.
+    from app.config.bootstrap import bootstrap_exists, write_bootstrap
+    if not bootstrap_exists():
+        write_bootstrap({"db_provider": "sqlite"})
+
     from app.storage import migrations
     migrations.upgrade(target)
     typer.echo(f"Upgraded to {migrations.current_revision() or '<none>'}")

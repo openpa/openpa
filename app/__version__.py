@@ -15,6 +15,6 @@ backend. The UI consults the ``/version`` endpoint at startup and shows an
 upgrade-required banner if it falls below this floor.
 """
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
 MIN_SUPPORTED_UPGRADE_FROM = "0.1.0"
 MIN_COMPATIBLE_UI = "0.1.0"

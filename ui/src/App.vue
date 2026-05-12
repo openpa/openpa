@@ -175,10 +175,8 @@ const handleLogout = () => {
   <!-- Titlebar for dragging (Electron only) -->
   <div v-if="isElectron" class="titlebar"></div>
 
-  <!-- Backend + Electron-app update notifications. The route filter
-       hides the banner during the first-run installer flow, where the
-       installer's own progress UI is what the user is watching. -->
-  <UpdateBanner v-if="route.name !== 'installer'" />
+  <!-- Backend + Electron-app update notifications. -->
+  <UpdateBanner />
 
   <!-- Main App Layout -->
   <div class="app-layout" :class="{ 'has-titlebar': isElectron }">

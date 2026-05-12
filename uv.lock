@@ -2253,7 +2253,7 @@ requires-dist = [
     { name = "qrcode", specifier = ">=7" },
     { name = "rich", specifier = ">=13" },
     { name = "sentence-transformers", specifier = ">=3.0.0" },
-    { name = "starlette", specifier = ">=0.52.1" },
+    { name = "starlette", specifier = ">=0.52.1,<1.0" },
     { name = "telethon", specifier = ">=1.36.0" },
     { name = "tenacity", specifier = ">=8.2.0" },
     { name = "tiktoken", specifier = ">=0.12.0" },

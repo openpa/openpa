@@ -19,41 +19,13 @@ curl -fsSL https://openpa.ai/install.sh | bash
 iwr -useb https://openpa.ai/install.ps1 | iex
 ```
 
-## Pre-release / test builds
-
-To validate a release candidate end-to-end before it lands on production
-PyPI, use the test installers. They install from
-[Test PyPI](https://test.pypi.org) and are wired up to the
-`release-test` GitHub workflow (which fires on tags matching `v*-test*`,
-e.g. `v0.1.5-test1`).
-
-**Linux / macOS:**
-
-```bash
-curl -fsSL https://openpa.ai/install-test.sh | bash
-```
-
-**Windows (PowerShell):**
-
-```powershell
-iwr -useb https://openpa.ai/install-test.ps1 | iex
-```
-
-The test installers behave identically to the production ones (same
-flags, same prompts, both modes supported) but with two differences:
-
-- **Pip index** — native installs use
-  `--index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ --pre openpa`.
-  Docker installs forward the same URLs as build args via
-  `~/.openpa/docker/.env`.
-- **Working directory** — test installs share `~/.openpa` with the
-  production installer. Running `install-test.sh` on a host that
-  already has prod `openpa` installed **will upgrade or downgrade the
-  existing install to the test version**. To keep them side-by-side,
-  set `OPENPA_WORKING_DIR=~/.openpa-test` before running.
-
-Test versions live only on Test PyPI — they are **not** announced on
-the GitHub Releases page.
+> **Internal:** maintainers running release-validation builds pass
+> `--channel test` (Linux/macOS) or set `$env:OPENPA_INSTALL_CHANNEL='test'`
+> before invoking the installer (Windows). Both surfaces are
+> intentionally undocumented for end users; test versions live only on
+> Test PyPI and are not announced on the GitHub Releases page. By
+> default the test channel shares `~/.openpa` with prod — set
+> `OPENPA_WORKING_DIR=~/.openpa-test` to keep them side-by-side.
 
 ## Two install modes
 
@@ -63,6 +35,41 @@ The scripts detect Docker and ask which mode you want:
 |---|---|---|
 | **docker** *(recommended)* | The agent runs inside a sandboxed VNC-accessible XFCE desktop, alongside Postgres and Qdrant. You can observe what the agent is doing at `http://<host>:6080/vnc.html`. | Anytime Docker is available — the agent is isolated from your host, and the bundle includes everything in one shot. |
 | **native** | A Python venv at `~/.openpa/venv` with `openpa` and SQLite. The agent shares your desktop and home directory. | Docker isn't available, or you want a minimal install without containers. |
+
+## Developer install
+
+When you have a checkout of openpa and want to install from local
+source rather than PyPI, run the installer from inside the repo with
+`--dev`:
+
+```bash
+bash install/install.sh --dev --deployment local
+```
+
+```powershell
+.\install\install.ps1 -Dev -Deployment local
+```
+
+Dev mode skips PyPI entirely and runs `pip install -e .` against the
+checkout, so edits to `app/...` are picked up on the next `openpa serve`
+without reinstalling. Templates (`local.env`, `docker-compose.yml.tmpl`,
+…) also come from the checkout's `install/templates/`, not GitHub.
+
+Caveats:
+
+- The wizard at `http://localhost:1515` needs `app/static/ui/` populated.
+  Run `bash scripts/build_ui.sh` once before `--dev` so the SPA listener
+  comes up.
+- `--dev` requires running the script *from* a checkout — piping it via
+  `curl | bash` (no file on disk) is rejected.
+- `--dev --mode docker` works: the installer emits a
+  `docker-compose.override.yml` that points the build context at the
+  checkout, swaps the pip install for `-e /src`, and bind-mounts the
+  checkout into the container. Host edits to `app/` show up after
+  `docker compose restart openpa`.
+- `OPENPA_UPGRADE_CHANNEL` is intentionally not written to `.env` in dev
+  mode. Don't run `openpa upgrade` from a dev install — pull from git
+  instead.
 
 ## What docker mode does
 
@@ -120,6 +127,7 @@ to wipe and start fresh.
 | `--no-launch`                | Don't open the wizard at the end. |
 | `--unattended`               | Use defaults; never prompt. Implies `--mode docker` if Docker is present. |
 | `--reinstall`                | Wipe the existing venv (native) or regenerate compose+.env (docker). |
+| `--dev`                      | Install from the local checkout (developer mode). See [Developer install](#developer-install). Implies `--mode native`. |
 
 ## Flags (ps1)
 
@@ -131,6 +139,7 @@ to wipe and start fresh.
 | `-NoLaunch`                 | Don't open the wizard at the end. |
 | `-Unattended`               | Use defaults; never prompt. |
 | `-Reinstall`                | Wipe the existing venv or regenerate compose+.env. |
+| `-Dev`                      | Install from the local checkout (developer mode). See [Developer install](#developer-install). Implies `-Mode native`. |
 
 ## Files written
 

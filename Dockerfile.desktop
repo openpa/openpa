@@ -135,11 +135,23 @@ ARG OPENPA_PIP_EXTRA_INDEX_URL=""
 # goes back to default PyPI). Empty values are equivalent to "unset".
 # ``--pre`` is unconditional: a no-op for stable releases, required for
 # test (.devN / rcN) versions pinned via OPENPA_PIP_SPEC.
-RUN python3.13 -m venv /opt/openpa/venv \
+#
+# ``--mount=type=bind,target=/src`` exposes the build context at /src
+# for the duration of this RUN step only. It's a no-op when
+# OPENPA_PIP_SPEC resolves from PyPI (prod / test channel), and lets dev
+# installs pass ``-e /src`` so pip can read pyproject.toml from the
+# checkout without baking the source into the image.
+#
+# ``$OPENPA_PIP_SPEC`` is intentionally unquoted: dev passes ``-e /src``
+# (two tokens), and prod passes ``openpa==X.Y.Z`` (one token, no spaces).
+# Quoting would collapse the dev form into a single argument and pip
+# would reject ``-e /src`` as an invalid requirement spec.
+RUN --mount=type=bind,target=/src,rw \
+    python3.13 -m venv /opt/openpa/venv \
     && /opt/openpa/venv/bin/pip install --upgrade pip \
     && PIP_INDEX_URL="$OPENPA_PIP_INDEX_URL" \
        PIP_EXTRA_INDEX_URL="$OPENPA_PIP_EXTRA_INDEX_URL" \
-       /opt/openpa/venv/bin/pip install --pre "$OPENPA_PIP_SPEC"
+       /opt/openpa/venv/bin/pip install --pre $OPENPA_PIP_SPEC
 
 ENV PATH="/opt/openpa/venv/bin:${PATH}"
 

@@ -7,6 +7,12 @@ declare const __IS_ELECTRON__: boolean;
 // scripts/sync_ui_version.py and exposed via Vite ``define``).
 declare const __APP_VERSION__: string;
 
+// Build-time install channel — which OpenPA release stream the bundled
+// installer points at. ``npm run dev`` → ``"dev"``; ``npm run build``
+// → ``"production"``; ``npm run build:test`` → ``"test"``. Computed in
+// vite.config.ts from ``mode`` + ``command``.
+declare const __OPENPA_INSTALL_CHANNEL__: 'production' | 'test' | 'dev';
+
 // Runtime config bridge — populated by electron/preload.ts. ``config`` is
 // a synchronous snapshot loaded before the renderer initializes; the
 // async getters/setters round-trip to the main process so the wizard can
@@ -21,6 +27,7 @@ type OpenPAInstallerEnvironment = {
   hasPython: boolean
   pythonVersion: string
   recommendedMode: 'docker' | 'native'
+  channel: 'production' | 'test' | 'dev'
 }
 
 type OpenPAInstallerRunPayload = {
@@ -62,6 +69,14 @@ type OpenPAUpdaterBridge = {
   offStatus: (cb: (payload: OpenPAUpdaterStatus) => void) => void
 }
 
+type OpenPAServerBridge = {
+  // Spawn ``openpa serve`` (idempotent — no-op when something already
+  // answers /health). Returns ``{ ok: true }`` once the backend's
+  // health endpoint is reachable, or ``{ ok: false, error }`` if it
+  // failed to start.
+  start: () => Promise<{ ok: boolean; error?: string }>
+}
+
 type OpenPABridge = {
   config: {
     agentUrl: string
@@ -74,6 +89,7 @@ type OpenPABridge = {
     patch: Partial<OpenPABridge['config']>,
   ) => Promise<OpenPABridge['config']>
   installer: OpenPAInstallerBridge
+  server: OpenPAServerBridge
   updater: OpenPAUpdaterBridge
 }
 

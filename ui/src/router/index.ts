@@ -10,13 +10,6 @@ const routes = [
     name: 'home',
     component: () => import('../views/ProfileSelector.vue'),
   },
-  // First-run installer (Electron only). Users without an agent URL land
-  // here on launch — see the global beforeEach below.
-  {
-    path: '/installer',
-    name: 'installer',
-    component: () => import('../views/Installer.vue'),
-  },
   // Setup routes
   {
     path: '/setup',
@@ -137,13 +130,17 @@ const router = createRouter({
 
 // First-run gate (Electron only). When the runtime config has no agent
 // URL — typical for a fresh install of the Electron app — every route
-// other than the installer itself redirects to /installer. We deliberately
-// don't apply this in the web build (no ``window.openpa``) because there
-// the agent URL comes from VITE_AGENT_URL at build time.
+// other than ``/setup`` redirects there. The Setup Wizard hosts the
+// first-run installer phase inline (see SetupWizard.vue's
+// ``includeInstallerSteps``) so the user moves through Welcome →
+// Deployment → Mode → Install → Server → … in a single continuous
+// flow. We deliberately don't apply this in the web build (no
+// ``window.openpa``) because there the agent URL comes from
+// VITE_AGENT_URL at build time.
 router.beforeEach((to) => {
   const bridge = window.openpa
-  if (bridge && !bridge.config.agentUrl && to.name !== 'installer') {
-    return { path: '/installer', replace: true }
+  if (bridge && !bridge.config.agentUrl && to.name !== 'setup' && to.name !== 'setup-profile') {
+    return { path: '/setup', replace: true }
   }
   return true
 });

@@ -49,7 +49,12 @@ from pathlib import Path
 from app.agent.agent import OpenPAAgent
 from app.agent.executor import OpenPAAgentExecutor
 from app.api import get_api_routes
+from app.api.config import get_config_routes
+from app.api.upgrade import get_upgrade_routes
+from app.api.version import get_version_routes
+from app.config.bootstrap import bootstrap_exists
 from app.config.settings import BaseConfig, set_dynamic_config_storage
+from app.runtime import BootedState, get_state
 from app.constants import INTRODUCE_ASSISTANT
 from app.documents import (
     DocumentSyncService,
@@ -392,224 +397,30 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     #     stale. Blocks startup so adapters never see a half-installed tree.
     ensure_all_sidecars_installed()
 
-    # 1. Database provider + storage. Provider is selected from
-    #    bootstrap.toml (defaults to SQLite on a fresh install). Every
-    #    storage module obtains its engine from this provider, so adding a
-    #    new backend later is one factory branch away.
-    set_database_provider(create_database_provider())
-    config_storage = get_dynamic_config_storage()
-    set_dynamic_config_storage(config_storage)
-    conversation_storage = get_conversation_storage()
-    await conversation_storage.initialize()
-    tool_storage = get_tool_storage()
+    # 0c. Runtime state. Storage-dependent objects are populated by the
+    #     deferred boot closure below.
+    state = get_state()
+    state.boot_lock = asyncio.Lock()
 
-    # 2. Registry
-    config_manager = ToolConfigManager(tool_storage)
-    registry = ToolRegistry(tool_storage, config_manager)
-    set_tool_registry(registry)
+    # ── Deferred agent executor ──────────────────────────────────────────
+    #
+    # The A2A application is constructed *before* storage is materialised
+    # (deferred mode) or before the agent itself exists. Wrap with a
+    # delegator that resolves to the real executor once
+    # ``boot_storage_and_post_storage`` populates state.
+    class _DeferredAgentExecutor:
+        def __init__(self, state_ref: BootedState):
+            self._state = state_ref
 
-    # 3. Intrinsic tools
-    register_intrinsic_tools(registry)
+        def __getattr__(self, item):
+            real = self._state.agent_executor
+            if real is None:
+                raise RuntimeError("OpenPA setup is not complete")
+            return getattr(real, item)
 
-    # 3b. Embedding model + vector store (only when embedding is enabled).
-    #     Loaded synchronously so the agent isn't reachable before the
-    #     model is in memory. Both stay None when the user opted out.
-    from app.config.embedding_state import embedding_state, initialize_embedding_subsystem
+    deferred_executor = _DeferredAgentExecutor(state)
 
-    embedding: LocalEmbeddings | None = None
-    vector_store = None
-    if BaseConfig.is_embedding_enabled():
-        try:
-            embedding, vector_store = initialize_embedding_subsystem()
-            provider = BaseConfig.get_vectorstore_provider()
-            logger.info(f"Vector store connected (provider={provider})")
-        except Exception:
-            logger.exception("Vector embedding subsystem failed to initialize at boot.")
-            embedding = None
-            vector_store = None
-    else:
-        embedding_state.mark_disabled()
-        logger.info("Vector embedding disabled — skipping model load and vector store.")
-
-    # 4. Model groups + built-in tools
-    model_group_mgr = ModelGroupManager(config_storage)
-
-    def _builtin_llm_factory(tool_id: str, profile: str):
-        """Create an LLM for a built-in tool, respecting per-tool overrides."""
-        try:
-            _llm_params = config_manager.get_llm_params(tool_id, profile)
-        except Exception:  # noqa: BLE001
-            _llm_params = {}
-        if _llm_params.get("llm_provider") or _llm_params.get("llm_model"):
-            return create_llm_provider(
-                provider_name=_llm_params.get("llm_provider") or BaseConfig.get_default_provider(),
-                model_name=_llm_params.get("llm_model") or None,
-                config_storage=config_storage,
-                profile=profile,
-                default_reasoning_effort=_llm_params.get("reasoning_effort"),
-            )
-        return model_group_mgr.create_llm_for_group("low", profile=profile)
-
-    # Built-in tools are always registered at startup so the setup wizard and
-    # the Tools & Skills settings page can list and configure them. When no
-    # LLM is available yet (pre-setup), tools register with ``llm=None`` and
-    # are rebound by ``on_first_setup`` once the user picks providers/models.
-    try:
-        await register_builtin_tools(
-            registry=registry,
-            config_manager=config_manager,
-            llm_factory=_builtin_llm_factory,
-            setup_profile="admin",
-            config_storage=config_storage,
-            vector_store=vector_store,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Built-in tool registration failed: {e}")
-
-    # 4b. If setup is already complete, rebind any built-in tools that
-    #     registered with llm=None (e.g. transient LLM-factory failure).
-    if config_storage.is_setup_complete():
-        for tool in registry.all_tools():
-            if isinstance(tool, BuiltInToolGroup) and not tool.is_llm_bound:
-                try:
-                    llm = _builtin_llm_factory(tool.config_name, "admin")
-                    tool.update_runtime_config(llm=llm)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        f"Could not bind LLM to built-in tool '{tool.name}' "
-                        f"at startup: {e}"
-                    )
-
-    # 5. Hydrate persisted A2A / MCP tools
-    await _hydrate_persisted_tools(registry=registry, model_group_mgr=model_group_mgr)
-
-    # 6. Skills -- per-profile sync
-    #    Each profile owns its own skills directory at
-    #    ``<OPENPA_WORKING_DIR>/<profile>/skills``. Built-ins from
-    #    ``app/skills/builtin/`` are re-copied on every boot so accidental
-    #    deletions are repaired. A SkillsWatcher is started per profile.
-    known_profiles = [
-        row["name"] for row in await conversation_storage.list_profiles()
-        if not row["name"].startswith("__")
-    ]
-    # Drop any legacy skill rows whose source is not under any profile's
-    # skills dir (pre-redesign installs had a single global ``skills/``).
-    try:
-        removed = registry.purge_legacy_skill_rows(
-            str(profile_skills_dir(p)) for p in known_profiles
-        )
-        if removed:
-            logger.info(f"Purged {removed} legacy skill row(s)")
-    except Exception:  # noqa: BLE001
-        logger.exception("Legacy skill-row purge failed")
-
-    loop = asyncio.get_running_loop()
-    for profile_name in known_profiles:
-        try:
-            await initialize_profile_skills(profile_name, registry, loop=loop)
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                f"Skill init failed for profile '{profile_name}'"
-            )
-
-    # 6b. Documentation Search -- shared + per-profile `.md` sync to Qdrant.
-    #     Seed bundled docs into the shared working directory (skip-if-exists),
-    #     reconcile each scope on boot so deletions/additions/edits made while
-    #     the server was offline are reflected in the vector store, then start
-    #     a watcher per scope for live updates.
-    try:
-        document_service = DocumentSyncService(
-            working_dir=Path(BaseConfig.OPENPA_WORKING_DIR),
-            vector_store=vector_store,
-            embedding=embedding,
-        )
-        set_document_service(document_service)
-
-        bundled_docs = Path(__file__).resolve().parents[1] / "documents"
-        document_service.seed_shared_from_app(bundled_docs)
-
-        document_service.full_reconcile(SHARED_SCOPE)
-        DocumentWatcher(
-            scope=SHARED_SCOPE,
-            directory=document_service.shared_dir(),
-            sync_service=document_service,
-        ).start()
-
-        for profile_name in known_profiles:
-            try:
-                document_service.full_reconcile(profile_name)
-                DocumentWatcher(
-                    scope=profile_name,
-                    directory=document_service.profile_dir(profile_name),
-                    sync_service=document_service,
-                ).start()
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    f"Document sync failed for profile '{profile_name}'"
-                )
-    except Exception:  # noqa: BLE001
-        logger.exception("Documentation Search subsystem failed to initialize")
-
-    # 7. High-group LLM (admin) + OpenPAAgent
-    runner = None
-    if config_storage.is_setup_complete():
-        try:
-            runner = model_group_mgr.create_llm_for_group("high", profile="admin")
-        except ValueError as e:
-            logger.warning(f"Failed to create 'high' group LLM: {e}")
-
-    openpa_agent = OpenPAAgent(
-        registry=registry,
-        embedding=embedding,
-        runner=runner,
-        model_group_mgr=model_group_mgr,
-        config_storage=config_storage,
-        vector_store=vector_store,
-        conversation_storage=conversation_storage,
-    )
-
-    # 7b. Eager embedding sync: step 6's skill init fired _fire_change with
-    #     a None callback (OpenPAAgent didn't exist yet), and an externally
-    #     deleted Qdrant collection would otherwise stay empty until the
-    #     first request. Build each profile's table now.
-    for profile_name in known_profiles:
-        try:
-            openpa_agent.update_embeddings(profile_name)
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                f"Eager embedding sync failed for profile '{profile_name}'"
-            )
-
-    # 7c. Autostart long-running processes registered to "start with OpenPA".
-    #     Fire-and-forget — individual spawns must not block server startup.
-    try:
-        asyncio.create_task(run_autostart_on_boot(get_autostart_storage()))
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to schedule autostart run on boot")
-
-    # 7d. Skill event manager: arm watchdogs for every persisted subscription.
-    try:
-        from app.events import get_event_manager
-        from app.events import runner as event_runner
-
-        event_runner.set_globals(
-            openpa_agent=openpa_agent,
-            conversation_storage=conversation_storage,
-        )
-        get_event_manager().start(loop)
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to start skill event manager")
-
-    # 7e. File watcher manager: arm watchdog Observers for every persisted
-    #     file_watcher subscription. Re-uses ``event_runner.set_globals``
-    #     above (the file-watcher runner reads the same globals lazily).
-    try:
-        from app.events import get_file_watcher_manager
-        get_file_watcher_manager().start(loop)
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to start file watcher manager")
-
-    # 8. Agent card
+    # ── Agent card (storage-free) ────────────────────────────────────────
     skill = AgentSkill(
         id=BaseConfig.AGENT_ID,
         name=BaseConfig.AGENT_NAME,
@@ -644,9 +455,8 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         agent_card_kwargs["security"] = [{"bearerAuth": []}]
     agent_card = AgentCard(**agent_card_kwargs)
 
-    agent_executor = OpenPAAgentExecutor(openpa_agent, conversation_storage=conversation_storage)
     request_handler = DefaultRequestHandler(
-        agent_executor=agent_executor, task_store=InMemoryTaskStore(),
+        agent_executor=deferred_executor, task_store=InMemoryTaskStore(),
     )
     context_builder = JWTCallContextBuilder(secret_provider=BaseConfig.get_jwt_secret)
     a2a_app = A2AStarletteApplication(
@@ -659,92 +469,12 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         return PlainTextResponse("OK")
     routes.append(Route(path="/test", methods=["GET"], endpoint=test_endpoint))
 
-    async def on_first_setup(profile: str):
-        # Built-in tools were already registered at startup (some possibly with
-        # llm=None because no LLM was configured yet). Walk the registry, bind
-        # an LLM to each, and refresh OAuth clients with the freshly-saved
-        # profile credentials.
-        for tool in registry.all_tools():
-            if not isinstance(tool, BuiltInToolGroup):
-                continue
-            try:
-                llm = _builtin_llm_factory(tool.config_name, profile)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    f"Could not bind LLM to built-in tool '{tool.name}' "
-                    f"after setup: {e}"
-                )
-                continue
-            tool.update_runtime_config(llm=llm)
-            try:
-                refresh_builtin_tool_oauth(
-                    registry, config_manager, tool.tool_id, profile=profile,
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    f"OAuth refresh failed for built-in tool '{tool.name}'"
-                )
-        try:
-            await initialize_profile_skills(
-                profile, registry, loop=asyncio.get_running_loop(),
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                f"Post-setup skill init failed for profile '{profile}'"
-            )
-
-        # Reconcile + watch the new profile's documents directory so the
-        # Documentation Search tool can serve per-profile docs immediately.
-        try:
-            document_service.full_reconcile(profile)
-            DocumentWatcher(
-                scope=profile,
-                directory=document_service.profile_dir(profile),
-                sync_service=document_service,
-            ).start()
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                f"Post-setup document sync failed for profile '{profile}'"
-            )
-
-        openpa_agent.update_embeddings()
-        logger.info("Post-setup: built-in tools rebound and skills synced")
-
-    def _mcp_llm_factory(tool_id: str | None = None, profile: str = "admin"):
-        """Create an LLM for an MCP tool, respecting per-tool overrides."""
-        if tool_id:
-            try:
-                _params = config_manager.get_llm_params(tool_id, profile)
-            except Exception:  # noqa: BLE001
-                _params = {}
-            if _params.get("llm_provider") or _params.get("llm_model"):
-                return create_llm_provider(
-                    provider_name=_params.get("llm_provider") or BaseConfig.get_default_provider(),
-                    model_name=_params.get("llm_model") or None,
-                    config_storage=config_storage,
-                    profile=profile,
-                    default_reasoning_effort=_params.get("reasoning_effort"),
-                )
-        try:
-            return model_group_mgr.create_llm_for_group("low", profile=profile)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to create MCP LLM: {e}")
-            return None
-
-    async def _connect_persisted_tool(tool_id: str) -> tuple[bool, str | None]:
-        return await connect_persisted_tool(registry, model_group_mgr, tool_id)
-
-    routes.extend(get_api_routes(
-        registry=registry,
-        pending_return_urls=_pending_return_urls,
-        mcp_llm_factory=_mcp_llm_factory,
-        conversation_storage=conversation_storage,
-        config_storage=config_storage,
-        on_first_setup=on_first_setup,
-        connect_persisted_tool=_connect_persisted_tool,
-        drop_profile_embeddings=openpa_agent.drop_profile_embeddings,
-        agent_executor=agent_executor,
-    ))
+    # Always-available pre-storage routes. The wizard endpoints in
+    # ``get_config_routes`` self-gate on ``state.storage_ready`` and the
+    # ``POST /api/config/setup`` handler triggers the deferred boot.
+    routes.extend(get_version_routes())
+    routes.extend(get_upgrade_routes())
+    routes.extend(get_config_routes(state))
 
     middleware_stack = [
         Middleware(
@@ -773,22 +503,350 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         except Exception:  # noqa: BLE001
             logger.exception("Error stopping channel adapters during shutdown")
 
-    async def _on_startup() -> None:
-        # Start in-process channel adapters for every enabled non-main channel.
-        # Runs after conversation_storage.initialize so the schema (and the
-        # auto-created main channels) is in place.
-        try:
-            from app.channels import get_channel_registry
-            await get_channel_registry(conversation_storage).start_all_enabled()
-        except Exception:  # noqa: BLE001
-            logger.exception("Error starting channel adapters during startup")
-
     app = Starlette(
         routes=routes,
         middleware=middleware_stack,
-        on_startup=[_on_startup],
         on_shutdown=[_on_shutdown],
     )
+
+    # ── Deferred storage + post-storage boot ─────────────────────────────
+    #
+    # Runs once: either eagerly at process start (when ``bootstrap.toml``
+    # exists) or from inside ``handle_setup`` after the Setup Wizard
+    # writes ``bootstrap.toml``. Guarded by ``state.boot_lock`` so a
+    # concurrent setup re-attempt observes ``storage_ready`` and bails.
+    async def boot_storage_and_post_storage() -> None:
+        async with state.boot_lock:
+            if state.storage_ready:
+                return
+
+            # 1. Database provider + storage. Provider is selected from
+            #    bootstrap.toml; storage modules obtain their engines from
+            #    it lazily.
+            set_database_provider(create_database_provider())
+            config_storage = get_dynamic_config_storage()
+            set_dynamic_config_storage(config_storage)
+            conversation_storage = get_conversation_storage()
+            await conversation_storage.initialize()
+            tool_storage = get_tool_storage()
+
+            # 2. Registry
+            config_manager = ToolConfigManager(tool_storage)
+            registry = ToolRegistry(tool_storage, config_manager)
+            set_tool_registry(registry)
+
+            # 3. Intrinsic tools
+            register_intrinsic_tools(registry)
+
+            # 3b. Embedding model + vector store (only when enabled).
+            from app.config.embedding_state import embedding_state, initialize_embedding_subsystem
+
+            embedding: LocalEmbeddings | None = None
+            vector_store = None
+            if BaseConfig.is_embedding_enabled():
+                try:
+                    embedding, vector_store = initialize_embedding_subsystem()
+                    provider_name = BaseConfig.get_vectorstore_provider()
+                    logger.info(f"Vector store connected (provider={provider_name})")
+                except Exception:
+                    logger.exception("Vector embedding subsystem failed to initialize at boot.")
+                    embedding = None
+                    vector_store = None
+            else:
+                embedding_state.mark_disabled()
+                logger.info("Vector embedding disabled — skipping model load and vector store.")
+
+            # 4. Model groups + built-in tools
+            model_group_mgr = ModelGroupManager(config_storage)
+
+            def _builtin_llm_factory(tool_id: str, profile: str):
+                """Create an LLM for a built-in tool, respecting per-tool overrides."""
+                try:
+                    _llm_params = config_manager.get_llm_params(tool_id, profile)
+                except Exception:  # noqa: BLE001
+                    _llm_params = {}
+                if _llm_params.get("llm_provider") or _llm_params.get("llm_model"):
+                    return create_llm_provider(
+                        provider_name=_llm_params.get("llm_provider") or BaseConfig.get_default_provider(),
+                        model_name=_llm_params.get("llm_model") or None,
+                        config_storage=config_storage,
+                        profile=profile,
+                        default_reasoning_effort=_llm_params.get("reasoning_effort"),
+                    )
+                return model_group_mgr.create_llm_for_group("low", profile=profile)
+
+            try:
+                await register_builtin_tools(
+                    registry=registry,
+                    config_manager=config_manager,
+                    llm_factory=_builtin_llm_factory,
+                    setup_profile="admin",
+                    config_storage=config_storage,
+                    vector_store=vector_store,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Built-in tool registration failed: {e}")
+
+            # 4b. If setup is already complete, rebind any built-in tools
+            #     that registered with llm=None.
+            if config_storage.is_setup_complete():
+                for tool in registry.all_tools():
+                    if isinstance(tool, BuiltInToolGroup) and not tool.is_llm_bound:
+                        try:
+                            llm = _builtin_llm_factory(tool.config_name, "admin")
+                            tool.update_runtime_config(llm=llm)
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning(
+                                f"Could not bind LLM to built-in tool '{tool.name}' "
+                                f"at startup: {e}"
+                            )
+
+            # 5. Hydrate persisted A2A / MCP tools
+            await _hydrate_persisted_tools(registry=registry, model_group_mgr=model_group_mgr)
+
+            # 6. Skills -- per-profile sync
+            known_profiles = [
+                row["name"] for row in await conversation_storage.list_profiles()
+                if not row["name"].startswith("__")
+            ]
+            try:
+                removed = registry.purge_legacy_skill_rows(
+                    str(profile_skills_dir(p)) for p in known_profiles
+                )
+                if removed:
+                    logger.info(f"Purged {removed} legacy skill row(s)")
+            except Exception:  # noqa: BLE001
+                logger.exception("Legacy skill-row purge failed")
+
+            loop = asyncio.get_running_loop()
+            for profile_name in known_profiles:
+                try:
+                    await initialize_profile_skills(profile_name, registry, loop=loop)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        f"Skill init failed for profile '{profile_name}'"
+                    )
+
+            # 6b. Documentation Search
+            document_service = None
+            try:
+                document_service = DocumentSyncService(
+                    working_dir=Path(BaseConfig.OPENPA_WORKING_DIR),
+                    vector_store=vector_store,
+                    embedding=embedding,
+                )
+                set_document_service(document_service)
+
+                bundled_docs = Path(__file__).resolve().parents[1] / "documents"
+                document_service.seed_shared_from_app(bundled_docs)
+
+                document_service.full_reconcile(SHARED_SCOPE)
+                DocumentWatcher(
+                    scope=SHARED_SCOPE,
+                    directory=document_service.shared_dir(),
+                    sync_service=document_service,
+                ).start()
+
+                for profile_name in known_profiles:
+                    try:
+                        document_service.full_reconcile(profile_name)
+                        DocumentWatcher(
+                            scope=profile_name,
+                            directory=document_service.profile_dir(profile_name),
+                            sync_service=document_service,
+                        ).start()
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            f"Document sync failed for profile '{profile_name}'"
+                        )
+            except Exception:  # noqa: BLE001
+                logger.exception("Documentation Search subsystem failed to initialize")
+
+            # 7. High-group LLM (admin) + OpenPAAgent
+            runner = None
+            if config_storage.is_setup_complete():
+                try:
+                    runner = model_group_mgr.create_llm_for_group("high", profile="admin")
+                except ValueError as e:
+                    logger.warning(f"Failed to create 'high' group LLM: {e}")
+
+            openpa_agent = OpenPAAgent(
+                registry=registry,
+                embedding=embedding,
+                runner=runner,
+                model_group_mgr=model_group_mgr,
+                config_storage=config_storage,
+                vector_store=vector_store,
+                conversation_storage=conversation_storage,
+            )
+
+            # 7b. Eager embedding sync
+            for profile_name in known_profiles:
+                try:
+                    openpa_agent.update_embeddings(profile_name)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        f"Eager embedding sync failed for profile '{profile_name}'"
+                    )
+
+            # 7c. Autostart long-running processes
+            try:
+                asyncio.create_task(run_autostart_on_boot(get_autostart_storage()))
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to schedule autostart run on boot")
+
+            # 7d. Skill event manager
+            try:
+                from app.events import get_event_manager
+                from app.events import runner as event_runner
+
+                event_runner.set_globals(
+                    openpa_agent=openpa_agent,
+                    conversation_storage=conversation_storage,
+                )
+                get_event_manager().start(loop)
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to start skill event manager")
+
+            # 7e. File watcher manager
+            try:
+                from app.events import get_file_watcher_manager
+                get_file_watcher_manager().start(loop)
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to start file watcher manager")
+
+            # 8. Build the real agent executor and the post-setup callback.
+            agent_executor = OpenPAAgentExecutor(
+                openpa_agent, conversation_storage=conversation_storage,
+            )
+
+            async def on_first_setup(profile: str) -> None:
+                # Built-in tools registered at startup may have llm=None.
+                # Rebind and refresh OAuth using the freshly-saved profile
+                # credentials.
+                for tool in registry.all_tools():
+                    if not isinstance(tool, BuiltInToolGroup):
+                        continue
+                    try:
+                        llm = _builtin_llm_factory(tool.config_name, profile)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            f"Could not bind LLM to built-in tool '{tool.name}' "
+                            f"after setup: {e}"
+                        )
+                        continue
+                    tool.update_runtime_config(llm=llm)
+                    try:
+                        refresh_builtin_tool_oauth(
+                            registry, config_manager, tool.tool_id, profile=profile,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            f"OAuth refresh failed for built-in tool '{tool.name}'"
+                        )
+                try:
+                    await initialize_profile_skills(
+                        profile, registry, loop=asyncio.get_running_loop(),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        f"Post-setup skill init failed for profile '{profile}'"
+                    )
+
+                if document_service is not None:
+                    try:
+                        document_service.full_reconcile(profile)
+                        DocumentWatcher(
+                            scope=profile,
+                            directory=document_service.profile_dir(profile),
+                            sync_service=document_service,
+                        ).start()
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            f"Post-setup document sync failed for profile '{profile}'"
+                        )
+
+                openpa_agent.update_embeddings()
+                logger.info("Post-setup: built-in tools rebound and skills synced")
+
+            def _mcp_llm_factory(tool_id: str | None = None, profile: str = "admin"):
+                """Create an LLM for an MCP tool, respecting per-tool overrides."""
+                if tool_id:
+                    try:
+                        _params = config_manager.get_llm_params(tool_id, profile)
+                    except Exception:  # noqa: BLE001
+                        _params = {}
+                    if _params.get("llm_provider") or _params.get("llm_model"):
+                        return create_llm_provider(
+                            provider_name=_params.get("llm_provider") or BaseConfig.get_default_provider(),
+                            model_name=_params.get("llm_model") or None,
+                            config_storage=config_storage,
+                            profile=profile,
+                            default_reasoning_effort=_params.get("reasoning_effort"),
+                        )
+                try:
+                    return model_group_mgr.create_llm_for_group("low", profile=profile)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Failed to create MCP LLM: {e}")
+                    return None
+
+            async def _connect_persisted_tool(tool_id: str) -> tuple[bool, str | None]:
+                return await connect_persisted_tool(registry, model_group_mgr, tool_id)
+
+            # 9. Register post-storage API routes onto the live Starlette
+            #    app. The wizard config routes are already mounted; the
+            #    rest come from ``get_api_routes``.
+            api_routes = get_api_routes(
+                registry=registry,
+                pending_return_urls=_pending_return_urls,
+                mcp_llm_factory=_mcp_llm_factory,
+                conversation_storage=conversation_storage,
+                config_storage=config_storage,
+                connect_persisted_tool=_connect_persisted_tool,
+                drop_profile_embeddings=openpa_agent.drop_profile_embeddings,
+                agent_executor=agent_executor,
+            )
+            app.router.routes.extend(api_routes)
+
+            # 10. Publish into shared state. Order matters: do this BEFORE
+            #     starting channel adapters so any adapter that immediately
+            #     consults ``state`` resolves cleanly.
+            state.config_storage = config_storage
+            state.conversation_storage = conversation_storage
+            state.registry = registry
+            state.config_manager = config_manager
+            state.model_group_mgr = model_group_mgr
+            state.openpa_agent = openpa_agent
+            state.agent_executor = agent_executor
+            state.document_service = document_service
+            state.embedding = embedding
+            state.vector_store = vector_store
+            state.on_first_setup = on_first_setup
+            state.storage_ready = True
+
+            # 11. Start in-process channel adapters for every enabled
+            #     non-main channel. Schema (and auto-created main channels)
+            #     is in place after ``conversation_storage.initialize``.
+            try:
+                from app.channels import get_channel_registry
+                await get_channel_registry(conversation_storage).start_all_enabled()
+            except Exception:  # noqa: BLE001
+                logger.exception("Error starting channel adapters during boot")
+
+            logger.info("OpenPA storage and tools initialized.")
+
+    state.boot_fn = boot_storage_and_post_storage
+
+    # Run the boot now in normal mode; in deferred mode the wizard's
+    # POST /api/config/setup triggers it instead.
+    if bootstrap_exists():
+        await boot_storage_and_post_storage()
+    else:
+        logger.info(
+            "No bootstrap.toml — entering deferred-storage mode. "
+            "The Setup Wizard's POST /api/config/setup will materialise storage."
+        )
+
     config = uvicorn.Config(app, host=host, port=port)
 
     import os
