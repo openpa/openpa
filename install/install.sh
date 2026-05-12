@@ -20,12 +20,16 @@
 #                               (default: prompt; --unattended installs silently).
 #   --no-auto-install-python    Never auto-install; print manual hints and exit.
 #   --no-modify-path            Don't modify shell rc; print the export line instead.
-#   --dev                       Install from the local checkout (developer mode).
-#                               Requires running this script from a clone of the
-#                               repo; rejected when piped via curl. Works with
-#                               both --mode native and --mode docker (the
-#                               compose override bind-mounts the checkout
-#                               at /src for an editable install).
+#   --channel production|test|dev
+#                               Install source. 'production' (default) pulls
+#                               from PyPI. 'test' pulls the latest .devN wheel
+#                               from Test PyPI for release-candidate
+#                               validation. 'dev' pip-installs the local
+#                               checkout in editable mode — requires running
+#                               this script from a clone of the repo; rejected
+#                               when piped via curl. 'dev' works with both
+#                               --mode native and --mode docker (the compose
+#                               override bind-mounts the checkout at /src).
 #   --help                      Show this message.
 #
 # This is the Phase 2 installer: native install only. Docker mode is
@@ -54,20 +58,17 @@ err()   { printf '%sERR%s %s\n' "$RED$BOLD" "$RESET" "$1" >&2; }
 ok()    { printf '%s ✓%s  %s\n' "$GREEN$BOLD" "$RESET" "$1"; }
 step()  { printf '\n%s── %s ──%s\n' "$BOLD" "$1" "$RESET"; }
 
-# ── channel (hidden) ──────────────────────────────────────────────────────
+# ── channel ───────────────────────────────────────────────────────────────
 #
-# OPENPA_INSTALL_CHANNEL / --channel is intentionally absent from --help.
-# It controls the install source:
+# Install source. See --help for the user-facing description.
 #   production (default) — pip install openpa from PyPI
-#   test                 — install latest dev wheel from Test PyPI
+#   test                 — install latest .devN wheel from Test PyPI
 #   dev                  — pip install -e <repo_root> (local checkout)
-# End users never set this; CI/maintainers pass --channel test; developers
-# pass --dev, which is just a visible alias that sets CHANNEL=dev.
-CHANNEL="${OPENPA_INSTALL_CHANNEL:-production}"
+CHANNEL="production"
 
 # REPO_ROOT is the repo containing this script. Required for dev mode (we
 # install from there and read templates from there). Empty when piped via
-# curl — the dev-mode check below uses that to reject `curl | bash -s -- --dev`.
+# curl — the dev-mode check below uses that to reject `curl | bash -s -- --channel dev`.
 REPO_ROOT=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
     REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
@@ -103,7 +104,6 @@ while [ $# -gt 0 ]; do
         --no-modify-path)         MODIFY_PATH=0; shift ;;
         --channel)                CHANNEL="$2"; shift 2 ;;
         --channel=*)              CHANNEL="${1#*=}"; shift ;;
-        --dev)                    CHANNEL="dev"; shift ;;
         --help|-h)
             sed -n '1,/^set -e/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^set -e/d'
             exit 0
@@ -124,8 +124,8 @@ esac
 
 if [ "$CHANNEL" = "dev" ]; then
     if [ -z "$REPO_ROOT" ] || [ ! -f "$REPO_ROOT/pyproject.toml" ]; then
-        err "--dev requires running install.sh from a checkout (not piped via curl)."
-        err "Usage: bash <repo>/install/install.sh --dev"
+        err "--channel dev requires running install.sh from a checkout (not piped via curl)."
+        err "Usage: bash <repo>/install/install.sh --channel dev"
         exit 2
     fi
 fi

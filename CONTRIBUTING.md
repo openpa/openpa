@@ -82,6 +82,42 @@ backend at `:1112` — you don't need to set `VITE_AGENT_URL`.
 | Single-port end-to-end smoke (no HMR) | `bash scripts/build_ui.sh ; uv run openpa serve`. The SPA gets bundled into `app/static/ui/`, served on `:1515` by the backend. Use for pre-release verification, not active dev. |
 | Electron desktop dev | `cd ui ; npm run dev`. Wraps the SPA in an Electron window. Talks to the backend URL from `~/.openpa-ui/openpa-config.json`. |
 
+## Installing your checkout via the installer scripts
+
+The two-terminal flow above is the fastest dev loop. If you want to
+exercise the actual installer scripts users will run — to test changes
+to `install/install.sh` or `install/install.ps1`, or to bring up the
+full Docker bundle with Postgres + Qdrant against your checkout — pass
+`--channel dev` (Linux/macOS) or `-Channel dev` (Windows):
+
+```bash
+bash install/install.sh --channel dev --deployment local
+```
+
+```powershell
+.\install\install.ps1 -Channel dev -Deployment local
+```
+
+Dev channel skips PyPI and runs `pip install -e .` against your
+checkout. Templates (`local.env`, `docker-compose.yml.tmpl`, …) come
+from the checkout's `install/templates/`, not GitHub.
+
+Caveats:
+
+- The wizard at `http://localhost:1515` needs `app/static/ui/`
+  populated. Run `bash scripts/build_ui.sh` once before `--channel dev`
+  so the SPA listener comes up.
+- `--channel dev` requires running the script *from* a checkout —
+  piping it via `curl | bash` (no file on disk) is rejected.
+- `--channel dev --mode docker` works: the installer emits a
+  `docker-compose.override.yml` that points the build context at the
+  checkout, swaps the pip install for `-e /src`, and bind-mounts the
+  checkout into the container. Host edits to `app/` show up after
+  `docker compose restart openpa`.
+- `OPENPA_UPGRADE_CHANNEL` is intentionally not written to `.env` in
+  dev channel. Don't run `openpa upgrade` from a dev install — pull
+  from git instead.
+
 ## Gotchas
 
 - **First page load after `setup`**: the SPA on `:1515` may show the

@@ -41,15 +41,18 @@
 .PARAMETER NoModifyPath
     Don't modify the User-scope PATH; print the manual setx instead.
 
-.PARAMETER Dev
-    Install from the local checkout (developer mode). Requires running
-    this script from a clone of the repo; rejected when piped via iwr|iex.
-    Works with both -Mode native (pip install -e from the checkout) and
-    -Mode docker (compose override bind-mounts the checkout at /src).
+.PARAMETER Channel
+    Install source: 'production' (PyPI, default), 'test' (Test PyPI, for
+    release-candidate validation), or 'dev' (pip install -e from the local
+    checkout). 'dev' requires running this script from a clone of the
+    repo; rejected when piped via iwr|iex. 'dev' works with both -Mode
+    native (reuses <repo>\.venv) and -Mode docker (compose override
+    bind-mounts the checkout at /src).
 #>
 
 [CmdletBinding()]
 param(
+    [ValidateSet('production','test','dev')] [string] $Channel = 'production',
     [ValidateSet('local','server','container')] [string] $Deployment = '',
     [string] $AppHost = '',
     [ValidateSet('','docker','native')] [string] $Mode = '',
@@ -59,36 +62,14 @@ param(
     [switch] $AutoInstallPython,
     [switch] $NoAutoInstallPython,
     [switch] $ModifyPath,
-    [switch] $NoModifyPath,
-    [switch] $Dev
+    [switch] $NoModifyPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# ── channel resolution (hidden) ──────────────────────────────────────────
-#
-# The install source is one of production / test / dev. End users never
-# set this; CI/maintainers set $env:OPENPA_INSTALL_CHANNEL='test' before
-# invoking the installer. -Dev is the visible alias that overrides any
-# env-var setting and forces channel=dev.
-#
-# Note: bash exposes a hidden --channel CLI flag, but PowerShell can't
-# truly hide a param() entry from Get-Help (DontShow only suppresses
-# IntelliSense, not the help system on PS 5.1). We therefore drop the PS
-# flag entirely and route through the env var, which keeps PS Get-Help
-# clean of internal-only knobs.
-if ($Dev) {
-    $Channel = 'dev'
-} elseif ($env:OPENPA_INSTALL_CHANNEL) {
-    $Channel = $env:OPENPA_INSTALL_CHANNEL
-} else {
-    $Channel = 'production'
-}
-if ($Channel -notin @('production','test','dev')) {
-    Write-Host "ERR Invalid OPENPA_INSTALL_CHANNEL: $Channel (must be production, test, or dev)" -ForegroundColor Red
-    exit 2
-}
+# Channel is validated by the param()'s ValidateSet attribute; reaching
+# this point implies $Channel is one of production / test / dev.
 
 # RepoRoot is the repo containing this script. Required for dev mode (we
 # install from there and read templates from there). Empty when piped via
@@ -99,8 +80,8 @@ if ($PSCommandPath) {
 }
 if ($Channel -eq 'dev') {
     if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot 'pyproject.toml'))) {
-        Write-Host "ERR -Dev requires running install.ps1 from a checkout (not via iwr|iex)." -ForegroundColor Red
-        Write-Host "    Usage: .\install\install.ps1 -Dev" -ForegroundColor Red
+        Write-Host "ERR -Channel dev requires running install.ps1 from a checkout (not via iwr|iex)." -ForegroundColor Red
+        Write-Host "    Usage: .\install\install.ps1 -Channel dev" -ForegroundColor Red
         exit 2
     }
 }

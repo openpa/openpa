@@ -311,8 +311,8 @@ type InstallerEnvironment = {
   recommendedMode: 'docker' | 'native'
   // Baked-in install channel. The renderer uses this to disable mode
   // options that aren't supported on the current channel (e.g. docker
-  // is rejected under --dev because the Dockerfile would need a
-  // source-COPY path; see install.sh's --dev guard).
+  // is rejected under --channel dev because the Dockerfile would need
+  // a source-COPY path; see install.sh's dev-channel guard).
   channel: 'production' | 'test' | 'dev'
 }
 
@@ -414,10 +414,10 @@ async function runInstaller(
   // Resolve which install script to run.
   //
   // - Dev channel: use the local checkout's install/install.sh|ps1
-  //   directly. ``--dev`` requires running from a checkout (the script
-  //   refuses curl-pipe invocations), and ``npm run dev`` only ever
-  //   runs out of the source tree so the path resolves to the working
-  //   copy.
+  //   directly. ``--channel dev`` requires running from a checkout (the
+  //   script refuses curl-pipe invocations), and ``npm run dev`` only
+  //   ever runs out of the source tree so the path resolves to the
+  //   working copy.
   // - Test / production: download from INSTALLER_SCRIPT_BASE. Re-running
   //   on every install picks up upstream fixes without an Electron app
   //   update.
@@ -455,15 +455,11 @@ async function runInstaller(
   ]
   if (payload.appHost) args.push('--host', payload.appHost)
 
-  // Channel routing. Dev gets the visible --dev/-Dev switch (which also
-  // implies --mode native; the dev channel + docker combo is rejected
-  // by the script). Test passes the hidden --channel test flag on bash;
-  // on PowerShell the test channel travels via $env:OPENPA_INSTALL_CHANNEL
-  // because PS can't truly hide a param() entry from Get-Help.
-  if (INSTALL_CHANNEL === 'dev') {
-    args.push('--dev')
-  } else if (INSTALL_CHANNEL === 'test' && !isWindows) {
-    args.push('--channel', 'test')
+  // Channel routing — both shells accept --channel / -Channel. Production
+  // is the default in both installers, so only forward non-production
+  // channels to keep the spawn args minimal.
+  if (INSTALL_CHANNEL !== 'production') {
+    args.push('--channel', INSTALL_CHANNEL)
   }
 
   let cmd: string
@@ -478,7 +474,7 @@ async function runInstaller(
       if (a === '--mode')       return ['-Mode']
       if (a === '--unattended') return ['-Unattended']
       if (a === '--no-launch')  return ['-NoLaunch']
-      if (a === '--dev')        return ['-Dev']
+      if (a === '--channel')    return ['-Channel']
       return [a]
     })
     cmdArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...psArgs]
@@ -499,10 +495,6 @@ async function runInstaller(
         // Preserve any custom template/script base the user set, so
         // staging installs can be tested end-to-end from the GUI.
         OPENPA_TEMPLATE_BASE: process.env.OPENPA_TEMPLATE_BASE ?? `${INSTALLER_SCRIPT_BASE}/templates`,
-        // PS test channel: -Channel was removed from param() so the only
-        // way to activate it on Windows is the env var. Pass it through
-        // for both bash (harmless; --channel flag wins) and PS.
-        ...(INSTALL_CHANNEL === 'test' ? { OPENPA_INSTALL_CHANNEL: 'test' } : {}),
         // Tell the script the install is being driven by the Electron
         // app so it suppresses the "Wizard URL: …" handoff text. The
         // Electron app navigates to the in-window wizard itself once

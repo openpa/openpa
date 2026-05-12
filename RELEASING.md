@@ -78,11 +78,34 @@ A release cycle covers ONE version. It starts when you decide to ship
    wheel as `0.1.8.dev1`, publishes to Test PyPI, attaches a GitHub
    prerelease.
 
-3. **Verify.** Install from Test PyPI, run, exercise the change:
+3. **Verify.** Install from Test PyPI, run, exercise the change. Two
+   options depending on how much of the install path you want to
+   exercise:
 
-   ```powershell
-   pip install --index-url https://test.pypi.org/simple/ --pre openpa==0.1.8.dev1
-   ```
+   - **Direct pip** (quickest, skips the installer scripts):
+
+     ```powershell
+     pip install --index-url https://test.pypi.org/simple/ --pre openpa==0.1.8.dev1
+     ```
+
+   - **Through the installer scripts** (covers the path end users will
+     take when the wheel is promoted to prod):
+
+     ```bash
+     bash install/install.sh --channel test --deployment local
+     ```
+
+     ```powershell
+     .\install\install.ps1 -Channel test -Deployment local
+     ```
+
+     The installer locates the latest `.devN` wheel on Test PyPI,
+     installs it into `~/.openpa/venv` (or builds the Docker bundle
+     with Test-PyPI indexes if you pass `--mode docker`), and stamps
+     `OPENPA_UPGRADE_CHANNEL=test` into `~/.openpa/.env` so the
+     upgrader queries the right channel. By default the test install
+     shares `~/.openpa` with prod — set
+     `OPENPA_WORKING_DIR=~/.openpa-test` to keep them side-by-side.
 
 4. **Iterate.** Bugs found? Fix on `main`, push fixes, then tag the next
    iteration on the new `HEAD`:
