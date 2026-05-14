@@ -271,6 +271,30 @@ jobs:
           echo "::error::Test PyPI never served openpa==${VERSION} after 150s"
           exit 1
 
+      # Resolve the openpa wheel to a direct URL so pip installs it without
+      # consulting Test PyPI as a resolver. Test PyPI is a public free-for-all
+      # polluted with broken stubs (e.g. ``FASTAPI-1.0.tar.gz``, a 2.5 KB
+      # setup.py with a missing ``DESCRIPTION.txt`` that satisfies
+      # ``fastapi>=0.115.2`` and crashes the setuptools build) and stale
+      # pre-releases (``httpx-1.0.dev3`` outranking prod's stable 0.28 once
+      # ``--pre`` is on). Pinning openpa by URL sidesteps both: pip pulls the
+      # wheel directly and resolves all transitive deps from default PyPI.
+      # Same pattern install/install.sh uses for the native test installer.
+      - name: Resolve Test PyPI wheel URL for openpa==${{ needs.wheel.outputs.version }}
+        id: wheel_url
+        env:
+          VERSION: ${{ needs.wheel.outputs.version }}
+        run: |
+          URL=$(curl -fsSL https://test.pypi.org/simple/openpa/ \
+            | grep -oE "https://[^\"]*openpa-${VERSION}-py3-none-any\.whl" \
+            | head -n 1)
+          if [ -z "$URL" ]; then
+            echo "::error::No wheel for openpa==${VERSION} on Test PyPI"
+            exit 1
+          fi
+          echo "Resolved: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
       - name: Build & push openpa/openpa-desktop (test)
         uses: docker/build-push-action@v6
         with:
@@ -281,8 +305,6 @@ jobs:
           provenance: false
           tags: openpa/openpa-desktop:${{ needs.wheel.outputs.version }}
           build-args: |
-            OPENPA_PIP_SPEC=openpa==${{ needs.wheel.outputs.version }}
-            OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/
-            OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/
+            OPENPA_PIP_SPEC=${{ steps.wheel_url.outputs.url }}
           cache-from: type=gha,scope=desktop
           cache-to: type=gha,scope=desktop,mode=max
