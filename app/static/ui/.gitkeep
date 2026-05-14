@@ -1,5 +1,0 @@
-# Placeholder so this directory exists before scripts/build_ui.sh runs.
-# After ``hatch build``, the wheel includes everything under app/static/
-# automatically (hatchling's ``packages = ["app"]`` setting), so the
-# generated SPA files ship alongside the Python code without further
-# pyproject.toml changes.

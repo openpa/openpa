@@ -9,12 +9,14 @@ This is the in-process replacement for MCPAgentAdapter (which routes through
 MCP stdio transport). The event stream produced is identical.
 """
 
+from __future__ import annotations
+
 import asyncio
 import copy
 import json
 import os
 import uuid
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from a2a.types import (
     AgentCapabilities,
@@ -33,7 +35,12 @@ from a2a.types import (
     TaskStatusUpdateEvent,
     TextPart,
 )
-from openai.types.chat import ChatCompletionMessageParam
+
+# OpenAI types are used only in PEP 563-stringified annotations; keep
+# them under TYPE_CHECKING so the built-in tool adapter loads without
+# the ``llm-openai`` extras group installed.
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 from app.config.settings import BaseConfig, get_user_working_directory
 from app.constants import ChatCompletionTypeEnum

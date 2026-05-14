@@ -50,6 +50,17 @@ export function getAgentUrl(): string {
 export async function setAgentUrl(url: string): Promise<void> {
   if (window.openpa) {
     await window.openpa.setConfig({ agentUrl: url })
+    // ``window.openpa.config`` is the snapshot the preload script
+    // captured synchronously at module init; the IPC above persists to
+    // disk and updates the *main* process's cache, but never refreshes
+    // the renderer's copy. Without this mirror, ``getAgentUrl()`` (and
+    // anything routed through it — ``a2aClient.getBaseUrl``,
+    // ``getApiOrigin``) keeps returning the stale value for the rest
+    // of the session, producing ``Invalid base URL`` from the A2A SDK
+    // the next time it tries to build a request.
+    if (window.openpa.config) {
+      window.openpa.config.agentUrl = url
+    }
   }
   // Web build has no persistent runtime store. The renderer keeps the
   // value in its own state for the session; on next reload it falls back
@@ -57,6 +68,6 @@ export async function setAgentUrl(url: string): Promise<void> {
   // operators set the URL at deploy time.
 }
 
-export function getDeploymentType(): 'local' | 'server' | '' {
+export function getDeploymentType(): 'local' | 'server' | 'custom' | '' {
   return window.openpa?.config?.deploymentType ?? ''
 }

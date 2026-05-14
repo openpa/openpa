@@ -50,6 +50,10 @@ from app.agent.agent import OpenPAAgent
 from app.agent.executor import OpenPAAgentExecutor
 from app.api import get_api_routes
 from app.api.config import get_config_routes
+from app.api.features import get_features_routes
+from app.api.llm import get_llm_routes
+from app.api.setup_stream import get_setup_stream_routes
+from app.api.tools import get_tool_routes
 from app.api.upgrade import get_upgrade_routes
 from app.api.version import get_version_routes
 from app.config.bootstrap import bootstrap_exists
@@ -472,9 +476,17 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # Always-available pre-storage routes. The wizard endpoints in
     # ``get_config_routes`` self-gate on ``state.storage_ready`` and the
     # ``POST /api/config/setup`` handler triggers the deferred boot.
+    # ``get_llm_routes`` and ``get_tool_routes`` resolve their dependencies
+    # (config_storage, registry, connect_persisted_tool) through ``state``
+    # at request time, so the same registration serves the Setup Wizard
+    # (registry=None → catalog-only) and the post-boot UI seamlessly.
     routes.extend(get_version_routes())
     routes.extend(get_upgrade_routes())
+    routes.extend(get_features_routes())
     routes.extend(get_config_routes(state))
+    routes.extend(get_llm_routes(state))
+    routes.extend(get_tool_routes(state))
+    routes.extend(get_setup_stream_routes())
 
     middleware_stack = [
         Middleware(
@@ -628,6 +640,10 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                     )
 
             # 6b. Documentation Search
+            #
+            # The reconcile step embeds existing ``.md`` files; the watcher
+            # picks up live edits. They're independent — the reconcile is
+            # synchronous and the watcher arms after it returns.
             document_service = None
             try:
                 document_service = DocumentSyncService(
@@ -650,6 +666,11 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                 for profile_name in known_profiles:
                     try:
                         document_service.full_reconcile(profile_name)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            f"Document reconcile failed for profile '{profile_name}'"
+                        )
+                    try:
                         DocumentWatcher(
                             scope=profile_name,
                             directory=document_service.profile_dir(profile_name),
@@ -657,7 +678,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                         ).start()
                     except Exception:  # noqa: BLE001
                         logger.exception(
-                            f"Document sync failed for profile '{profile_name}'"
+                            f"Document watcher failed for profile '{profile_name}'"
                         )
             except Exception:  # noqa: BLE001
                 logger.exception("Documentation Search subsystem failed to initialize")
@@ -756,6 +777,11 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                 if document_service is not None:
                     try:
                         document_service.full_reconcile(profile)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            f"Post-setup document reconcile failed for profile '{profile}'"
+                        )
+                    try:
                         DocumentWatcher(
                             scope=profile,
                             directory=document_service.profile_dir(profile),
@@ -763,7 +789,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                         ).start()
                     except Exception:  # noqa: BLE001
                         logger.exception(
-                            f"Post-setup document sync failed for profile '{profile}'"
+                            f"Post-setup document watcher failed for profile '{profile}'"
                         )
 
                 openpa_agent.update_embeddings()
@@ -822,6 +848,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             state.embedding = embedding
             state.vector_store = vector_store
             state.on_first_setup = on_first_setup
+            state.connect_persisted_tool = _connect_persisted_tool
             state.storage_ready = True
 
             # 11. Start in-process channel adapters for every enabled

@@ -21,11 +21,16 @@ import os
 import platform
 import uuid
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, Tuple, cast
 
 import jsonschema
-from openai.types.chat import ChatCompletionMessageParam
-from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
+
+# OpenAI SDK lives in the ``llm-openai`` extras group. Its types are
+# referenced only in PEP 563-stringified annotations here, so importing
+# under TYPE_CHECKING keeps the agent loadable on a thin-core install.
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
+    from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 
 from a2a.types import Part, TextPart
 

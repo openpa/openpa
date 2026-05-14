@@ -1,13 +1,14 @@
+from __future__ import annotations
+
 from enum import Enum
 from typing import Any, Dict, Optional, TypedDict, Required, NotRequired, TYPE_CHECKING
-
-import pandas as pd
 
 from a2a.types import (
     AgentCard
 )
 
 if TYPE_CHECKING:
+    import pandas as pd
     from app.tools.a2a import RemoteAgentConnections
 
 from app.constants import ChatCompletionTypeEnum

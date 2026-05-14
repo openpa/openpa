@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import time
 from pathlib import Path
 
 import jwt
@@ -16,7 +17,12 @@ from starlette.routing import Route
 from app.api._auth import require_admin
 from app.config.bootstrap import bootstrap_exists, write_bootstrap
 from app.config.settings import BaseConfig, set_dynamic_config_storage
+from app.config.install_catalog import (
+    get_active_install_mode,
+    load_install_catalog,
+)
 from app.config.setup_profiles import get_active_setup_profile_id, list_setup_profiles
+from app.events.setup_progress_bus import publish_setup_event
 from app.runtime import BootedState, get_state
 from app.storage import (
     get_conversation_storage,
@@ -40,6 +46,24 @@ _BOOTSTRAP_ONLY_KEYS = {"db_provider", "postgres"}
 PROFILE_NAME_PATTERN = re.compile(r'^[a-z0-9_-]+$')
 
 
+def _emit_setup(step: str, message: str, level: str = "info") -> None:
+    """Publish one progress entry for the Setup Wizard live-log stream.
+
+    Never raises — a broken bus must not break setup. ``level`` is one of
+    ``info`` / ``success`` / ``warning`` / ``error``; the UI uses it to
+    colour the log line.
+    """
+    try:
+        publish_setup_event({
+            "step": step,
+            "message": message,
+            "level": level,
+            "ts": time.time(),
+        })
+    except Exception:  # noqa: BLE001
+        logger.debug("setup-progress emit failed", exc_info=True)
+
+
 
 def _validate_profile_name(name: str) -> str | None:
     """Validate profile name. Returns error message or None if valid."""
@@ -50,6 +74,199 @@ def _validate_profile_name(name: str) -> str | None:
     if len(name) > 64:
         return "Profile name must be 64 characters or less"
     return None
+
+
+def _features_required_by_setup_payload(body: dict) -> list[str]:
+    """Map a wizard payload to the feature keys whose deps it implies.
+
+    Used by :func:`handle_setup` to install only the extras groups the
+    user actually opted into — vector embedding deps stay off disk for
+    an LLM-only install, Postgres deps stay off for a SQLite install,
+    etc.
+    """
+    from app.features.manifest import FEATURES, LLM_PROVIDER_TO_FEATURE
+
+    features: list[str] = []
+
+    server_config = body.get("server_config") or {}
+    if str(server_config.get("db_provider", "")).lower() == "postgres":
+        features.append("postgres")
+
+    emb = body.get("embedding_config") or {}
+    if emb.get("enabled"):
+        provider = str(emb.get("provider") or "me5").lower()
+        feature_key = f"embedding.{provider}"
+        if feature_key in FEATURES:
+            features.append(feature_key)
+        vs = (emb.get("vectorstore") or {})
+        vs_provider = str(vs.get("provider") or "qdrant").lower()
+        vs_key = f"vectorstore.{vs_provider}"
+        if vs_key in FEATURES:
+            features.append(vs_key)
+
+    # LLM provider keys appear as ``<provider>.api_key`` /
+    # ``<provider>.auth_method`` / etc. in the flat llm_config dict, plus
+    # often as ``provider`` -> ``<name>`` somewhere. Derive the provider
+    # set by collecting the prefix of any key with a ``.`` separator.
+    llm_config = body.get("llm_config") or {}
+    providers_in_use: set[str] = set()
+    for key in llm_config.keys():
+        if "." in key:
+            providers_in_use.add(key.split(".", 1)[0].lower())
+    for provider in providers_in_use:
+        feature = LLM_PROVIDER_TO_FEATURE.get(provider)
+        if feature is None:
+            # Generic OpenAI-compatible third-parties (chutes, deepseek,
+            # mistral, ...). They all use the openai SDK so the
+            # ``llm-openai`` group is the right one to install.
+            feature = "llm.openai_compatible"
+        if feature in FEATURES:
+            features.append(feature)
+
+    # Channel adapters declared in the wizard.
+    for entry in (body.get("channel_configs") or []):
+        if not isinstance(entry, dict):
+            continue
+        ch_type = str(entry.get("channel_type", "")).lower()
+        mode = str(entry.get("mode") or "").lower()
+        if ch_type == "telegram":
+            key = "channel.telegram.userbot" if mode == "userbot" else "channel.telegram.bot"
+            if key in FEATURES:
+                features.append(key)
+
+    # De-dupe while preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for k in features:
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
+
+class _ProvisionFailed(Exception):
+    """Internal: surfaces a provisioner error as a 400 in :func:`handle_setup`.
+
+    We re-raise :class:`ProvisionError` as this thinner type so the
+    setup handler can write a single try/except around all of its
+    pre-persist provisioning without dragging service-internal types
+    into the wizard's error path.
+    """
+
+
+def _reject_external_in_docker_install(service_id: str) -> str | None:
+    """Backend-side enforcement of the Docker-install policy.
+
+    The :func:`get_service_capabilities` endpoint filters External out
+    of every service that supports Docker mode when the install can
+    drive ``docker compose``. The Setup Wizard's UI honours that, but a
+    hand-crafted submission could still try External. Reject those
+    explicitly so the failure mode is "wizard says no", not "OpenPA
+    tries to connect to a localhost Postgres that doesn't exist."
+
+    Returns an error message string to send back as a 400, or ``None``
+    if the submission is allowed.
+    """
+    from app.services.manifest import get_service
+    from app.services.provisioner import docker_available
+
+    if not docker_available():
+        return None
+    try:
+        spec = get_service(service_id)
+    except KeyError:
+        return None
+    if "docker" not in spec.supported_modes:
+        return None
+    return (
+        f"This install runs OpenPA in Docker, so {spec.display_name} "
+        "is provisioned by OpenPA — External mode is not offered here. "
+        "Pick Docker (or Native if the service supports it) in the wizard."
+    )
+
+
+async def _resolve_vectorstore(embedding_body: dict) -> dict:
+    """Run the vectorstore provisioner and return a ready-to-persist body.
+
+    The wizard sends ``embedding_config`` with a per-provider
+    ``deployment_mode``:
+
+    - ``docker`` / ``native`` → call the provisioner so the service is
+      up before we even validate the connection. The returned
+      :attr:`ProvisionedService.connection` is merged into the provider
+      block so :func:`persist_embedding_config` gets the *effective*
+      host/port/persist_path (not whatever the wizard form happened to
+      hold for fields the user didn't fill in).
+    - ``external`` → no provisioning; the existing path-through-to-
+      ``persist_embedding_config`` validates required fields.
+
+    Embedding-disabled or missing-vectorstore payloads pass through
+    unchanged.
+
+    Re-raises :class:`ProvisionError` as :class:`_ProvisionFailed` so
+    the caller can write a uniform 400 handler without importing
+    service-internal types.
+    """
+    from app.services.manifest import SERVICES
+    from app.services.provisioner import ProvisionError, provision
+
+    if not embedding_body.get("enabled"):
+        return embedding_body
+    vs_in = embedding_body.get("vectorstore") or {}
+    provider = (vs_in.get("provider") or "").strip().lower()
+    if provider not in SERVICES:
+        # Unknown / unset provider — let persist_embedding_config raise
+        # the usual ValueError so the wizard's existing 400 fires.
+        return embedding_body
+
+    # The wizard nests per-provider details under ``vectorstore[<provider>]``;
+    # the deployment_mode lives there. Fall back to ``external`` so
+    # legacy payloads (without deployment_mode) keep working as before.
+    provider_block = dict(vs_in.get(provider) or {})
+    deployment_mode = (provider_block.get("deployment_mode") or "external").strip().lower()
+
+    if deployment_mode == "external":
+        # Docker-install policy: External is hidden from the wizard for
+        # any service that supports Docker mode. Reject a hand-crafted
+        # submission too.
+        err = _reject_external_in_docker_install(provider)
+        if err is not None:
+            raise _ProvisionFailed(err)
+        # Stamp the mode so persist_embedding_config can record it for
+        # the UI's roundtrip; nothing to provision.
+        provider_block["deployment_mode"] = "external"
+        _emit_setup(
+            "vectorstore",
+            f"Using external {provider.capitalize()} (no provisioning).",
+        )
+    else:
+        _emit_setup(
+            "vectorstore",
+            f"Provisioning {provider.capitalize()} ({deployment_mode} mode)…",
+        )
+        try:
+            provisioned = await provision(provider, deployment_mode, provider_block)
+        except ProvisionError as exc:
+            _emit_setup(
+                "vectorstore",
+                f"{provider.capitalize()} provisioning failed: {exc}",
+                level="error",
+            )
+            raise _ProvisionFailed(str(exc)) from exc
+        provider_block.update(provisioned.connection)
+        provider_block["deployment_mode"] = deployment_mode
+        _emit_setup(
+            "vectorstore",
+            f"{provider.capitalize()} ready.",
+            level="success",
+        )
+
+    new_vs = dict(vs_in)
+    new_vs[provider] = provider_block
+    new_vs["deployment_mode"] = deployment_mode
+    new_body = dict(embedding_body)
+    new_body["vectorstore"] = new_vs
+    return new_body
 
 
 def _generate_token(jwt_secret: str, profile: str, hours: int | None = None) -> tuple[str, str]:
@@ -90,6 +307,31 @@ def get_config_routes(state: BootedState) -> list[Route]:
                 {"error": "Setup is not complete"}, status_code=503,
             )
         return None
+
+    async def handle_install_catalog(request: Request) -> JSONResponse:
+        """Return the install/setup catalog plus the active install mode.
+
+        Public (pre-auth) so the Setup Wizard can render its installer
+        stage and the service-mode radios without holding a token. The
+        payload is purely descriptive — labels, descriptions, and the
+        mode-rule visibility table; no secrets or runtime state.
+
+        ``active_install_mode`` reflects the ``INSTALL_MODE`` env var
+        written by the installer. ``null`` means the variable is unset
+        or names an unknown mode, in which case service-mode filtering
+        becomes a no-op.
+        """
+        try:
+            catalog = load_install_catalog()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed to load install catalog: {exc}")
+            catalog = {}
+        try:
+            active = get_active_install_mode()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed to resolve active install mode: {exc}")
+            active = None
+        return JSONResponse({"catalog": catalog, "active_install_mode": active})
 
     async def handle_setup_profiles(request: Request) -> JSONResponse:
         """Return the wizard's environment-preset catalogue plus the active id.
@@ -158,27 +400,34 @@ def get_config_routes(state: BootedState) -> list[Route]:
         """Validate the wizard's ``db_provider`` choice and write bootstrap.toml.
 
         Returns ``None`` on success or an error string for the caller to
-        surface as a 400 response. Three cases:
+        surface as a 400 response. Cases:
 
-        - ``bootstrap.toml`` already exists: the provider choice is locked.
-          Silently drop any disagreement in the body. The wizard UI hides
-          the field after first setup, but treat the server as authoritative.
-        - ``db_provider=sqlite`` (or missing): just write bootstrap.toml and
-          rebuild the singleton from it. No connection to validate.
-        - ``db_provider=postgres``: build a candidate provider, verify the
-          connection, then write bootstrap.toml. Only persist if validation
-          passed — a failed Postgres check must leave the working dir
-          untouched so the next attempt re-enters deferred mode cleanly.
+        - ``bootstrap.toml`` already exists → choice is locked. Silently
+          drop any disagreement in the body (the wizard UI hides the
+          field after first setup; treat the server as authoritative).
+        - ``db_provider=sqlite`` → write bootstrap.toml. No connection to
+          validate. ``deployment_mode`` is ignored — SQLite is always
+          local.
+        - ``db_provider=postgres`` with ``deployment_mode=docker`` →
+          provision the bundled compose service (starts the container,
+          waits for readiness), then validate the connection against
+          the now-running instance.
+        - ``db_provider=postgres`` with ``deployment_mode=external`` (or
+          omitted) → validate the user-supplied connection details.
 
-        Storage initialization (migrations, tool persistence, agent build)
-        is the caller's job — see :func:`handle_setup`, which invokes
-        ``state.boot_fn`` after this returns.
+        Only persist after validation; a failed health-check must leave
+        the working dir untouched so the next attempt re-enters
+        deferred-storage mode cleanly. Storage initialisation
+        (migrations, tool persistence, agent build) is the caller's
+        job — see :func:`handle_setup`, which invokes ``state.boot_fn``
+        after this returns.
         """
         from app.databases import (
             create_database_provider,
             set_database_provider,
         )
         from app.databases.postgres import PostgresDatabaseProvider
+        from app.services.provisioner import ProvisionError, provision
 
         requested = (server_config.get("db_provider") or "sqlite").strip().lower()
         if requested not in ("sqlite", "postgres"):
@@ -189,15 +438,47 @@ def get_config_routes(state: BootedState) -> list[Route]:
             # Choice is locked; silently ignore any disagreement.
             return None
 
-        if requested == "postgres":
-            pg_in = server_config.get("postgres") or {}
-            required = ("host", "database", "user")
-            missing = [k for k in required if not pg_in.get(k)]
-            if missing:
-                return f"Postgres connection requires: {', '.join(missing)}"
+        _emit_setup("database", f"Configuring database backend: {requested}…")
 
-            # Validate the connection BEFORE touching the working dir, so
-            # a failed Postgres check leaves bootstrap.toml unchanged.
+        if requested == "postgres":
+            pg_in = dict(server_config.get("postgres") or {})
+            deployment_mode = (pg_in.get("deployment_mode") or "external").strip().lower()
+
+            if deployment_mode == "docker":
+                _emit_setup(
+                    "database",
+                    "Starting PostgreSQL container (docker compose)…",
+                )
+                # Provisioner brings up the container, returns the
+                # in-network connection (host=postgres, port=5432) plus
+                # the resolved credentials (generated if missing).
+                try:
+                    provisioned = await provision("postgres", "docker", pg_in)
+                except ProvisionError as exc:
+                    return f"Could not start PostgreSQL container: {exc}"
+                pg_in.update(provisioned.connection)
+                pg_in.setdefault("sslmode", "disable")
+            elif deployment_mode == "external":
+                policy_err = _reject_external_in_docker_install("postgres")
+                if policy_err is not None:
+                    return policy_err
+                required = ("host", "database", "user")
+                missing = [k for k in required if not pg_in.get(k)]
+                if missing:
+                    return (
+                        f"Postgres (external) connection requires: "
+                        f"{', '.join(missing)}"
+                    )
+            else:
+                return (
+                    f"Unsupported deployment_mode for PostgreSQL: "
+                    f"{deployment_mode!r} (must be 'docker' or 'external')"
+                )
+
+            _emit_setup(
+                "database",
+                f"Validating PostgreSQL connection at {pg_in['host']}:{pg_in.get('port') or 5432}…",
+            )
             candidate = PostgresDatabaseProvider(
                 host=pg_in["host"],
                 port=int(pg_in.get("port") or 5432),
@@ -210,12 +491,19 @@ def get_config_routes(state: BootedState) -> list[Route]:
                 await candidate.health_check()
             except Exception as exc:  # noqa: BLE001
                 await candidate.dispose()
+                _emit_setup(
+                    "database",
+                    f"PostgreSQL health-check failed: {exc}",
+                    level="error",
+                )
                 return f"Could not connect to PostgreSQL: {exc}"
             await candidate.dispose()
+            _emit_setup("database", "PostgreSQL reachable.", level="success")
 
             write_bootstrap({
                 "db_provider": "postgres",
                 "postgres": {
+                    "deployment_mode": deployment_mode,
                     "host": pg_in["host"],
                     "port": int(pg_in.get("port") or 5432),
                     "database": pg_in["database"],
@@ -227,6 +515,8 @@ def get_config_routes(state: BootedState) -> list[Route]:
         else:
             # SQLite path: nothing to validate, just lock in the choice.
             write_bootstrap({"db_provider": "sqlite"})
+
+        _emit_setup("database", "Writing bootstrap.toml…")
 
         # Rebuild the provider singleton from the freshly-written
         # bootstrap.toml. Clear caches so the next ``get_*_storage()`` call
@@ -296,6 +586,96 @@ def get_config_routes(state: BootedState) -> list[Route]:
                 status_code=400,
             )
 
+        _emit_setup(
+            "start",
+            (
+                f"Starting setup for profile {profile_name!r}…"
+                if is_first_setup
+                else f"Creating profile {profile_name!r}…"
+            ),
+        )
+
+        # ── Optional-feature install ─────────────────────────────────────
+        # Map the wizard payload to the feature keys whose deps it
+        # implies, then run a single ``pip install openpa[...]==<version>``
+        # for any that aren't already importable. We do this BEFORE
+        # ``_persist_db_provider_choice`` because the postgres branch
+        # there immediately connects via ``asyncpg`` / ``psycopg`` —
+        # without the install those imports fail at the DB layer with a
+        # less actionable error.
+        #
+        # If any installed feature is flagged ``requires_restart=True``
+        # (sentence-transformers, watchdog, channels), we still want the
+        # rest of the wizard to finish — the config gets persisted and
+        # the response tells the user to restart ``openpa serve``. The
+        # apply-now steps that depend on those features are skipped on
+        # this request and will run on the next boot.
+        required_features = _features_required_by_setup_payload(body)
+        restart_required_from_install = False
+        installed_features: list[str] = []
+        failed_features: list[str] = []
+        if required_features:
+            from app.features import installer
+            from app.features.manifest import missing_features as _missing
+
+            try:
+                missing = _missing(required_features)
+            except KeyError as e:
+                return JSONResponse(
+                    {"error": f"Unknown feature in payload: {e}"},
+                    status_code=400,
+                )
+
+            if missing:
+                logger.info(
+                    f"[setup] Installing features for wizard payload: {missing}",
+                )
+                _emit_setup(
+                    "features",
+                    f"Installing optional features: {', '.join(missing)}…",
+                )
+                # Synchronous install — the UI either streamed progress
+                # via /api/features/install before submitting, or it's
+                # showing a spinner while we wait. Either way the call
+                # is idempotent and safe to repeat. Re-publish each pip
+                # event into the setup-progress bus so the wizard sees
+                # incremental log lines instead of a single multi-minute
+                # silence.
+                def _forward_install_event(evt) -> None:
+                    level = "error" if not evt.ok else "info"
+                    _emit_setup("features", evt.message, level=level)
+
+                result = installer.install_features(missing, _forward_install_event)
+                installed_features = result.installed
+                failed_features = result.failed
+                if result.failed:
+                    _emit_setup(
+                        "features",
+                        f"Feature install failed: {', '.join(result.failed)}",
+                        level="error",
+                    )
+                    return JSONResponse(
+                        {
+                            "error": (
+                                "Some required features could not be installed: "
+                                + ", ".join(result.failed)
+                            ),
+                            "install_error": result.error,
+                        },
+                        status_code=500,
+                    )
+                if result.restart_required:
+                    restart_required_from_install = True
+                    _emit_setup(
+                        "features",
+                        "Features installed (server restart required to load them).",
+                        level="warning",
+                    )
+                else:
+                    _emit_setup(
+                        "features", "Features installed.", level="success",
+                    )
+
         # ── Database provider selection ──────────────────────────────────
         # First-setup-only. Validate the requested DB provider (Postgres
         # connection check if applicable), write bootstrap.toml, then run
@@ -316,10 +696,19 @@ def get_config_routes(state: BootedState) -> list[Route]:
             # so this is also safe on the legacy reconfigure-from-already-
             # booted path.
             if not state.storage_ready and state.boot_fn is not None:
+                _emit_setup(
+                    "database",
+                    "Initializing storage and tool registry…",
+                )
                 try:
                     await state.boot_fn()
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("Deferred storage boot failed during setup")
+                    _emit_setup(
+                        "database",
+                        f"Storage initialization failed: {exc}",
+                        level="error",
+                    )
                     # Roll back ``bootstrap.toml`` so the next attempt
                     # re-enters deferred mode cleanly. Best-effort —
                     # surface a 500 either way.
@@ -357,6 +746,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
                 )
 
         # Create the profile first (needed for FK constraints on llm_config / tool_configs)
+        _emit_setup("profile", f"Creating profile {profile_name!r}…")
         if not await conversation_storage.profile_exists(profile_name):
             await conversation_storage.create_profile(profile_name)
 
@@ -365,6 +755,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
 
         # Save server config only on first setup
         if is_first_setup:
+            _emit_setup("server_config", "Saving server configuration…")
             server_config = body.get("server_config", {})
             for key, value in server_config.items():
                 # The DB-provider keys live in bootstrap.toml, never in the
@@ -398,14 +789,26 @@ def get_config_routes(state: BootedState) -> list[Route]:
             # across all profiles. Only persisted on first setup.
             from app.lib.embedding_lifecycle import persist_embedding_config
             try:
-                persist_embedding_config(body.get("embedding_config") or {}, config_storage)
+                resolved_embedding = await _resolve_vectorstore(
+                    body.get("embedding_config") or {}
+                )
+            except _ProvisionFailed as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            try:
+                persist_embedding_config(resolved_embedding, config_storage)
             except ValueError as e:
+                _emit_setup(
+                    "vectorstore",
+                    f"Embedding config rejected: {e}",
+                    level="error",
+                )
                 return JSONResponse({"error": str(e)}, status_code=400)
 
             config_storage.mark_setup_complete()
 
         # Save LLM and tool configs for ALL profiles (including first setup)
         # (must happen before on_first_setup so tool enabled states are persisted)
+        _emit_setup("llm_config", "Saving LLM provider settings…")
         llm_config = body.get("llm_config", {})
         for key, value in llm_config.items():
             is_secret = (
@@ -430,6 +833,11 @@ def get_config_routes(state: BootedState) -> list[Route]:
         # Route each to the right storage; otherwise these settings would be
         # silently dropped into the variables table and never honored.
         tool_configs = body.get("tool_configs", {})
+        if registry is not None and tool_configs:
+            _emit_setup(
+                "tool_configs",
+                f"Saving configuration for {len(tool_configs)} tool(s)…",
+            )
         if registry is not None:
             from app.tools.ids import slugify
             for tool_key, configs in tool_configs.items():
@@ -502,6 +910,10 @@ def get_config_routes(state: BootedState) -> list[Route]:
         created_channels: list[dict] = []
         channel_errors: list[dict] = []
         if isinstance(channel_configs, list) and channel_configs:
+            _emit_setup(
+                "channels",
+                f"Registering {len(channel_configs)} channel(s)…",
+            )
             from app.api.channels import (
                 _decorate,
                 _redact,
@@ -513,6 +925,8 @@ def get_config_routes(state: BootedState) -> list[Route]:
             for entry in channel_configs:
                 if not isinstance(entry, dict):
                     continue
+                channel_type = entry.get("channel_type") or "channel"
+                _emit_setup("channels", f"Registering channel: {channel_type}…")
                 ch, err = await create_channel_for_profile(
                     conversation_storage, profile_name, entry,
                 )
@@ -521,8 +935,18 @@ def get_config_routes(state: BootedState) -> list[Route]:
                         "channel_type": entry.get("channel_type"),
                         "error": err["error"],
                     })
+                    _emit_setup(
+                        "channels",
+                        f"Channel {channel_type!r} failed: {err['error']}",
+                        level="warning",
+                    )
                 elif ch is not None:
                     created_channels.append(_decorate(_redact(ch, channels_catalog)))
+                    _emit_setup(
+                        "channels",
+                        f"Channel {channel_type!r} registered.",
+                        level="success",
+                    )
 
         # Generate and save token
         jwt_secret = config_storage.get("server_config", "jwt_secret") or BaseConfig.get_jwt_secret()
@@ -548,8 +972,18 @@ def get_config_routes(state: BootedState) -> list[Route]:
 
         # If first setup just turned Vector Embedding on, kick off model
         # load + rebuild in the background so the agent becomes usable
-        # without requiring a server restart. The wizard polls
-        # /api/config/embedding/status to know when it's safe to proceed.
+        # without requiring a manual server restart. The wizard reads the
+        # embedding-state SSE stream to know when it's safe to proceed.
+        #
+        # We try this even when the install step above flagged
+        # ``restart_required``: those features were freshly pip-installed
+        # into the venv and the running process has not yet imported them,
+        # so a clean ``import sentence_transformers`` in the worker thread
+        # picks them up. On the rare platform where the in-process import
+        # fails (e.g. a Windows native install where a previous torch DLL
+        # is locked), the lifecycle marks the state ``failed`` and surfaces
+        # the error — the user can then restart manually and the next boot
+        # applies cleanly via the deferred-boot path.
         if is_first_setup and BaseConfig.is_embedding_enabled():
             from app.config.embedding_state import embedding_state
             from app.lib.embedding_lifecycle import apply_embedding_config_in_background
@@ -557,6 +991,10 @@ def get_config_routes(state: BootedState) -> list[Route]:
             if not embedding_state.is_busy() and not embedding_state.is_ready():
                 # On first setup the only profile that exists is the one
                 # we just created, so we know what to rebuild.
+                _emit_setup(
+                    "embedding",
+                    "Loading vector embedding model in background (this can take a minute)…",
+                )
                 apply_embedding_config_in_background(
                     profiles=[profile_name], force_rebuild=True,
                 )
@@ -567,6 +1005,17 @@ def get_config_routes(state: BootedState) -> list[Route]:
         from app.events.settings_state_bus import publish_settings_state_changed
         publish_settings_state_changed(profile_name)
 
+        _emit_setup(
+            "done",
+            (
+                "Setup complete. New features installed — loading in background; "
+                "restart OpenPA only if the embedding status reports a failure."
+                if restart_required_from_install
+                else "Setup complete."
+            ),
+            level="success",
+        )
+
         return JSONResponse({
             "success": True,
             "token": token,
@@ -575,6 +1024,13 @@ def get_config_routes(state: BootedState) -> list[Route]:
             "embedding_enabled": BaseConfig.is_embedding_enabled(),
             "channels": created_channels,
             "channel_errors": channel_errors,
+            # When True, the wizard installed deps for a feature that
+            # needs a process restart before its module can be loaded
+            # cleanly. The frontend should surface a "Please restart
+            # OpenPA" notice; the persisted config will apply on the
+            # next boot via the normal deferred-boot path.
+            "restart_required": restart_required_from_install,
+            "installed_features": installed_features,
         })
 
     async def handle_reconfigure(request: Request) -> JSONResponse:
@@ -723,7 +1179,11 @@ def get_config_routes(state: BootedState) -> list[Route]:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         try:
-            persist_embedding_config(body, state.config_storage)
+            resolved_body = await _resolve_vectorstore(body)
+        except _ProvisionFailed as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        try:
+            persist_embedding_config(resolved_body, state.config_storage)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -782,6 +1242,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
 
     return [
         # Unauthenticated endpoints for setup and recovery
+        Route("/api/config/install-catalog", handle_install_catalog, methods=["GET"]),
         Route("/api/config/setup-profiles", handle_setup_profiles, methods=["GET"]),
         Route("/api/config/setup-status", handle_setup_status, methods=["GET"]),
         Route("/api/config/setup", handle_setup, methods=["POST"]),

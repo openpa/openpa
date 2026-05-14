@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   ElSteps, ElStep, ElButton, ElMessage,
@@ -19,11 +19,25 @@ import { storeToRefs } from 'pinia';
 import {
   completeSetup,
   checkSetupStatus,
+  fetchServiceCapabilities,
+  type ServiceCapabilitiesResponse,
 } from '../services/configApi';
+import {
+  openSetupProgressStream,
+  type SetupLogEntry,
+  type SetupProgressStreamHandle,
+} from '../services/setupProgressStream';
 import {
   fetchSetupProfiles,
   type SetupProfile,
 } from '../services/setupProfilesApi';
+import {
+  fetchInstallCatalog,
+  getBundledInstallCatalog,
+  recommendInstallMode,
+  type InstallCatalog,
+  type DeploymentAdvancedField,
+} from '../services/installCatalogApi';
 import {
   fetchChannelCatalogPublic,
   type ChannelCatalogEntry,
@@ -43,6 +57,27 @@ const chatStore = useChatStore();
 
 const currentStep = ref(0);
 const submitting = ref(false);
+// True when the backend's /api/config/setup response flagged that one or
+// more newly-installed features (e.g. embedding.me5 / sentence-transformers
+// + torch) cannot be activated in-process and require restarting the
+// server before they take effect.
+const restartRequired = ref(false);
+
+// Live progress feed for the Complete Setup phase. Each entry is one
+// frame from the /api/config/setup/stream SSE channel; the panel below
+// the action bar renders them as a scrolling log while ``submitting``.
+const setupLog = ref<SetupLogEntry[]>([]);
+const setupLogEl = ref<HTMLPreElement | null>(null);
+let setupProgressHandle: SetupProgressStreamHandle | null = null;
+
+watch(
+  () => setupLog.value.length,
+  async () => {
+    await nextTick();
+    const el = setupLogEl.value;
+    if (el) el.scrollTop = el.scrollHeight;
+  },
+);
 
 // ── First-run installer phase (Electron only) ────────────────────────────
 //
@@ -69,13 +104,12 @@ type InstallEnv = {
   hasDocker: boolean;
   hasPython: boolean;
   pythonVersion: string;
-  recommendedMode: 'docker' | 'native';
   channel: 'production' | 'test' | 'dev';
 };
 
 const installEnv = ref<InstallEnv | null>(null);
 const detectingInstallEnv = ref(false);
-const installDeployment = ref<'local' | 'server'>('local');
+const installDeployment = ref<'local' | 'server' | 'custom'>('local');
 const installAppHost = ref('');
 const installMode = ref<'docker' | 'native'>('native');
 const installLog = ref<Array<{ stream: string; line: string }>>([]);
@@ -83,6 +117,57 @@ const installing = ref(false);
 const installDone = ref(false);
 const installFailed = ref(false);
 const installError = ref('');
+
+// Install catalog — drives the radio labels/descriptions for
+// deployment, install mode, and the advanced fields shown when the
+// user picks ``custom``. We seed it with the JSON snapshot bundled
+// into the SPA at build time so the Electron installer stage (which
+// runs before any backend exists) has the data immediately, then
+// ``loadInstallCatalog`` optionally refreshes it from the live API.
+const installCatalog = ref<InstallCatalog | null>(getBundledInstallCatalog());
+// Seed the custom-deployment field values with each field's default
+// so the form mounts ready-to-submit. The user can still edit any
+// field, and an empty field falls back to the catalog default when the
+// installer renders the .env.
+const installCustomValues = ref<Record<string, string>>(
+  Object.fromEntries(
+    (installCatalog.value?.deployments?.custom?.advanced_fields ?? []).map(
+      (f) => [f.key, f.default ?? ''],
+    ),
+  ),
+);
+
+const installCatalogDeploymentEntries = computed(() => {
+  const cat = installCatalog.value;
+  if (!cat) return [] as Array<[string, InstallCatalog['deployments'][string]]>;
+  return Object.entries(cat.deployments).sort(
+    (a, b) => (a[1].order ?? 999) - (b[1].order ?? 999),
+  );
+});
+
+const installCatalogModeEntries = computed(() => {
+  const cat = installCatalog.value;
+  if (!cat) return [] as Array<[string, InstallCatalog['modes'][string]]>;
+  return Object.entries(cat.modes).sort(
+    (a, b) => (a[1].order ?? 999) - (b[1].order ?? 999),
+  );
+});
+
+const installCatalogCustomFields = computed<DeploymentAdvancedField[]>(() => {
+  const cat = installCatalog.value;
+  if (!cat) return [];
+  return cat.deployments?.custom?.advanced_fields ?? [];
+});
+
+// Recommended install mode — derived from the catalog so install.sh,
+// install.ps1, and the Setup Wizard never disagree. ``null`` until
+// the Electron bridge has reported ``hasDocker``; the install-mode
+// step's "recommended" badge hides until this resolves.
+const recommendedInstallMode = computed<string | null>(() =>
+  recommendInstallMode(installCatalog.value, {
+    hasDocker: installEnv.value?.hasDocker ?? false,
+  }),
+);
 
 // Two visible stages plus the interstitial:
 //   'installer'   — Electron-only: Welcome / Deployment / Mode / Install
@@ -184,11 +269,24 @@ async function startInstallerRun() {
   installError.value = '';
   installLog.value = [];
   try {
+    // For Custom deployment, forward the four advanced-field values so
+    // the install script skips its interactive prompts. The script
+    // accepts each as a CLI flag (--listen-host / --public-url / etc.)
+    // mapped from the install bridge's `customFields` keys.
+    const customFields = installDeployment.value === 'custom'
+      ? {
+          listen_host:     installCustomValues.value.listen_host?.trim() || undefined,
+          public_url:      installCustomValues.value.public_url?.trim() || undefined,
+          allowed_origins: installCustomValues.value.allowed_origins?.trim() || undefined,
+          wizard_preset:   installCustomValues.value.wizard_preset?.trim() || undefined,
+        }
+      : undefined;
     await bridge.run({
       deployment: installDeployment.value,
       appHost:
         installDeployment.value === 'server' ? installAppHost.value.trim() : undefined,
       mode: installMode.value,
+      customFields,
     });
     // The actual success/failure transition is driven by the
     // ``openpa:installer:done`` event handler (``onInstallerDone``); the
@@ -256,6 +354,13 @@ const pairingOpen = ref(false);
 // fallbacks (today's behaviour).
 const activeProfile = ref<SetupProfile | null>(null);
 
+// Per-service deployment capabilities from
+// /api/services/capabilities. Drives the Deployment-mode radio in the
+// Server / Embedding steps. ``null`` while still loading — the steps
+// render their forms without the radio until this populates, which is
+// the same fallback they used to show with no install locks.
+const serviceCapabilities = ref<ServiceCapabilitiesResponse | null>(null);
+
 // First-run installer steps (Electron only, stage = 'installer').
 const installerSteps = [
   { key: 'install-welcome', title: 'Welcome', description: 'Get OpenPA running' },
@@ -319,11 +424,47 @@ async function detectInstallEnvironment() {
   detectingInstallEnv.value = true;
   try {
     installEnv.value = await bridge.detect();
-    installMode.value = installEnv.value.recommendedMode;
+    // Seed installMode from the catalog-driven recommendation. Falls
+    // back to 'native' when no mode's requirements are satisfied
+    // (theoretical, since native declares no requires).
+    installMode.value = (recommendedInstallMode.value as 'docker' | 'native') ?? 'native';
   } catch (err) {
     installError.value = `Detection failed: ${err}`;
   } finally {
     detectingInstallEnv.value = false;
+  }
+  // Catalog fetch is independent of the bridge detection — it hits the
+  // backend's pre-auth endpoint, which is alive whenever the bundled
+  // Vite dev server can proxy to it. The installer stage in Electron
+  // runs BEFORE the backend exists; the catalog is fetched from the
+  // local Vite dev proxy in dev, and falls back to the hardcoded
+  // labels rendered inline below when the backend is unreachable.
+  void loadInstallCatalog();
+}
+
+async function loadInstallCatalog() {
+  // The component already mounted with the bundled catalog seeded in
+  // ``installCatalog.value``; this refresh swaps in the live API
+  // response when available so the UI picks up any server-side edits
+  // to ``install_catalog.toml`` without rebuilding the SPA. Failures
+  // are silent — the bundled copy is identical for the same release.
+  try {
+    const url = settingsStore.agentUrl || 'http://localhost:1112';
+    const resp = await fetchInstallCatalog(url);
+    installCatalog.value = resp.catalog;
+    // Re-seed any custom field that the user hasn't touched yet so a
+    // changed default in the live catalog flows through. Fields the
+    // user has typed into are left alone.
+    for (const f of resp.catalog.deployments?.custom?.advanced_fields ?? []) {
+      const current = installCustomValues.value[f.key];
+      if (current === undefined || current === '') {
+        installCustomValues.value[f.key] = f.default ?? '';
+      }
+    }
+  } catch {
+    // Endpoint unreachable (the typical installer-stage case before
+    // ``openpa serve`` starts) — keep the bundled catalog already in
+    // ``installCatalog.value``.
   }
 }
 
@@ -334,6 +475,19 @@ async function runPostInstallSetupChecks() {
   try {
     const status = await checkSetupStatus(settingsStore.agentUrl, profileName.value);
     isFirstSetup.value = !status.setup_complete;
+    try {
+      serviceCapabilities.value = await fetchServiceCapabilities(settingsStore.agentUrl);
+    } catch {
+      // Capability fetch is best-effort — when it fails the wizard
+      // continues without per-service deployment radios. Falls back
+      // to External-only forms.
+      serviceCapabilities.value = null;
+    }
+    // Load the install catalog so DeploymentModeRadio can read the
+    // service-mode labels/descriptions from the same TOML as install.sh
+    // and install.ps1. Best-effort: missing-on-the-server falls back to
+    // the component's hardcoded labels.
+    await loadInstallCatalog();
 
     if (isFirstSetup.value) {
       for (const p of settingsStore.getLoggedInProfiles()) {
@@ -453,7 +607,19 @@ function openPairingFor(channel: ChannelRow) {
 // into an invalid state.
 const canAdvanceFromInstallerDeployment = computed(() => {
   if (installDeployment.value === 'local') return true;
-  return /^[A-Za-z0-9.:-]+$/.test(installAppHost.value.trim());
+  if (installDeployment.value === 'server') {
+    return /^[A-Za-z0-9.:-]+$/.test(installAppHost.value.trim());
+  }
+  // Custom: require listen_host + public_url so the rendered .env at
+  // least has the two values the backend can't guess. Allowed origins
+  // and wizard preset have catalog defaults that fill in for blanks.
+  if (installDeployment.value === 'custom') {
+    return Boolean(
+      installCustomValues.value.listen_host?.trim()
+      && installCustomValues.value.public_url?.trim(),
+    );
+  }
+  return false;
 });
 const canAdvanceFromInstallerMode = computed(() => {
   if (installMode.value === 'docker' && installDockerDisabled.value) return false;
@@ -519,6 +685,18 @@ function retryInstallerRun() {
 
 async function handleCompleteSetup() {
   submitting.value = true;
+  setupLog.value = [];
+
+  // Subscribe to the per-phase progress stream BEFORE firing the POST so
+  // we don't miss the first few events (feature install / db validation
+  // happen within milliseconds of the request hitting the handler).
+  setupProgressHandle = openSetupProgressStream(
+    settingsStore.agentUrl,
+    (entry) => {
+      setupLog.value = [...setupLog.value, entry];
+    },
+  );
+
   try {
     const config: Record<string, unknown> = { profile: profileName.value };
 
@@ -540,6 +718,7 @@ async function handleCompleteSetup() {
 
     const result = await completeSetup(settingsStore.agentUrl, config as any);
     generatedToken.value = result.token;
+    restartRequired.value = Boolean((result as any).restart_required);
     createdChannels.value = (result as any).channels || [];
     channelErrors.value = (result as any).channel_errors || [];
 
@@ -570,25 +749,33 @@ async function handleCompleteSetup() {
     ElMessage.error(e instanceof Error ? e.message : 'Setup failed');
   } finally {
     submitting.value = false;
+    if (setupProgressHandle) {
+      setupProgressHandle.close();
+      setupProgressHandle = null;
+    }
   }
 }
+
+const latestSetupLogMessage = computed(() => {
+  if (setupLog.value.length === 0) return '';
+  return setupLog.value[setupLog.value.length - 1].message;
+});
 
 async function handleFinish() {
   if (!generatedToken.value) {
     ElMessage.warning('Please complete setup first.');
     return;
   }
-  if (embeddingBlocking.value) {
-    ElMessage.warning('Vector embedding is still loading. Please wait a moment.');
-    return;
-  }
+  // Setup has completed successfully (we have a token). Always allow the
+  // user to proceed to the main chat view; no restart-wait gate. New
+  // feature extras (postgres, llm.*, …) are loaded by the deferred-boot
+  // path on first use, and any embedding-load failure can be diagnosed
+  // from Settings → Vector Embedding later.
   if (embeddingFailed.value) {
     ElMessage.error(
       `Vector embedding failed to initialize: ${embeddingError.value ?? 'unknown error'}. ` +
       'You can still proceed, but Automatic Skill Mode and other embedding-dependent features will be unavailable.'
     );
-    // Allow the user to proceed even on failure — they can fix the
-    // backing service or disable embedding from Settings later.
   }
 
   // Save token per-profile and activate, then redirect to chat
@@ -602,13 +789,30 @@ async function handleFinish() {
   router.push(`/${profileName.value}`);
 }
 
-const embeddingReady = computed(
-  () => embeddingStatus.value === 'ready' || embeddingStatus.value === 'disabled',
-);
+const embeddingReady = computed(() => {
+  if (embeddingStatus.value === 'ready') return true;
+  // 'disabled' only counts as ready if the user actually chose to leave
+  // embedding off. After a restart-required install the runtime is also
+  // 'disabled' (the boot path skipped the model load because SQLite was
+  // still empty when boot ran) — but the user did ask for embedding, so
+  // we must wait until the post-restart boot flips status to 'ready'.
+  if (embeddingStatus.value === 'disabled') {
+    return !(embeddingConfig.value?.enabled && restartRequired.value);
+  }
+  return false;
+});
 
 const embeddingBlocking = computed(() => {
   if (!isFirstSetup.value) return false;
   if (!embeddingConfig.value?.enabled) return false;
+  // A 'failed' status is terminal: the boot tried to load embedding and
+  // didn't make it. Let the user proceed (handleFinish surfaces the error
+  // and runs in degraded mode); don't trap them on the restart-wait gate.
+  if (
+    restartRequired.value
+    && embeddingStatus.value !== 'ready'
+    && embeddingStatus.value !== 'failed'
+  ) return true;
   return embeddingStatus.value === 'initializing'
     || embeddingStatus.value === 'rebuilding';
 });
@@ -734,22 +938,66 @@ async function copyToken() {
           <h2>How will you reach OpenPA?</h2>
           <ElForm label-position="top">
             <ElFormItem>
+              <!-- Render from the install catalog when it's loaded so the
+                   labels match install.sh / install.ps1; fall back to a
+                   small hardcoded list when the backend is unreachable
+                   (the very-first-run case before any backend exists). -->
               <ElRadioGroup v-model="installDeployment">
-                <ElRadio value="local">
-                  <strong>Local</strong> — bind to 127.0.0.1, only this machine
-                </ElRadio>
-                <ElRadio value="server">
-                  <strong>Server</strong> — bind to all interfaces, reachable from other devices
-                </ElRadio>
+                <template v-if="installCatalogDeploymentEntries.length > 0">
+                  <ElRadio
+                    v-for="[id, entry] in installCatalogDeploymentEntries"
+                    :key="id"
+                    :value="id"
+                  >
+                    <strong>{{ entry.label }}</strong> — {{ entry.description }}
+                  </ElRadio>
+                </template>
+                <template v-else>
+                  <ElRadio value="local">
+                    <strong>Local</strong> — bind to 127.0.0.1, only this machine
+                  </ElRadio>
+                  <ElRadio value="server">
+                    <strong>Server</strong> — bind to all interfaces, reachable from other devices
+                  </ElRadio>
+                  <ElRadio value="custom">
+                    <strong>Custom (advanced)</strong> — pick host, URL, and CORS yourself
+                  </ElRadio>
+                </template>
               </ElRadioGroup>
             </ElFormItem>
             <ElFormItem v-if="installDeployment === 'server'" label="Public IP or domain">
               <ElInput v-model="installAppHost" placeholder="e.g. 100.120.175.90 or openpa.example.com" />
               <p class="installer-hint">
-                Used in <code>APP_URL</code> and <code>CORS_ALLOWED_ORIGINS</code>.
-                Letters, digits, dot, colon, and hyphen only.
+                Used in the public URL the agent advertises and in the
+                list of origins allowed to talk to the API. Letters,
+                digits, dot, colon, and hyphen only.
               </p>
             </ElFormItem>
+            <!-- Custom-deployment advanced fields. Each one renders with
+                 the prompt + hint from the catalog so the wording stays
+                 in lock-step with install.sh / install.ps1. -->
+            <template v-if="installDeployment === 'custom'">
+              <ElFormItem
+                v-for="field in installCatalogCustomFields"
+                :key="field.key"
+                :label="field.prompt"
+              >
+                <ElInput
+                  v-if="!field.choices || field.choices.length === 0"
+                  v-model="installCustomValues[field.key]"
+                  :placeholder="field.default"
+                />
+                <ElRadioGroup
+                  v-else
+                  v-model="installCustomValues[field.key]"
+                >
+                  <ElRadio v-for="c in field.choices" :key="c" :value="c">
+                    {{ c }}
+                  </ElRadio>
+                </ElRadioGroup>
+                <p class="installer-hint">{{ field.hint }}</p>
+              </ElFormItem>
+            </template>
           </ElForm>
         </div>
 
@@ -758,27 +1006,37 @@ async function copyToken() {
           <ElForm label-position="top">
             <ElFormItem>
               <ElRadioGroup v-model="installMode">
-                <ElRadio value="docker" :disabled="installDockerDisabled">
-                  <strong>Docker</strong> — sandboxed VNC desktop with bundled Postgres + Qdrant
-                  <span v-if="installEnv?.recommendedMode === 'docker'" class="installer-badge">recommended</span>
-                  <span class="installer-hint">
-                    The agent runs inside a container with its own GUI. Observe
-                    at <code>http://&lt;host&gt;:6080/vnc.html</code>.
-                    <template v-if="installEnv?.channel === 'dev'">
-                      <br>Not available with <code>npm run dev</code> — Docker support for the dev channel is not yet implemented.
-                    </template>
-                  </span>
-                </ElRadio>
-                <ElRadio value="native">
-                  <strong>Native</strong> — Python venv at <code>~/.openpa/venv</code> with SQLite
-                  <span v-if="installEnv?.recommendedMode === 'native'" class="installer-badge">recommended</span>
-                  <span class="installer-hint">
-                    Simpler, but the agent shares your desktop and home directory.
-                    <template v-if="installEnv && !installEnv.hasPython">
-                      <br>Python 3.13 isn't on PATH; the installer will fetch an isolated copy via uv (~80 MB).
-                    </template>
-                  </span>
-                </ElRadio>
+                <template v-if="installCatalogModeEntries.length > 0">
+                  <ElRadio
+                    v-for="[id, entry] in installCatalogModeEntries"
+                    :key="id"
+                    :value="id"
+                    :disabled="id === 'docker' && installDockerDisabled"
+                  >
+                    <strong>{{ entry.label }}</strong> — {{ entry.description }}
+                    <span
+                      v-if="recommendedInstallMode === id"
+                      class="installer-badge"
+                    >recommended</span>
+                    <span class="installer-hint">
+                      {{ entry.hint }}
+                      <template v-if="id === 'native' && installEnv && !installEnv.hasPython">
+                        <br>Python 3.13 isn't on PATH; the installer will fetch an isolated copy via uv (~80 MB).
+                      </template>
+                    </span>
+                  </ElRadio>
+                </template>
+                <!-- Backend unreachable: render the same two modes
+                     hardcoded so the installer stage works before any
+                     backend exists. -->
+                <template v-else>
+                  <ElRadio value="docker" :disabled="installDockerDisabled">
+                    <strong>Docker</strong> — sandboxed VNC desktop with bundled Postgres + Qdrant
+                  </ElRadio>
+                  <ElRadio value="native">
+                    <strong>Native</strong> — Python venv at <code>~/.openpa/venv</code> with SQLite
+                  </ElRadio>
+                </template>
               </ElRadioGroup>
             </ElFormItem>
           </ElForm>
@@ -809,11 +1067,15 @@ async function copyToken() {
           v-else-if="currentStepKey === 'server'"
           :config="serverConfig"
           :first-setup="isFirstSetup"
+          :service-capabilities="serviceCapabilities"
+          :install-catalog="installCatalog"
           @update="handleServerConfigUpdate"
         />
         <StepEmbeddingConfig
           v-else-if="currentStepKey === 'embedding'"
           :config="embeddingConfig ?? {}"
+          :service-capabilities="serviceCapabilities"
+          :install-catalog="installCatalog"
           @update="handleEmbeddingConfigUpdate"
         />
         <StepLLMConfig
@@ -887,11 +1149,49 @@ async function copyToken() {
         </div>
 
         <div
+          v-if="submitting || setupLog.length > 0"
+          class="setup-log-box"
+        >
+          <div class="setup-log-header">
+            <strong>{{ submitting ? 'Setup in progress…' : 'Setup log' }}</strong>
+            <span v-if="submitting && latestSetupLogMessage" class="setup-log-latest">
+              {{ latestSetupLogMessage }}
+            </span>
+          </div>
+          <pre v-if="setupLog.length > 0" ref="setupLogEl" class="setup-log-stream"><span
+              v-for="(entry, i) in setupLog"
+              :key="i"
+              :class="['setup-log-line', `is-${entry.level}`]"
+            >[{{ entry.step }}] {{ entry.message }}
+</span></pre>
+        </div>
+
+        <div
           v-if="generatedToken && embeddingConfig?.enabled && !embeddingReady"
           class="embedding-status-box"
           :class="{ 'is-failed': embeddingFailed }"
         >
-          <template v-if="embeddingBlocking">
+          <template v-if="restartRequired && embeddingStatus !== 'ready'">
+            <ElAlert
+              type="warning"
+              :closable="false"
+              show-icon
+              title="Server restart required"
+            >
+              <p>
+                OpenPA just installed new dependencies for Vector Embedding
+                (sentence-transformers / torch). These can't be re-imported
+                into the running process safely, so the embedding subsystem
+                is deferred until the next boot.
+              </p>
+              <p>
+                Stop and rerun <code>openpa serve</code> (or quit and reopen
+                the OpenPA desktop app). This page will unlock automatically
+                once the server reports embedding ready.
+              </p>
+            </ElAlert>
+          </template>
+          <template v-else-if="embeddingBlocking">
             <strong>Loading vector embedding model…</strong>
             <p>
               The embedding model is downloading and loading into memory.
@@ -985,11 +1285,9 @@ async function copyToken() {
           <ElButton
             v-else
             type="success"
-            :loading="embeddingBlocking"
-            :disabled="embeddingBlocking"
             @click="handleFinish"
           >
-            {{ embeddingBlocking ? 'Loading embedding model…' : 'Start Using OpenPA' }}
+            Start Using OpenPA
           </ElButton>
         </template>
       </div>
@@ -1179,6 +1477,52 @@ async function copyToken() {
   white-space: normal;
   line-height: 1.5;
 }
+
+.setup-log-box {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: var(--hover-bg);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.setup-log-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.setup-log-header strong {
+  color: var(--text-primary);
+}
+
+.setup-log-latest {
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.setup-log-stream {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.setup-log-line { display: block; }
+.setup-log-line.is-info { color: var(--text-secondary); }
+.setup-log-line.is-success { color: #1f8a4a; }
+.setup-log-line.is-warning { color: #b48800; }
+.setup-log-line.is-error { color: #b03030; }
 
 .embedding-status-box {
   margin-top: 16px;

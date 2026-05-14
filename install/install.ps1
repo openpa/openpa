@@ -14,13 +14,27 @@
     .\install.ps1 -Deployment server -Host 100.120.175.90
 
 .PARAMETER Deployment
-    'local', 'server', or 'container'. Skips the deployment-type prompt.
-    'container' binds to 0.0.0.0 with localhost URLs - pick this when running
-    the installer inside a Docker / Podman container and browsing from the
-    docker host via published ports.
+    'local', 'server', or 'custom'. Skips the deployment-type prompt.
+    'custom' exposes advanced fields (listen host, public URL, allowed
+    origins, wizard preset) so you can configure unusual setups —
+    running inside a container, behind a reverse proxy, etc. 'container'
+    is accepted as a deprecated alias for 'custom' with container
+    defaults.
 
 .PARAMETER AppHost
     Public IP/domain for server deployments.
+
+.PARAMETER ListenHost
+    (custom deployment) Override HOST in .env.
+
+.PARAMETER PublicUrl
+    (custom deployment) Override APP_URL in .env.
+
+.PARAMETER AllowedOrigins
+    (custom deployment) Override CORS_ALLOWED_ORIGINS in .env.
+
+.PARAMETER WizardPreset
+    (custom deployment) Override SETUP_WIZARD_ENV in .env.
 
 .PARAMETER NoLaunch
     Skip opening the setup wizard at the end.
@@ -48,13 +62,23 @@
     repo; rejected when piped via iwr|iex. 'dev' works with both -Mode
     native (reuses <repo>\.venv) and -Mode docker (compose override
     bind-mounts the checkout at /src).
+
+.NOTES
+    Service selection (database backend, vector store backend, …) is no
+    longer made at install time. The Setup Wizard now lets you pick each
+    backing service's deployment mode (Docker / Native / External)
+    per-service, independent of how OpenPA itself is installed.
 #>
 
 [CmdletBinding()]
 param(
     [ValidateSet('production','test','dev')] [string] $Channel = 'production',
-    [ValidateSet('local','server','container')] [string] $Deployment = '',
+    [ValidateSet('local','server','custom','container','')] [string] $Deployment = '',
     [string] $AppHost = '',
+    [string] $ListenHost = '',
+    [string] $PublicUrl = '',
+    [string] $AllowedOrigins = '',
+    [string] $WizardPreset = '',
     [ValidateSet('','docker','native')] [string] $Mode = '',
     [switch] $NoLaunch,
     [switch] $Unattended,
@@ -115,8 +139,18 @@ function Invoke-NativeLogged {
     try {
         # Redirect through Out-File -Encoding utf8 so the log isn't written
         # as PS 5.1's default UTF-16 LE (which makes every byte appear
-        # spaced out in any UTF-8 reader).
-        & $Action 2>&1 | Out-File -FilePath $script:LogFile -Encoding utf8 -Append
+        # spaced out in any UTF-8 reader). The ForEach-Object unwraps
+        # stderr lines that PS 5.1 wraps as NativeCommandError
+        # ErrorRecords — otherwise each benign stderr line (docker/pip/uv
+        # progress) gets the full "At C:\...:line char:N" error decoration
+        # in the log even on successful runs.
+        & $Action 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                $_.Exception.Message
+            } else {
+                $_
+            }
+        } | Out-File -FilePath $script:LogFile -Encoding utf8 -Append
     } finally { $ErrorActionPreference = $prev }
 }
 
@@ -198,6 +232,45 @@ function Get-TemplateContent {
     return (Invoke-WebRequest -UseBasicParsing -Uri "$script:TemplateBase/$Name").Content
 }
 
+# ── catalog ───────────────────────────────────────────────────────────────
+#
+# Source the generated _catalog.ps1 so the prompts and rendered .env
+# files share their labels / descriptions / rules with install.sh and
+# the Setup Wizard. Dev installs read from the checkout; remote
+# installs download it next to the install scripts on GitHub.
+if ($Channel -eq 'dev') {
+    $CatalogPath = Join-Path $RepoRoot 'install\_catalog.ps1'
+    . $CatalogPath
+} else {
+    $CatalogBase = if ($env:OPENPA_CATALOG_BASE) {
+        $env:OPENPA_CATALOG_BASE
+    } else {
+        'https://raw.githubusercontent.com/openpa/openpa/main/install'
+    }
+    $CatalogTmp = Join-Path $OpenpaHome '_catalog.ps1'
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$CatalogBase/_catalog.ps1" -OutFile $CatalogTmp
+    } catch {
+        Write-Err2 "Failed to fetch install catalog from $CatalogBase/_catalog.ps1"
+        exit 1
+    }
+    . $CatalogTmp
+}
+
+# ── container alias ───────────────────────────────────────────────────────
+#
+# ``container`` was a separate deployment in earlier installs; it's now
+# a narrow case of ``custom`` (listen on 0.0.0.0, URLs at localhost).
+# Accept the old name for one release as an alias so existing scripts
+# don't break, and warn so users migrate to --Deployment custom.
+if ($Deployment -eq 'container') {
+    Write-Warn2 "-Deployment container is deprecated; using -Deployment custom with container defaults."
+    $Deployment = 'custom'
+    if (-not $ListenHost)   { $ListenHost   = '0.0.0.0' }
+    if (-not $PublicUrl)    { $PublicUrl    = 'http://localhost:1112' }
+    if (-not $WizardPreset) { $WizardPreset = 'local' }
+}
+
 # ── banner ────────────────────────────────────────────────────────────────
 
 Write-Host ""
@@ -274,27 +347,33 @@ if ($HasDocker) {
 Write-Step "Deployment"
 
 if (-not $Deployment) {
-    Write-Host @"
-How will you run OpenPA?
-  1) local      - bind to 127.0.0.1, only this machine can reach it
-  2) server     - bind to all interfaces, reachable from other devices
-  3) container  - bind to 0.0.0.0; URLs use localhost
-                  (pick this if you're running this script inside a
-                   container and will browse from the docker host)
-"@
+    Write-Host "How will you run OpenPA?"
+    $idx = 0
+    foreach ($id in $script:DeploymentIds) {
+        $idx++
+        $entry = $script:Deployments[$id]
+        Write-Host ("  {0}) {1,-20} - {2}" -f $idx, $entry.Label, $entry.Description)
+    }
     while (-not $Deployment) {
         $choice = Read-Host "Choice [1]"
         if (-not $choice) { $choice = '1' }
-        switch ($choice) {
-            '1'         { $Deployment = 'local' }
-            'local'     { $Deployment = 'local' }
-            '2'         { $Deployment = 'server' }
-            'server'    { $Deployment = 'server' }
-            '3'         { $Deployment = 'container' }
-            'container' { $Deployment = 'container' }
-            default     { Write-Warn2 "Pick 1, 2, or 3." }
+        # Resolve numeric or name choice against $script:DeploymentIds.
+        $i = 0
+        foreach ($id in $script:DeploymentIds) {
+            $i++
+            if ($choice -eq "$i" -or $choice -eq $id) {
+                $Deployment = $id
+                break
+            }
+        }
+        if (-not $Deployment) {
+            Write-Warn2 "Pick a number 1-$($script:DeploymentIds.Count) or a deployment id."
         }
     }
+}
+if (-not ($script:DeploymentIds -contains $Deployment)) {
+    Write-Err2 "Unknown deployment: $Deployment (must be one of: $($script:DeploymentIds -join ', '))"
+    exit 2
 }
 Write-Ok "Deployment: $Deployment"
 
@@ -311,10 +390,71 @@ if ($Deployment -eq 'server' -and -not $AppHost) {
 }
 if ($AppHost) { Write-Ok "Host: $AppHost" }
 
+# ── custom-deployment fields ─────────────────────────────────────────────
+
+# When the user picks ``custom`` walk the advanced-field array from the
+# catalog and prompt for each one with its plain-English question +
+# hint. Already-set values (from -ListenHost / -PublicUrl / etc., or
+# from the deprecated container-deployment alias above) skip the
+# prompt. In -Unattended the catalog default is used silently.
+$CustomValues = @{}
+if ($Deployment -eq 'custom') {
+    Write-Host ""
+    Write-Info "Custom deployment - answer a few questions about how OpenPA should be reached."
+    $paramFor = @{
+        'listen_host'     = 'ListenHost'
+        'public_url'      = 'PublicUrl'
+        'allowed_origins' = 'AllowedOrigins'
+        'wizard_preset'   = 'WizardPreset'
+    }
+    foreach ($key in $script:CustomFieldIds) {
+        $field = $script:CustomFields[$key]
+        $paramName = $paramFor[$key]
+        $current = (Get-Variable -Name $paramName -Scope Script -ErrorAction SilentlyContinue).Value
+        if (-not $current) {
+            $current = (Get-Variable -Name $paramName -ErrorAction SilentlyContinue).Value
+        }
+        if ($current) {
+            $CustomValues[$key] = $current
+            Write-Ok "$key`: $current"
+            continue
+        }
+        if ($Unattended) {
+            $CustomValues[$key] = $field.Default
+            Write-Ok "$key`: $($field.Default) (default)"
+            continue
+        }
+        Write-Host ""
+        Write-Host $field.Prompt -ForegroundColor White
+        Write-Host $field.Hint   -ForegroundColor DarkGray
+        if ($field.Choices.Count -gt 0) {
+            Write-Host ("Choices: " + ($field.Choices -join ', ')) -ForegroundColor DarkGray
+        }
+        while ($true) {
+            $answer = Read-Host "  [$($field.Default)]"
+            if (-not $answer) { $answer = $field.Default }
+            if ($field.Choices.Count -gt 0 -and -not ($field.Choices -contains $answer)) {
+                Write-Warn2 "Pick one of: $($field.Choices -join ', ')"
+                continue
+            }
+            $CustomValues[$key] = $answer
+            break
+        }
+    }
+    # Sensible fallback for allowed_origins: derive from the public URL
+    # plus the localhost variants the SPA listener serves on. Saves
+    # operators from constructing a CORS list by hand for the typical
+    # browse-via-localhost flow.
+    if (-not $CustomValues['allowed_origins']) {
+        $CustomValues['allowed_origins'] = "$($CustomValues['public_url']),http://localhost:1515,http://127.0.0.1:1515"
+    }
+}
+
 # ── mode (docker vs native) ──────────────────────────────────────────────
 
-# Default: docker if available, native otherwise. The agent runs in a
-# sandboxed VNC desktop by default — opt out via -Mode native.
+# Default: docker if available, native otherwise. Labels and descriptions
+# come from the catalog ($script:ModeIds / $script:Modes) so the install
+# scripts and the Setup Wizard show identical text.
 if (-not $Mode) {
     if ($HasDocker) {
         if ($Unattended) {
@@ -322,19 +462,28 @@ if (-not $Mode) {
         } else {
             Write-Host ""
             Write-Host "How do you want to run OpenPA?" -ForegroundColor White
-            Write-Host "  1) docker  - sandboxed VNC desktop with bundled Postgres + Qdrant"
-            Write-Host "               (recommended; the agent gets its own GUI environment)"
-            Write-Host "  2) native  - Python venv at %USERPROFILE%\.openpa\venv with SQLite"
-            Write-Host "               (simpler, but the agent shares your desktop)"
+            $idx = 0
+            foreach ($id in $script:ModeIds) {
+                $idx++
+                $entry = $script:Modes[$id]
+                Write-Host ("  {0}) {1,-8} - {2}" -f $idx, $entry.Label, $entry.Description)
+                if ($entry.Hint) {
+                    Write-Host ("               $($entry.Hint)") -ForegroundColor DarkGray
+                }
+            }
             while (-not $Mode) {
                 $choice = Read-Host "Choice [1]"
                 if (-not $choice) { $choice = '1' }
-                switch ($choice) {
-                    '1'      { $Mode = 'docker' }
-                    'docker' { $Mode = 'docker' }
-                    '2'      { $Mode = 'native' }
-                    'native' { $Mode = 'native' }
-                    default  { Write-Warn2 "Pick 1 or 2." }
+                $i = 0
+                foreach ($id in $script:ModeIds) {
+                    $i++
+                    if ($choice -eq "$i" -or $choice -eq $id) {
+                        $Mode = $id
+                        break
+                    }
+                }
+                if (-not $Mode) {
+                    Write-Warn2 "Pick a number 1-$($script:ModeIds.Count) or a mode id."
                 }
             }
         }
@@ -378,22 +527,38 @@ if ($Mode -eq 'docker') {
     $ComposeFile = Join-Path $DockerDir 'docker-compose.yml'
     $EnvDocker   = Join-Path $DockerDir '.env'
 
+    # Sidecar services (postgres / qdrant / chroma) are no longer
+    # provisioned here — the Setup Wizard activates each one on demand
+    # via its own per-service deployment-mode picker.
     if ((Test-Path $ComposeFile) -and (Test-Path $EnvDocker) -and (-not $Reinstall)) {
         Write-Info "Existing Docker bundle detected at $DockerDir - reusing config."
     } else {
         $VncPwd      = New-Secret
-        $PgPwd       = New-Secret
         $OpenpaVer   = Resolve-OpenPAVersion
-        $UiRef       = if ($env:OPENPA_UI_REF) { $env:OPENPA_UI_REF } else { 'main' }
 
-        if ($Deployment -eq 'local') {
-            $DockerAppUrl    = 'http://localhost:1112'
-            $DockerCors      = 'http://localhost:1515,http://127.0.0.1:1515'
-            $DockerWizardEnv = 'local'
-        } else {
-            $DockerAppUrl    = "http://${AppHost}:1112"
-            $DockerCors      = "http://${AppHost}:1515,http://localhost:1515"
-            $DockerWizardEnv = 'server'
+        switch ($Deployment) {
+            'local' {
+                $DockerAppUrl    = 'http://localhost:1112'
+                $DockerCors      = 'http://localhost:1515,http://127.0.0.1:1515'
+                $DockerWizardEnv = 'local'
+            }
+            'server' {
+                $DockerAppUrl    = "http://${AppHost}:1112"
+                $DockerCors      = "http://${AppHost}:1515,http://localhost:1515"
+                $DockerWizardEnv = 'server'
+            }
+            'custom' {
+                $DockerAppUrl    = $CustomValues['public_url']
+                $DockerCors      = $CustomValues['allowed_origins']
+                $DockerWizardEnv = $CustomValues['wizard_preset']
+            }
+        }
+
+        # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
+        # and other ad-hoc dev origins can hit the API without preflight
+        # failures. Production and test installs keep the locked-down list.
+        if ($Channel -eq 'dev') {
+            $DockerCors = '*'
         }
 
         Write-Info "Fetching docker-compose template"
@@ -402,11 +567,10 @@ if ($Mode -eq 'docker') {
         Write-Info "Writing $EnvDocker (secrets, do not commit)"
         $rendered = (Get-TemplateContent 'docker.env.tmpl') `
             -replace '__OPENPA_VERSION__', $OpenpaVer `
-            -replace '__OPENPA_UI_REF__',  $UiRef `
             -replace '__APP_URL__',        $DockerAppUrl `
             -replace '__CORS_ALLOWED_ORIGINS__', $DockerCors `
             -replace '__SETUP_WIZARD_ENV__', $DockerWizardEnv `
-            -replace '__PG_PASSWORD__',    $PgPwd `
+            -replace '__INSTALL_MODE__',   $Mode `
             -replace '__VNC_PASSWORD__',   $VncPwd
         $rendered | Set-Content -Path $EnvDocker -Encoding utf8
 
@@ -417,6 +581,21 @@ if ($Mode -eq 'docker') {
         if ($Channel -eq 'test') {
             Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/' -Encoding utf8
             Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/' -Encoding utf8
+        }
+
+        # Stamp the channel into docker.env so the running container's
+        # upgrader and feature installer see it. Without this, dev images
+        # fall back to ``production`` semantics at runtime — which makes
+        # ``pip_spec()`` pin to ``openpa==<version>`` and look up PyPI
+        # for a release that may not be published yet during release prep.
+        if ($Channel -eq 'production') {
+            Add-Content -Path $EnvDocker -Value 'OPENPA_UPGRADE_CHANNEL=production' -Encoding utf8
+        }
+        elseif ($Channel -eq 'test') {
+            Add-Content -Path $EnvDocker -Value 'OPENPA_UPGRADE_CHANNEL=test' -Encoding utf8
+        }
+        elseif ($Channel -eq 'dev') {
+            Add-Content -Path $EnvDocker -Value 'OPENPA_UPGRADE_CHANNEL=dev' -Encoding utf8
         }
 
         # Dev channel: emit a docker-compose.override.yml that points the
@@ -455,6 +634,11 @@ if ($Mode -eq 'docker') {
 
     if ($Deployment -eq 'local') {
         $HealthHost = 'localhost'
+    } elseif ($Deployment -eq 'custom') {
+        # http://foo.bar:1112 → foo.bar
+        $HealthHost = $CustomValues['public_url']
+        if ($HealthHost -match '^https?://([^:/]+)') { $HealthHost = $Matches[1] }
+        if (-not $HealthHost) { $HealthHost = 'localhost' }
     } else {
         $HealthHost = $AppHost
     }
@@ -673,6 +857,13 @@ if ($Channel -eq 'dev') {
     # wheel URL (Test PyPI's simple index is polluted, see the lengthy
     # rationale in the bash installer); production uses the bare
     # package name.
+    #
+    # The bare ``openpa`` install is intentionally thin — it ships only
+    # the core deps the server + Setup Wizard + SQLite need. Optional
+    # feature groups (vector embedding, vector stores, browser, channels,
+    # LLM SDKs, postgres) are installed on demand by ``app/features/``
+    # when the user enables them in the wizard. The Docker desktop image
+    # pre-bakes ``openpa[all]`` instead (see ``Dockerfile.desktop``).
     $InstallSpec = $null
     $InstallSourceLabel = ''
     switch ($Channel) {
@@ -781,15 +972,31 @@ if (-not (Test-Path $EnvFile)) {
         'local' {
             Get-TemplateContent 'local.env' | Set-Content -Path $EnvFile -Encoding utf8
         }
-        'container' {
-            Get-TemplateContent 'container.env' | Set-Content -Path $EnvFile -Encoding utf8
-        }
         'server' {
             # __APP_HOST__ is the only placeholder; the user-provided host
             # gets substituted as-is (validated above).
             ((Get-TemplateContent 'server.env.tmpl') -replace '__APP_HOST__', $AppHost) |
                 Set-Content -Path $EnvFile -Encoding utf8
         }
+        'custom' {
+            # All four advanced fields come from $CustomValues (filled
+            # either from -ListenHost/etc. params, the catalog defaults
+            # in -Unattended, or interactive prompts). They're already
+            # validated for the wizard_preset choice list and otherwise
+            # copy-pasted by the operator.
+            $rendered = (Get-TemplateContent 'custom.env.tmpl') `
+                -replace '__LISTEN_HOST__',         $CustomValues['listen_host'] `
+                -replace '__PUBLIC_URL__',          $CustomValues['public_url'] `
+                -replace '__CORS_ALLOWED_ORIGINS__', $CustomValues['allowed_origins'] `
+                -replace '__SETUP_WIZARD_ENV__',    $CustomValues['wizard_preset']
+            $rendered | Set-Content -Path $EnvFile -Encoding utf8
+        }
+    }
+    # Stamp the install mode so the backend's mode-rule filter knows which
+    # service modes to expose in the wizard. Native installs land here too;
+    # docker installs stamp INSTALL_MODE into docker.env above.
+    if (-not (Select-String -Path $EnvFile -Pattern '^INSTALL_MODE=' -Quiet)) {
+        Add-Content -Path $EnvFile -Value "INSTALL_MODE=$Mode" -Encoding utf8
     }
     Write-Ok "Wrote $EnvFile"
 } else {
@@ -817,10 +1024,30 @@ switch ($Channel) {
         }
     }
     'dev' {
-        # Deliberately leave OPENPA_UPGRADE_CHANNEL unset. get_channel()
-        # defaults to "production" when missing (app/upgrade/channel.py),
-        # which is harmless: ``openpa upgrade`` from a dev editable install
-        # is a footgun anyway and the dev path is to ``git pull``.
+        # Stamp the channel so the feature installer's ``pip_spec()`` knows
+        # to skip the ``==<version>`` pin (the editable install in /src or
+        # the developer's checkout already satisfies the requirement, and
+        # pinning to a release that hasn't been published to PyPI yet
+        # fails at install time). ``openpa upgrade`` itself is still a
+        # footgun in dev — the dev path is ``git pull`` — but the
+        # upgrader's no-op behavior on dev is preferable to it silently
+        # treating dev as production.
+        if (-not (Select-String -Path $EnvFile -Pattern '^OPENPA_UPGRADE_CHANNEL=' -Quiet)) {
+            Add-Content -Path $EnvFile -Value "`nOPENPA_UPGRADE_CHANNEL=dev" -Encoding utf8
+        }
+        # Replace the static template's locked-down CORS list with ``*``
+        # so ``npm run dev`` (Vite at localhost:5173) and other ad-hoc dev
+        # origins work without preflight failures. Idempotent: skip if
+        # already wildcarded so re-runs don't churn the file. ``-Encoding
+        # utf8`` is critical on both read and write — Windows PowerShell
+        # 5.1's default ``Get-Content`` decodes BOM-less UTF-8 as cp1252,
+        # which would corrupt non-ASCII characters (em-dashes, etc.) on
+        # roundtrip.
+        if (-not (Select-String -Path $EnvFile -Pattern '^CORS_ALLOWED_ORIGINS=\*$' -Quiet)) {
+            $filtered = Get-Content -Path $EnvFile -Encoding utf8 | Where-Object { $_ -notmatch '^CORS_ALLOWED_ORIGINS=' }
+            Set-Content -Path $EnvFile -Value $filtered -Encoding utf8
+            Add-Content -Path $EnvFile -Value 'CORS_ALLOWED_ORIGINS=*' -Encoding utf8
+        }
     }
 }
 
@@ -937,11 +1164,16 @@ if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
 
 # ── wizard handoff ────────────────────────────────────────────────────────
 
-# 'container' binds to 0.0.0.0 inside the container, but the user
-# browses from the docker host (where the published port surfaces as
-# localhost) - same wizard URL as 'local'.
+# 'custom' installs honour the public URL the user provided; 'server'
+# uses the host from -AppHost; 'local' is loopback. Custom URLs may
+# include a path/scheme; we swap the port to 1515 (the wizard SPA port)
+# while preserving the hostname.
 if ($Deployment -eq 'server') {
     $WizardUrl = "http://${AppHost}:1515/#/setup"
+} elseif ($Deployment -eq 'custom') {
+    $CustomHostPart = $CustomValues['public_url']
+    if ($CustomHostPart -match '^https?://([^:/]+)') { $CustomHostPart = $Matches[1] } else { $CustomHostPart = 'localhost' }
+    $WizardUrl = "http://${CustomHostPart}:1515/#/setup"
 } else {
     $WizardUrl = 'http://localhost:1515/#/setup'
 }

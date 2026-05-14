@@ -10,8 +10,8 @@ from starlette.routing import Route
 from app.api._auth import require_auth_or_setup_mode
 from app.config import load_all_provider_catalogs, load_provider_catalog
 from app.config.provider_auth import normalize_provider_auth_methods
-from app.storage.dynamic_config_storage import DynamicConfigStorage
 from app.lib.llm.factory import SUPPORTED_LLM_PROVIDERS
+from app.runtime import BootedState
 from app.utils.logger import logger
 
 # GitHub Copilot device code flow constants (from OpenClaw)
@@ -26,7 +26,23 @@ def _require_auth(request: Request):
     return None
 
 
-def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
+def _storage_not_ready() -> JSONResponse:
+    """503 response for write handlers invoked before storage is booted."""
+    return JSONResponse(
+        {"error": "Setup not complete — storage is not ready yet."},
+        status_code=503,
+    )
+
+
+def get_llm_routes(state: BootedState) -> list[Route]:
+    """LLM provider + model-group routes.
+
+    Registered pre-storage so the Setup Wizard can render the provider
+    catalog before ``bootstrap.toml`` exists. Handlers resolve
+    ``state.config_storage`` at request time — ``None`` during deferred
+    storage, populated post-boot — and gracefully degrade to a catalog-only
+    response when no per-profile values are reachable.
+    """
 
     async def handle_list_providers(request: Request) -> JSONResponse:
         """List all available LLM providers with their config status.
@@ -34,12 +50,19 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         Open during first-run setup so the wizard can show provider
         choices before any JWT exists; gated post-setup.
         """
-        denied = require_auth_or_setup_mode(request, config_storage)
-        if denied is not None:
-            return denied
+        config_storage = state.config_storage
+        if config_storage is not None:
+            denied = require_auth_or_setup_mode(request, config_storage)
+            if denied is not None:
+                return denied
         profile = getattr(request.user, "username", "") or ""
         catalogs = load_all_provider_catalogs()
         providers = []
+
+        def _stored(key: str) -> str | None:
+            if config_storage is None:
+                return None
+            return config_storage.get("llm_config", key, profile=profile)
 
         for name in SUPPORTED_LLM_PROVIDERS:
             catalog = catalogs.get(name, {})
@@ -53,9 +76,7 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
             auth_methods = normalize_provider_auth_methods(provider_info)
 
             # Read which auth method is active
-            active_auth_method = config_storage.get(
-                "llm_config", f"{name}.auth_method", profile=profile,
-            )
+            active_auth_method = _stored(f"{name}.auth_method")
             # Default to the first method marked is_default, or the first entry
             if not active_auth_method:
                 for am in auth_methods:
@@ -70,8 +91,7 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
             for am in auth_methods:
                 fields_response = {}
                 for field_key, field_spec in am.get("fields", {}).items():
-                    full_key = f"{name}.{field_key}"
-                    val = config_storage.get("llm_config", full_key, profile=profile)
+                    val = _stored(f"{name}.{field_key}")
                     fields_response[field_key] = {
                         "description": field_spec.get("description", ""),
                         "type": field_spec.get("type", "string"),
@@ -110,8 +130,7 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
             config_fields_status = {}
             current_values = {}
             for field_key, field_spec in legacy_config_fields.items():
-                full_key = f"{name}.{field_key}"
-                val = config_storage.get("llm_config", full_key, profile=profile)
+                val = _stored(f"{name}.{field_key}")
                 config_fields_status[field_key] = {
                     "description": field_spec.get("description", ""),
                     "type": field_spec.get("type", "string"),
@@ -162,6 +181,9 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        config_storage = state.config_storage
+        if config_storage is None:
+            return _storage_not_ready()
         profile = getattr(request.user, "username", "") or ""
         provider_name = request.path_params["name"]
 
@@ -213,6 +235,9 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        config_storage = state.config_storage
+        if config_storage is None:
+            return _storage_not_ready()
         profile = getattr(request.user, "username", "") or ""
         provider_name = request.path_params["name"]
 
@@ -233,6 +258,9 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        config_storage = state.config_storage
+        if config_storage is None:
+            return _storage_not_ready()
         profile = getattr(request.user, "username", "") or ""
         from app.config import settings as dynaconf_settings
 
@@ -271,6 +299,9 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        config_storage = state.config_storage
+        if config_storage is None:
+            return _storage_not_ready()
         profile = getattr(request.user, "username", "") or ""
         try:
             body = await request.json()
@@ -367,7 +398,8 @@ def get_llm_routes(config_storage: DynamicConfigStorage) -> list[Route]:
 
             access_token = data.get("access_token", "")
             if access_token:
-                if is_authenticated:
+                config_storage = state.config_storage
+                if is_authenticated and config_storage is not None:
                     config_storage.set("llm_config", "github-copilot.api_key", access_token, is_secret=True, profile=profile)
                     config_storage.set("llm_config", "github-copilot.auth_method", "device_code", profile=profile)
                     return JSONResponse({"status": "complete"})

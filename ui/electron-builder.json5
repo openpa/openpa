@@ -56,12 +56,8 @@
   //   2. ``electron-updater`` ignores drafts, so the live app keeps
   //      using the previous version until promotion.
   //
-  // The repo metadata MUST match the GitHub repo that hosts releases.
-  // After the openpa-ui → openpa repo merger, releases live on openpa.
-  // electron-updater caches the feed URL per install, so a one-time
-  // bridging release on the OLD openpa-ui repo (containing this updated
-  // config) is required to retarget already-installed clients before any
-  // unified release ships from openpa.
+  // The repo metadata MUST match the GitHub repo that hosts releases —
+  // releases live on openpa (the UI source is in ./ui in this repo).
   // ──────────────────────────────────────────────────────────────────────
   "publish": [
     {

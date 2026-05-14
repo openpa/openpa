@@ -1,6 +1,7 @@
-"""DocumentSyncService -- keeps disk, profile dirs, and Qdrant in lockstep.
+"""DocumentSyncService -- keeps disk, profile dirs, and the vector store in lockstep.
 
-Single source of truth for the ``documentation_search`` Qdrant collection.
+Single source of truth for the ``documentation_search`` collection in whichever
+vector store back-end the user picked (Qdrant or Chroma).
 
 Responsibilities
 ----------------
@@ -16,7 +17,7 @@ Responsibilities
   (created / modified / deleted / moved-from / moved-to).
 
 Thread safety: watchdog dispatches callbacks on its own thread, so all
-methods that mutate the Qdrant collection take the same ``threading.Lock``.
+methods that mutate the collection take the same ``threading.Lock``.
 """
 
 from __future__ import annotations
@@ -27,18 +28,15 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
 
-from qdrant_client.http.models import (
-    FieldCondition,
-    Filter,
-    MatchAny,
-    MatchValue,
-    PointStruct,
-)
-
 from app.documents.parser import parse_document
 from app.lib.embedding import LocalEmbeddings
 from app.utils.logger import logger
+from app.vectorstores.base import StoredPoint
 
+# ``StoredPoint`` is a provider-neutral TypedDict in
+# ``app.vectorstores.base`` (core, no extras needed). Use it instead of
+# ``qdrant_client.http.models.PointStruct`` so this module does not pull
+# in qdrant-client when the user picked Chroma as their vector store.
 if TYPE_CHECKING:
     from app.vectorstores.base import VectorStore
 
@@ -168,7 +166,7 @@ class DocumentSyncService:
             if to_delete:
                 self._delete_ids(to_delete)
 
-            points: list[PointStruct] = []
+            points: list[StoredPoint] = []
             for fid, payload in disk_state.items():
                 cur = existing_ids.get(fid)
                 if cur and cur.get("content_hash") == payload["content_hash"]:
@@ -177,10 +175,10 @@ class DocumentSyncService:
                 vector = self._embed(description)
                 if vector is None:
                     continue
-                points.append(PointStruct(id=fid, vector=vector, payload=payload))
+                points.append({"id": fid, "vector": vector, "payload": payload})
 
             if points:
-                self._ensure_collection(len(points[0].vector))
+                self._ensure_collection(len(points[0]["vector"] or []))
                 self._upsert_points(points)
                 logger.info(
                     f"[documents] reconcile scope={scope!r}: upserted {len(points)} "
@@ -241,7 +239,7 @@ class DocumentSyncService:
                 content_hash=content_hash,
             )
             self._upsert_points([
-                PointStruct(id=fid, vector=vector, payload=payload),
+                {"id": fid, "vector": vector, "payload": payload},
             ])
             logger.info(f"[documents] upserted {scope}/{relpath}")
 
@@ -406,17 +404,17 @@ class DocumentSyncService:
                 collection_name=COLLECTION_NAME, size=dimension,
             )
             logger.info(
-                f"[documents] created Qdrant collection "
+                f"[documents] created collection "
                 f"{COLLECTION_NAME!r} (dim={dimension})"
             )
         self._collection_ready = True
 
-    def _upsert_points(self, points: Iterable[PointStruct]) -> None:
+    def _upsert_points(self, points: Iterable[StoredPoint]) -> None:
         client = self._raw_client()
         if client is None:
             return
         stored = [
-            {"id": p.id, "vector": list(p.vector), "payload": dict(p.payload or {})}
+            {"id": p["id"], "vector": list(p["vector"] or []), "payload": dict(p["payload"] or {})}
             for p in points
         ]
         client.add_points(collection_name=COLLECTION_NAME, points=stored)

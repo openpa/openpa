@@ -3,8 +3,8 @@ import { ref, computed, watch, onMounted } from 'vue';
 import { ElCard, ElDivider } from 'element-plus';
 import { Icon } from '@iconify/vue';
 import {
-  listTools, listAgents, listLLMProviders, getProviderModels,
-  type ToolStatus, type RemoteAgentInfo, type LLMProvider,
+  listTools, listLLMProviders, getProviderModels,
+  type ToolStatus, type LLMProvider,
 } from '../../services/configApi';
 import type { JsonSchema } from '../../services/agentApi';
 import type { ProfileValue } from '../../stores/settings';
@@ -118,18 +118,9 @@ onMounted(async () => {
     // Fetch tools (always available, no auth needed during setup)
     const toolRes = await listTools(props.agentUrl, '');
 
-    // Try to fetch agents (works during profile setup; may fail during first setup)
-    let agents: RemoteAgentInfo[] = [];
-    try {
-      const agentRes = await listAgents(props.agentUrl, '');
-      agents = agentRes.agents;
-    } catch { /* First setup: no agents yet */ }
-
-    // After the refactor, built-in tools and skills are returned directly by
-    // /api/tools (with tool_type 'builtin' or 'skill'). The /api/agents
-    // endpoint only carries a2a/mcp tools, so there's no per-tool agent
-    // lookup to build here -- everything we need is on the tool row itself.
-    void agents;
+    // Built-in tools and skills are returned directly by /api/tools (with
+    // tool_type 'builtin' or 'skill'). /api/agents only carries a2a/mcp
+    // tools and is post-storage-only, so the wizard doesn't need it.
 
     // Load LLM providers and models
     try {

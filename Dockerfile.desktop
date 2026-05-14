@@ -8,14 +8,20 @@
 #
 # Build args:
 #
-#   OPENPA_UI_REF              — git ref (branch/tag/sha) to build the SPA
-#                                from. Default tracks main; pin to a
-#                                release tag in CI.
 #   OPENPA_PIP_SPEC            — what to ``pip install`` for the backend.
-#                                Default ``openpa`` pulls latest from PyPI;
-#                                override to ``openpa==X.Y.Z`` in CI for
-#                                deterministic image builds, or to
-#                                ``-e /src`` if you mount a checkout.
+#                                Default ``openpa`` is the thin core
+#                                (filesystem watching ships in core, so
+#                                no extras needed at this stage); the
+#                                Setup Wizard installs the optional
+#                                feature groups at runtime (deps land in
+#                                the ``openpa-venv`` volume so they
+#                                persist across container recreation).
+#                                Override to ``openpa==X.Y.Z`` in CI for
+#                                deterministic image builds, ``-e /src``
+#                                for an editable checkout, or
+#                                ``openpa[all]==X.Y.Z`` if you want a
+#                                fully-baked image with no wizard
+#                                install step.
 #   OPENPA_PIP_INDEX_URL       — optional pip primary index. Empty (the
 #                                default) means use pip's default
 #                                (production PyPI). Set to
@@ -28,26 +34,36 @@
 #                                still resolve.
 #   RESOLUTION                 — VNC framebuffer geometry (passed to
 #                                vncserver). Larger = higher network/CPU
-#                                cost; 1920x1080 is the comfort default.
+#                                cost; 1280x720 is the comfort default.
 
-# ── Stage 1: build the openpa-ui SPA ──────────────────────────────────────
+# ── Stage 1: build the SPA ────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS spa-builder
 
-ARG OPENPA_UI_REF=main
-
-# git is the only build-time tooling we need on top of node — npm pulls
-# the rest. ``--depth 1`` keeps the clone tiny (we don't need history).
+# python3 is needed by ui/package.json's ``preweb:build`` hook, which
+# runs scripts/sync_ui_version.py to copy app/__version__.py into
+# ui/package.json before vite builds.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends python3 \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN git clone --depth 1 --branch "$OPENPA_UI_REF" \
-        https://github.com/openpa/openpa-ui.git . \
-    && npm ci \
-    && npm run web:build
 
-# ``web:build`` outputs to ``dist-web/`` (per vite.config.web.ts). The
+# Install deps first (their own layer) so source-only edits don't bust the
+# npm cache. ``npm ci`` is lockfile-strict for reproducible builds.
+COPY ui/package.json ui/package-lock.json ./ui/
+RUN cd ui && npm ci
+
+# sync_ui_version.py expects the host repo layout (REPO_ROOT/app,
+# REPO_ROOT/scripts, REPO_ROOT/ui) — mirror it under /build so the
+# preweb:build hook can resolve both files.
+COPY app/__version__.py ./app/__version__.py
+COPY scripts/sync_ui_version.py ./scripts/sync_ui_version.py
+COPY ui/ ./ui/
+
+RUN cd ui && npm run web:build
+
+# ``web:build`` outputs to ``ui/dist-web/`` (per vite.config.web.ts). The
 # runtimeConfig helper resolves the agent URL from window.location at
 # runtime, so a single build works for both local and remote access —
 # no per-deploy ``VITE_AGENT_URL`` baking required.
@@ -119,15 +135,46 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa \
            python3.13 python3.13-venv python3.13-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Docker CLI + compose plugin (client only — no daemon) ────────────────
+# The Setup Wizard's Docker provisioner shells out to ``docker compose``
+# to bring up postgres / qdrant / chroma sidecars. The compose file
+# itself bind-mounts the host's ``/var/run/docker.sock`` into this
+# container, so the CLI installed here talks to the host's daemon
+# (NOT a daemon inside the container).
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+           docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── OpenPA backend ────────────────────────────────────────────────────────
+# Default is bare ``openpa``: core ships watchdog so filesystem watching
+# (documents sync, skills hot-reload, file-browser SSE, the
+# ``register_file_watcher`` built-in tool) is available on first boot
+# without an extras pin. The Setup Wizard installs the remaining
+# optional feature groups (embeddings, vectorstores, browser, channels,
+# LLM SDKs, postgres) at runtime as the user enables them.
+# CI / dev callers that want a different shape can override
+# ``OPENPA_PIP_SPEC`` at build time (e.g. ``openpa[all]==X.Y.Z`` for a
+# fully-baked image).
 ARG OPENPA_PIP_SPEC="openpa"
 ARG OPENPA_PIP_INDEX_URL=""
 ARG OPENPA_PIP_EXTRA_INDEX_URL=""
 
-# Dedicated venv keeps the install isolated from any system Python and
-# from anything the user installs at the desktop level. /opt/openpa is
-# the canonical "application bytes" path (read-only at runtime), while
-# /root/.openpa is the writable working directory (mounted as a volume).
+# We build the venv into ``/opt/openpa-baseline/venv`` instead of
+# ``/opt/openpa/venv`` because the latter is volume-mounted at runtime
+# (compose ``openpa-venv``) so the user's wizard-installed extras
+# persist across container recreation. The entrypoint seeds the volume
+# from this baseline on first boot.
+#
+# Without the volume, every ``docker compose down && up`` (which
+# replaces the container) would wipe the runtime pip installs and
+# force the user back through the wizard.
 #
 # PIP_INDEX_URL / PIP_EXTRA_INDEX_URL are pip's own env vars; setting
 # them inline scopes the override to this RUN step so the final image
@@ -147,23 +194,24 @@ ARG OPENPA_PIP_EXTRA_INDEX_URL=""
 # Quoting would collapse the dev form into a single argument and pip
 # would reject ``-e /src`` as an invalid requirement spec.
 RUN --mount=type=bind,target=/src,rw \
-    python3.13 -m venv /opt/openpa/venv \
-    && /opt/openpa/venv/bin/pip install --upgrade pip \
+    python3.13 -m venv /opt/openpa-baseline/venv \
+    && /opt/openpa-baseline/venv/bin/pip install --upgrade pip \
     && PIP_INDEX_URL="$OPENPA_PIP_INDEX_URL" \
        PIP_EXTRA_INDEX_URL="$OPENPA_PIP_EXTRA_INDEX_URL" \
-       /opt/openpa/venv/bin/pip install --pre $OPENPA_PIP_SPEC
+       /opt/openpa-baseline/venv/bin/pip install --pre $OPENPA_PIP_SPEC
 
+# ``PATH`` points at the runtime venv path; the entrypoint seeds it
+# from baseline before any ``openpa`` binary is invoked.
 ENV PATH="/opt/openpa/venv/bin:${PATH}"
 
-# Playwright pulls its own browser binaries on first use. Install the
-# Chromium runtime up-front so the agent doesn't have to download it on
-# the first request — a multi-minute stall the user would hit at the
-# worst possible moment.
-RUN /opt/openpa/venv/bin/python -m playwright install --with-deps chromium \
-    || echo "Playwright install best-effort; skipping on failure."
+# Playwright browser binaries are no longer pre-installed — the
+# ``browser`` feature is optional and the wizard installs both the
+# Python wheel and the chromium runtime when the user enables it.
+# ``PLAYWRIGHT_BROWSERS_PATH`` parks the cache inside the working-dir
+# volume so it persists across container recreation.
 
 # ── built SPA from stage 1 ────────────────────────────────────────────────
-COPY --from=spa-builder /build/dist-web/ /opt/openpa-ui/
+COPY --from=spa-builder /build/ui/dist-web/ /opt/openpa-ui/
 
 # ── entrypoint ────────────────────────────────────────────────────────────
 COPY install/desktop/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -176,13 +224,13 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # the freshly-built SPA from this Dockerfile rather than whatever (if
 # anything) shipped inside the openpa wheel.
 ENV VNC_PASSWORD=changeme \
-    RESOLUTION=1920x1080 \
+    RESOLUTION=1280x720 \
     OPENPA_WORKING_DIR=/root/.openpa \
-    OPENPA_DB_PROVIDER=postgres \
     OPENPA_UI_DIR=/opt/openpa-ui \
     OPENPA_UI_PORT=1515 \
     HOST=0.0.0.0 \
-    PORT=1112
+    PORT=1112 \
+    PLAYWRIGHT_BROWSERS_PATH=/root/.openpa/playwright-browsers
 
 WORKDIR /root/.openpa
 

@@ -19,11 +19,13 @@ from app.api._auth import require_auth_or_setup_mode
 from app.config.settings import BaseConfig
 from app.events.settings_state_bus import publish_settings_state_changed
 from app.lib.llm.factory import create_llm_provider
+from app.runtime import BootedState
 from app.storage import get_autostart_storage
-from app.tools import ToolRegistry, ToolType
+from app.tools import ToolType
 from app.tools.builtin import (
     BuiltInToolGroup,
     get_builtin_tool_config,
+    list_builtin_tool_catalog,
     refresh_builtin_tool_oauth,
 )
 from app.tools.builtin.exec_shell import publish_process_list_changed
@@ -44,13 +46,25 @@ def _require_auth(request: Request):
     return None
 
 
-def get_tool_routes(
-    registry: ToolRegistry,
-    config_storage=None,
-    connect_persisted_tool=None,
-) -> list[Route]:
+def _storage_not_ready() -> JSONResponse:
+    """503 response for write handlers invoked before storage is booted."""
+    return JSONResponse(
+        {"error": "Setup not complete — storage is not ready yet."},
+        status_code=503,
+    )
 
-    config_manager = registry.config
+
+def get_tool_routes(state: BootedState) -> list[Route]:
+    """Tool-management routes.
+
+    Registered pre-storage so the Setup Wizard can render the tool catalog
+    before the registry has been built. Handlers resolve ``state.registry``,
+    ``state.config_storage``, and ``state.connect_persisted_tool`` at
+    request time; ``handle_list_tools`` falls back to
+    :func:`list_builtin_tool_catalog` when the registry is not yet
+    available. Write handlers stay auth-gated and return 503 if invoked
+    before storage is ready.
+    """
 
     async def handle_list_tools(request: Request) -> JSONResponse:
         """List all tools visible to the profile (excluding hidden intrinsic tools).
@@ -69,9 +83,18 @@ def get_tool_routes(
         can render the tool catalog with default enabled flags and empty
         per-profile snapshots; gated post-setup.
         """
-        denied = require_auth_or_setup_mode(request, config_storage)
-        if denied is not None:
-            return denied
+        registry = state.registry
+        config_storage = state.config_storage
+        if config_storage is not None:
+            denied = require_auth_or_setup_mode(request, config_storage)
+            if denied is not None:
+                return denied
+        # Deferred-storage window: no registry yet. Return the static built-in
+        # catalog so the wizard's Tools step renders before the user clicks
+        # "Apply" (which is what materialises storage and the registry).
+        if registry is None:
+            return JSONResponse({"tools": list_builtin_tool_catalog()})
+        config_manager = registry.config
         profile = _profile_from_request(request)
         if not profile and config_storage is not None and config_storage.is_setup_complete():
             return JSONResponse({"error": "Profile is required"}, status_code=400)
@@ -111,6 +134,10 @@ def get_tool_routes(
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        registry = state.registry
+        if registry is None:
+            return _storage_not_ready()
+        config_manager = registry.config
         profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
@@ -142,6 +169,10 @@ def get_tool_routes(
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        registry = state.registry
+        if registry is None:
+            return _storage_not_ready()
+        config_manager = registry.config
         profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
@@ -193,6 +224,10 @@ def get_tool_routes(
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        registry = state.registry
+        if registry is None:
+            return _storage_not_ready()
+        config_manager = registry.config
         profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
@@ -213,6 +248,11 @@ def get_tool_routes(
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        registry = state.registry
+        if registry is None:
+            return _storage_not_ready()
+        config_manager = registry.config
+        config_storage = state.config_storage
         profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
@@ -311,6 +351,11 @@ def get_tool_routes(
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        registry = state.registry
+        if registry is None:
+            return _storage_not_ready()
+        config_manager = registry.config
+        config_storage = state.config_storage
         profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
@@ -409,6 +454,9 @@ def get_tool_routes(
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        registry = state.registry
+        if registry is None:
+            return _storage_not_ready()
         profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)
@@ -427,6 +475,7 @@ def get_tool_routes(
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
+        connect_persisted_tool = state.connect_persisted_tool
         if bool(enabled) and connect_persisted_tool is not None:
             tool = registry.get(tool_id)
             if tool is not None and getattr(tool, "is_stub", False):
@@ -449,6 +498,9 @@ def get_tool_routes(
         unauth = _require_auth(request)
         if unauth is not None:
             return unauth
+        registry = state.registry
+        if registry is None:
+            return _storage_not_ready()
         profile = _profile_from_request(request)
         if not profile:
             return JSONResponse({"error": "Profile is required"}, status_code=400)

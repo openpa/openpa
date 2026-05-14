@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -379,17 +380,45 @@ def _pip_spec_for(release: manifest.ReleaseInfo) -> str:
     return f"openpa=={release.version}"
 
 
+def _have_pip() -> bool:
+    """Return True if ``sys.executable -m pip --version`` works.
+
+    Native installs use ``python -m venv`` which always bundles pip, so
+    this is True in production. ``uv``-managed development venvs (created
+    by ``uv sync`` / ``uv run``) skip pip by default; for those we fall
+    back to ``uv pip install``.
+    """
+    try:
+        rc = subprocess.run(
+            [sys.executable, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode
+    except (FileNotFoundError, OSError):
+        return False
+    return rc == 0
+
+
 def _pip_install(
     spec: str,
     callback: ProgressCallback | None,
     *,
     channel: Channel,
+    upgrade: bool = True,
 ) -> None:
-    """Run ``pip install --upgrade <spec>`` against the current interpreter.
+    """Run ``pip install [--upgrade] <spec>`` against the current interpreter.
 
-    Using ``sys.executable`` keeps us in the same venv we're running
-    out of. ``--upgrade`` lets us downgrade as well as upgrade (which
-    is what the rollback path needs).
+    Uses ``sys.executable -m pip`` when pip is available in this venv;
+    otherwise falls back to ``uv pip install --python <sys.executable>``
+    so development venvs created by ``uv sync`` (which omits pip) keep
+    working. Either way the install targets the live process's venv.
+
+    ``--upgrade`` (default for the upgrade runner) lets us downgrade as
+    well as upgrade, which is what the rollback path needs.
+
+    The feature installer passes ``upgrade=False`` because adding an
+    extras group should NOT touch the already-installed openpa wheel —
+    otherwise an editable dev install would get clobbered by a PyPI
+    download whenever the user enables a feature.
 
     On the test channel we add ``--pre`` (the test wheels are PEP 440
     pre-releases that pip otherwise refuses) plus the Test PyPI index
@@ -397,26 +426,58 @@ def _pip_install(
     the subprocess env: a long-running server may have started before
     the installer set it, so inheriting from ``os.environ`` isn't
     enough.
+
+    Reused by :mod:`app.features.installer` to install opt-in extras
+    groups picked in the Setup Wizard (e.g. ``openpa[embeddings-me5]``).
     """
-    cmd: list[str] = [sys.executable, "-m", "pip", "install", "--upgrade"]
+    if _have_pip():
+        cmd: list[str] = [sys.executable, "-m", "pip", "install"]
+        if upgrade:
+            cmd.append("--upgrade")
+        installer = "pip"
+    else:
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            raise RuntimeError(
+                "Neither pip nor uv is available in this environment. "
+                "Re-create the venv with `python -m venv .venv` (which "
+                "bundles pip), or install uv (https://docs.astral.sh/uv/).",
+            )
+        cmd = [uv_path, "pip", "install", "--python", sys.executable]
+        if upgrade:
+            cmd.append("--upgrade")
+        installer = "uv pip"
 
     env = os.environ.copy()
     # Scope cache to the working dir for both channels — same reason
     # the installers do (avoid a stale ~/.cache/pip pinning an old
-    # wheel after a reinstall).
+    # wheel after a reinstall). ``UV_CACHE_DIR`` covers the uv fallback;
+    # uv ignores ``PIP_CACHE_DIR`` so we set both to be explicit.
     from app.config.settings import BaseConfig
-    env["PIP_CACHE_DIR"] = str(Path(BaseConfig.OPENPA_WORKING_DIR) / "pip-cache")
+    cache_dir = str(Path(BaseConfig.OPENPA_WORKING_DIR) / "pip-cache")
+    env["PIP_CACHE_DIR"] = cache_dir
+    env["UV_CACHE_DIR"] = cache_dir
 
     if channel == "test":
         index_url = os.environ.get("OPENPA_PIP_INDEX_URL") or _TEST_PYPI_INDEX_URL
         extra_index_url = (
             os.environ.get("OPENPA_PIP_EXTRA_INDEX_URL") or _TEST_PYPI_EXTRA_INDEX_URL
         )
-        cmd += [
-            "--pre",
-            "--index-url", index_url,
-            "--extra-index-url", extra_index_url,
-        ]
+        if installer == "pip":
+            cmd += [
+                "--pre",
+                "--index-url", index_url,
+                "--extra-index-url", extra_index_url,
+            ]
+        else:
+            # uv pip accepts the same flags but spells some of them
+            # differently (``--prerelease=allow`` for ``--pre``); use
+            # the env-var form so the syntax stays uniform.
+            cmd += [
+                "--prerelease", "allow",
+                "--index-url", index_url,
+                "--extra-index-url", extra_index_url,
+            ]
 
     cmd.append(spec)
     _run(cmd, callback, env=env)
@@ -435,27 +496,85 @@ def _run(
     ``prefer`` lets a step name a more user-friendly equivalent in
     error messages (e.g., ``"openpa db upgrade"`` instead of the raw
     Alembic invocation). Cosmetic only.
+
+    Every invocation tees the subprocess's combined stdout/stderr to
+    ``~/.openpa/upgrade.log`` (best-effort; a log-open failure does not
+    block the install). The 20-line tail in :class:`RuntimeError` is
+    deliberately small so it surfaces in API responses without
+    swamping them, but it's useless for a pip install that prints
+    thousands of "Collecting" lines before the actual error — the log
+    file is where you go for the full output. The error message
+    includes the log path so the user knows where to look.
     """
     label = prefer or " ".join(cmd)
+    log_path, log_file = _open_run_log(label)
     _emit(callback, UpgradeEvent("install", f"$ {label}"))
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
-            env=env,
-        )
-    except FileNotFoundError as e:
-        if ignore_failure:
-            return
-        raise RuntimeError(f"{label}: {e}") from e
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+                env=env,
+            )
+        except FileNotFoundError as e:
+            if log_file is not None:
+                with contextlib.suppress(OSError):
+                    log_file.write(f"FileNotFoundError: {e}\n")
+            if ignore_failure:
+                return
+            raise RuntimeError(f"{label}: {e}") from e
 
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        _emit(callback, UpgradeEvent("install", line.rstrip("\n")))
-    rc = proc.wait()
+        assert proc.stdout is not None
+        tail: list[str] = []
+        for line in proc.stdout:
+            clean = line.rstrip("\n")
+            _emit(callback, UpgradeEvent("install", clean))
+            if log_file is not None:
+                with contextlib.suppress(OSError):
+                    log_file.write(clean + "\n")
+            tail.append(clean)
+            if len(tail) > 20:
+                tail.pop(0)
+        rc = proc.wait()
+    finally:
+        if log_file is not None:
+            with contextlib.suppress(OSError):
+                log_file.flush()
+                log_file.close()
+
     if rc != 0 and not ignore_failure:
-        raise RuntimeError(f"{label} exited with code {rc}.")
+        suffix = "\n".join(tail).strip()
+        log_hint = f"\n(full output: {log_path})" if log_path is not None else ""
+        if suffix:
+            raise RuntimeError(f"{label} exited with code {rc}.\n{suffix}{log_hint}")
+        raise RuntimeError(f"{label} exited with code {rc}.{log_hint}")
+
+
+def _open_run_log(label: str):
+    """Open ``~/.openpa/upgrade.log`` for appending and write a header.
+
+    Returns ``(log_path, file_handle)`` on success or ``(None, None)`` if
+    the log can't be opened — _run() treats logging as best-effort so a
+    full disk or a permissions glitch can't block an install.
+
+    Rotates when the file exceeds 5MB by truncating to the last 2MB, so
+    a long-lived install doesn't accumulate unbounded pip output.
+    """
+    try:
+        from app.config.settings import BaseConfig
+        log_path = Path(BaseConfig.OPENPA_WORKING_DIR) / "upgrade.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if log_path.exists() and log_path.stat().st_size > 5 * 1024 * 1024:
+            tail_bytes = log_path.read_bytes()[-2 * 1024 * 1024:]
+            log_path.write_bytes(tail_bytes)
+        log_file = log_path.open("a", encoding="utf-8", errors="replace")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        log_file.write(f"\n=== {ts} $ {label} ===\n")
+        log_file.flush()
+        return log_path, log_file
+    except OSError:
+        return None, None
 
 
 def _wait_for_health(*, timeout_s: int) -> bool:

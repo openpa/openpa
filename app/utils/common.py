@@ -1,9 +1,6 @@
-from typing import List, cast
-import numpy as np
-import pandas as pd
-from tiktoken import encoding_for_model
+from __future__ import annotations
 
-from openai.types.chat import ChatCompletionMessageParam
+from typing import TYPE_CHECKING, List
 
 from a2a.types import (
     Role,
@@ -13,6 +10,15 @@ from a2a.types import (
 from app.lib.embedding import LocalEmbeddings
 from app.types import EmbeddingTable, ToolEmbeddingRecord
 from app.utils import logger
+
+# Heavy SDK imports are deferred: openai (LLM SDK), pandas
+# (`embeddings-me5`/`embeddings-gemma` extras), tiktoken (`tokenization`
+# extras), and numpy (transitively pulled by sentence-transformers in
+# the embeddings extras) are not in the core install. Only modules that
+# actually call into them need the import.
+if TYPE_CHECKING:
+    import numpy as np
+    from openai.types.chat import ChatCompletionMessageParam
 
 
 EMBEDDING_TABLE_COLUMNS = ['id', 'text', 'embeddings', 'tool_id', 'name', 'tool_type', 'enabled']
@@ -46,6 +52,12 @@ def build_table_embeddings(
         EmbeddingTable wrapping a DataFrame with columns
         ``id, text, embeddings, tool_id, name, tool_type, enabled``.
     """
+    # pandas ships with the ``embeddings-me5`` / ``embeddings-gemma``
+    # extras groups, which the Setup Wizard installs whenever the user
+    # enables Vector Embedding. Lazy-imported so the core install
+    # doesn't drag in the wheel.
+    import pandas as pd
+
     logger.info('Generating Embeddings for provided data')
     try:
         if data:
@@ -88,6 +100,7 @@ def find_similar_item(query: str, embedding_vendor: LocalEmbeddings, embedding_t
     Returns:
         The ID of the most similar item
     """
+    import numpy as np
     df = embedding_table.dataframe
     query_embedding = embedding_vendor.embed_query(query)
     dot_products = np.dot(
@@ -116,6 +129,7 @@ def find_similar_items(
     Returns:
         List of IDs of the most similar items, ordered by similarity
     """
+    import numpy as np
     df = embedding_table.dataframe
     query_embedding = embedding_vendor.embed_query(query)
     dot_products = np.dot(
@@ -132,9 +146,11 @@ def find_similar_items(
     return [df.iloc[i]['id'] for i in top_indices]
 
 
-def convert_task_history_to_messages(task_history: list[Message]) -> List[ChatCompletionMessageParam]:
+def convert_task_history_to_messages(task_history: list[Message]) -> list[ChatCompletionMessageParam]:
     """Convert task history to ChatCompletionMessageParam format"""
-    messages: List[ChatCompletionMessageParam] = []
+    # ChatCompletionMessageParam is a TypedDict at the openai-SDK level —
+    # at runtime it's just a dict, so no SDK import is needed here.
+    messages: list[ChatCompletionMessageParam] = []
 
     for message in task_history:
         # Extract text content from message parts
@@ -159,15 +175,15 @@ def convert_task_history_to_messages(task_history: list[Message]) -> List[ChatCo
 
         if content.strip():  # Only add messages with content
             if role == "assistant":
-                messages.append(cast(ChatCompletionMessageParam, {
+                messages.append({
                     "role": "assistant",
-                    "content": content
-                }))
+                    "content": content,
+                })
             else:  # user role
-                messages.append(cast(ChatCompletionMessageParam, {
+                messages.append({
                     "role": "user",
-                    "content": content
-                }))
+                    "content": content,
+                })
 
     return messages
 
@@ -175,13 +191,13 @@ def convert_task_history_to_messages(task_history: list[Message]) -> List[ChatCo
 def convert_db_messages_to_history(
     db_messages: list[dict],
     inject_ids: bool = True,
-) -> List[ChatCompletionMessageParam]:
+) -> list[ChatCompletionMessageParam]:
     """Convert database message dicts to ChatCompletionMessageParam format.
 
     When inject_ids is True, each message's content is suffixed with
     ``\\nid: <uuid>`` so the LLM can reference it via the message_detail tool.
     """
-    messages: List[ChatCompletionMessageParam] = []
+    messages: list[ChatCompletionMessageParam] = []
     for m in db_messages:
         role = "assistant" if m["role"] == "agent" else m["role"]
         content = m.get("content") or ""
@@ -192,15 +208,15 @@ def convert_db_messages_to_history(
         summary = m.get("summary")
         if summary:
             content += f"\nsummary: {summary}"
-        messages.append(cast(ChatCompletionMessageParam, {
+        messages.append({
             "role": role,
             "content": content,
-        }))
+        })
     return messages
 
 
-def limit_messages(messages: List[ChatCompletionMessageParam], max_length: int,
-                   model: str = "gpt-4o") -> List[ChatCompletionMessageParam]:
+def limit_messages(messages: list[ChatCompletionMessageParam], max_length: int,
+                   model: str = "gpt-4o") -> list[ChatCompletionMessageParam]:
     """Limit messages by token length, keeping the most recent messages.
 
     This function iterates from the end of the messages list (most recent) and
@@ -214,8 +230,9 @@ def limit_messages(messages: List[ChatCompletionMessageParam], max_length: int,
     Returns:
         List of messages within the token limit, preserving order
     """
+    from tiktoken import encoding_for_model
     encoder = encoding_for_model(model)
-    llm_messages: List[ChatCompletionMessageParam] = []
+    llm_messages: list[ChatCompletionMessageParam] = []
 
     for i in range(len(messages) - 1, -1, -1):
         # Get messages from index i to end
@@ -240,11 +257,11 @@ def limit_messages(messages: List[ChatCompletionMessageParam], max_length: int,
 
 
 def truncate_messages(
-    messages: List[ChatCompletionMessageParam],
+    messages: list[ChatCompletionMessageParam],
     max_tokens_per_message: int,
     preserve_recent: int = 2,
     model: str = "gpt-4o",
-) -> List[ChatCompletionMessageParam]:
+) -> list[ChatCompletionMessageParam]:
     """Truncate older messages to a maximum token length per message.
 
     The most recent `preserve_recent` messages are kept at full length.
@@ -263,8 +280,9 @@ def truncate_messages(
     if not messages:
         return []
 
+    from tiktoken import encoding_for_model
     encoder = encoding_for_model(model)
-    result: List[ChatCompletionMessageParam] = []
+    result: list[ChatCompletionMessageParam] = []
     protected_start = max(len(messages) - preserve_recent, 0)
 
     for i, msg in enumerate(messages):
@@ -280,7 +298,7 @@ def truncate_messages(
         tokens = encoder.encode(content)
         if len(tokens) > max_tokens_per_message:
             truncated_text = encoder.decode(tokens[:max_tokens_per_message]) + '...'
-            result.append(cast(ChatCompletionMessageParam, {**msg, "content": truncated_text}))
+            result.append({**msg, "content": truncated_text})
         else:
             result.append(msg)
 
@@ -336,6 +354,7 @@ def truncate_old_observations(
         return list(steps)
 
     keep_from = max(len(spans) - preserve_recent, 0)
+    from tiktoken import encoding_for_model
     encoder = encoding_for_model(model)
 
     rewritten_bodies: dict[tuple[int, int, int], str] = {}

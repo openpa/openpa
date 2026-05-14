@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.features import manifest as feature_manifest
 from app.upgrade import channel, manifest, runner
 
 
@@ -22,6 +23,11 @@ def test_get_channel_defaults_to_production(monkeypatch: pytest.MonkeyPatch) -> 
 def test_get_channel_test_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENPA_UPGRADE_CHANNEL", "test")
     assert channel.get_channel() == "test"
+
+
+def test_get_channel_dev_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENPA_UPGRADE_CHANNEL", "dev")
+    assert channel.get_channel() == "dev"
 
 
 def test_get_channel_unknown_value_defaults_to_production(
@@ -75,6 +81,42 @@ def test_channel_is_newer_handles_dev_releases() -> None:
     assert channel.is_newer("0.1.5.dev2", "0.1.5.dev1") is True
     assert channel.is_newer("0.1.5", "0.1.5.dev99") is True
     assert channel.is_newer("0.1.5.dev1", "0.1.5") is False
+
+
+# ── features.pip_spec channel handling ────────────────────────────────────
+
+
+def test_pip_spec_production_pins_version() -> None:
+    from app.__version__ import __version__
+    spec = feature_manifest.pip_spec(["embedding.me5"], channel="production")
+    assert spec == f"openpa[embeddings-me5]=={__version__}"
+
+
+def test_pip_spec_test_pins_version() -> None:
+    # Test channel still pins — Test PyPI has the matching prerelease.
+    from app.__version__ import __version__
+    spec = feature_manifest.pip_spec(["embedding.me5"], channel="test")
+    assert spec == f"openpa[embeddings-me5]=={__version__}"
+
+
+def test_pip_spec_dev_skips_version_pin() -> None:
+    # Dev channel: editable install in /src satisfies the requirement,
+    # pinning to ``==<version>`` would force pip to consult PyPI for a
+    # release that may not be published yet.
+    spec = feature_manifest.pip_spec(
+        ["embedding.me5", "vectorstore.chroma"], channel="dev",
+    )
+    assert spec == "openpa[embeddings-me5,vectorstore-chroma]"
+
+
+def test_pip_spec_dev_with_no_features() -> None:
+    assert feature_manifest.pip_spec([], channel="dev") == "openpa"
+
+
+def test_pip_spec_defaults_to_production() -> None:
+    from app.__version__ import __version__
+    spec = feature_manifest.pip_spec(["embedding.me5"])
+    assert spec == f"openpa[embeddings-me5]=={__version__}"
 
 
 # ── manifest.py version helpers ───────────────────────────────────────────

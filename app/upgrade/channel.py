@@ -1,10 +1,18 @@
 """Release-channel helpers.
 
-OpenPA ships two release channels: ``production`` (PyPI + GitHub
-``/releases/latest``) and ``test`` (Test PyPI + GitHub prereleases
-tagged ``v*-testN``). The channel is decided at install time and
-written to ``~/.openpa/.env`` as ``OPENPA_UPGRADE_CHANNEL``; switching
-channels is a deliberate reinstall, not a runtime toggle.
+OpenPA ships three release channels: ``production`` (PyPI + GitHub
+``/releases/latest``), ``test`` (Test PyPI + GitHub prereleases tagged
+``v*-testN``), and ``dev`` (editable install rooted at the bind-mounted
+source checkout — Docker dev mode and ``uv sync`` native dev mode). The
+channel is decided at install time and written to ``~/.openpa/.env`` as
+``OPENPA_UPGRADE_CHANNEL``; switching channels is a deliberate reinstall,
+not a runtime toggle.
+
+Dev exists so the feature installer can tell "we have local source"
+apart from "we have a PyPI install" — pinning ``openpa==X.Y.Z`` for a
+not-yet-published version only works by accident in dev (the installed
+editable happens to match the pinned version), so :func:`pip_spec` drops
+the pin in dev to make that explicit.
 
 This module is the single owner of:
 
@@ -28,7 +36,7 @@ import re
 from typing import Literal
 
 
-Channel = Literal["production", "test"]
+Channel = Literal["production", "test", "dev"]
 
 
 def get_channel() -> Channel:
@@ -41,6 +49,8 @@ def get_channel() -> Channel:
     value = os.environ.get("OPENPA_UPGRADE_CHANNEL", "").strip().lower()
     if value == "test":
         return "test"
+    if value == "dev":
+        return "dev"
     return "production"
 
 

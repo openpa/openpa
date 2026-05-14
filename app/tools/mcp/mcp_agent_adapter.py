@@ -6,10 +6,12 @@ Makes an MCP server behave like an A2A agent by:
 3. Producing synthetic A2A events for parse_agent_events()
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import uuid
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from a2a.types import (
     AgentCapabilities,
@@ -28,7 +30,12 @@ from a2a.types import (
     TaskStatusUpdateEvent,
     TextPart,
 )
-from openai.types.chat import ChatCompletionMessageParam
+
+# OpenAI types are only used as annotations (PEP 563-stringified) so
+# loading them under TYPE_CHECKING keeps the MCP adapter importable on
+# a thin-core install.
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 from app.config.settings import BaseConfig
 from app.constants import ChatCompletionTypeEnum

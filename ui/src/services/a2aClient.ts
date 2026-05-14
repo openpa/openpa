@@ -12,8 +12,23 @@ import { getAgentUrl } from './runtimeConfig';
 // Declare Electron flag
 declare const __IS_ELECTRON__: boolean;
 
-// Get the agent URL — runtime config (Electron) or build-time fallback (web).
+// Get the agent URL — prefer the live Pinia ref over the bridge snapshot.
+//
+// ``getAgentUrl()`` reads ``window.openpa.config.agentUrl``, which is a
+// snapshot the Electron preload captured synchronously at startup. When
+// the Setup Wizard updates the URL via ``setAgentUrl``, the snapshot
+// stays stale for the rest of the session (the IPC persists to disk and
+// updates the main-process cache, but never refreshes the renderer's
+// copy). The Pinia ref does get updated, so we prefer it when present
+// and only fall back to the bridge/env path during very-early calls
+// before the store has been initialised.
 function getBaseUrl(): string {
+  try {
+    const fromStore = useSettingsStore().agentUrl;
+    if (fromStore) return fromStore;
+  } catch {
+    // Pinia not active yet (module-load-time call). Fall through.
+  }
   return getAgentUrl();
 }
 

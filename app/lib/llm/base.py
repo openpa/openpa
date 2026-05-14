@@ -1,9 +1,17 @@
-from openai.types import ResponseFormatJSONObject, ResponseFormatJSONSchema, ResponseFormatText
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
-from typing import AsyncGenerator, Any, Dict, List, Optional, Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, AsyncGenerator, Any, Dict, List, Optional, Union
 from abc import ABC, abstractmethod
 
 from app.types import ChatCompletionStreamResponseType
+
+# The OpenAI SDK isn't part of the thin-core install. Its types are
+# referenced here only as type hints (PEP 563 stringifies them) so we
+# can import them under TYPE_CHECKING and keep ``app.lib.llm.base``
+# loadable without any extras group installed.
+if TYPE_CHECKING:
+    from openai.types import ResponseFormatJSONObject, ResponseFormatJSONSchema, ResponseFormatText
+    from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
 
 
 class LLMProvider(ABC):

@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Optional
 
-import pandas as pd
-
 from app.lib.embedding import LocalEmbeddings
 from app.types import EmbeddingTable, ToolEmbeddingRecord
 from app.utils.common import build_table_embeddings
@@ -19,6 +17,7 @@ from app.utils.logger import logger
 from .base import StoredPoint
 
 if TYPE_CHECKING:
+    import pandas as pd
     from .base import VectorStore
 
 
@@ -64,6 +63,12 @@ def get_or_build_embedding_table(
        match the incoming records.
     4. Otherwise, generate via gRPC and persist for next time.
     """
+    # pandas ships with the ``embeddings-me5`` / ``embeddings-gemma``
+    # extras groups, which the Setup Wizard installs whenever the user
+    # enables Vector Embedding. Lazy-imported so importing
+    # ``app.vectorstores`` doesn't drag pandas onto the boot path.
+    import pandas as pd
+
     if not data:
         return EmbeddingTable(pd.DataFrame(columns=["id", "text", "embeddings"]))
 
@@ -93,6 +98,7 @@ def _load_cached_table(
     from the incoming records. Legacy collections lacking ``tool_type`` in the
     payload fail this check → one-time rebuild on upgrade (desirable).
     """
+    import pandas as pd
     try:
         if not vector_store.collection_exists(collection_name):
             logger.info(f"[vectorstore] Collection '{collection_name}' not found, will generate")

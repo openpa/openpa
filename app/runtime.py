@@ -35,6 +35,12 @@ class BootedState:
     embedding: Any = None
     vector_store: Any = None
     on_first_setup: Optional[Callable[[str], Awaitable[None]]] = None
+    # Async callable ``(tool_id) -> (bool, err)`` used by tool enable/disable
+    # endpoints to lazily reconnect a stub MCP/A2A tool. Resolved through
+    # ``state`` (rather than captured at route-registration time) so the
+    # ``/api/tools/*`` routes can be registered pre-storage and pick up the
+    # callable once boot wires it in.
+    connect_persisted_tool: Optional[Callable[[str], Awaitable[Any]]] = None
     boot_lock: Optional[asyncio.Lock] = None
     # Async callable that runs the deferred boot sequence and registers the
     # full API route set onto the live Starlette app. Set by ``main()``.
@@ -54,6 +60,7 @@ class BootedState:
         self.embedding = None
         self.vector_store = None
         self.on_first_setup = None
+        self.connect_persisted_tool = None
 
 
 _state = BootedState()

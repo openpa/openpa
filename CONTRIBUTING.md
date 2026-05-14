@@ -45,17 +45,45 @@ you blow away `~/.openpa/`.
 The everyday loop: backend on `:1112`, Vite on `:1515`, each side
 hot-reloads its own half.
 
-**Terminal A — backend:**
+### Prereq: free port `:1515` for Vite
+
+`uv run openpa serve` opens a second listener on `:1515` to serve the
+bundled SPA at `app/static/ui/` — but **only if that directory contains
+an `index.html`** (see [app/server.py](app/server.py)'s `_build_ui_server`).
+In a fresh checkout it's empty and the listener stays silent. If you've
+ever run `bash scripts/build_ui.sh` (e.g. for a release smoke test), it
+isn't — and the backend will fight Vite for the port, leaving you
+looking at a stale build with no HMR.
+
+Pick **one** before starting Terminal A:
+
+```powershell
+# Option A (simplest): wipe the build artifact. It's gitignored; rebuild
+# anytime with bash scripts/build_ui.sh.
+Remove-Item -Recurse -Force app\static\ui
+
+# Option B: keep the build, but disable the SPA listener for this session.
+$env:OPENPA_UI_PORT = "0"
+
+# Option C: keep the build, point the listener at a nonexistent path.
+$env:OPENPA_UI_DIR = "C:\nonexistent"
+```
+
+If you skip this step you'll see `SPA listener: http://127.0.0.1:1515
+(serving …\app\static\ui)` in Terminal A's log — that's the warning sign.
+Apply one of the options above, then restart Terminal A.
+
+### Terminal A — backend
 
 ```powershell
 uv run openpa serve
 ```
 
-The API listens on `:1112`. The bundled-SPA listener on `:1515` stays
-silent in a dev checkout because `app/static/ui/` is empty — Vite
-serves the SPA in Terminal B instead.
+The API listens on `:1112`. With the prereq applied, Terminal A logs
+`SPA not present at …\app\static\ui; UI listener disabled` and leaves
+`:1515` for Vite.
 
-**Terminal B — Vite dev server:**
+### Terminal B — Vite dev server
 
 ```powershell
 cd ui
@@ -66,12 +94,32 @@ Open <http://localhost:1515>. `ui/src/services/runtimeConfig.ts`'s
 port-swap heuristic detects the `:1515` host and auto-resolves the
 backend at `:1112` — you don't need to set `VITE_AGENT_URL`.
 
+To confirm you're hitting Vite (not a stale backend bundle), open
+browser DevTools → Sources. You should see `/@vite/client` —
+that's HMR. If you only see hashed `assets/index-Cabc123.js`, the
+backend's SPA listener won out; revisit the prereq above.
+
 ### What hot-reloads
 
 | Change | Reload |
 |---|---|
 | `ui/src/**` (Vue, TS, CSS) | Vite HMR — instant in the browser. |
-| `app/**` (Python) | Restart Terminal A (`Ctrl+C`, then re-run `uv run openpa serve`). Check `uv run openpa serve --help` for a `--reload` flag if one is exposed. |
+| `ui/vite.config*.ts`, `ui/package.json` | Restart Terminal B (`Ctrl+C`, then `npm run web:dev`). |
+| `app/**` (Python) | Restart Terminal A (`Ctrl+C`, then `uv run openpa serve`). No `--reload` flag on `openpa serve` today — see "Auto-restart on Python edits" below if you want one. |
+| `pyproject.toml` deps | `uv sync --all-extras`, then restart Terminal A. |
+| `app/__version__.py` | The pre-commit hook syncs `ui/package.json` automatically. Manual: `python scripts/sync_ui_version.py`. |
+
+### Auto-restart on Python edits (optional)
+
+`openpa serve` doesn't expose `--reload`, but you can wrap it with
+[`watchfiles`](https://github.com/samuelcolvin/watchfiles) from the outside:
+
+```powershell
+uv run --with watchfiles watchfiles "uv run openpa serve" app
+```
+
+Watches `app/` and restarts the whole process on any change. Slower than
+uvicorn's in-process reload (~2 s for a cold restart) but it always works.
 
 ## Variations
 
@@ -100,7 +148,21 @@ bash install/install.sh --channel dev --deployment local
 
 Dev channel skips PyPI and runs `pip install -e .` against your
 checkout. Templates (`local.env`, `docker-compose.yml.tmpl`, …) come
-from the checkout's `install/templates/`, not GitHub.
+from the checkout's `install/templates/`, not GitHub. The shared
+catalog (deployment / mode labels, mode-rule visibility table) is
+read from `install/_catalog.sh` (or `_catalog.ps1`) in the checkout
+— both are generated from `install/catalog.toml` by
+`python install/scripts/build_catalog.py`.
+
+When editing `install/catalog.toml`, re-run the generator and commit
+both the master and the generated files:
+
+```bash
+python install/scripts/build_catalog.py
+```
+
+CI runs `python install/scripts/build_catalog.py --check`; the build
+fails when the committed includes diverge from the master.
 
 Caveats:
 
@@ -120,6 +182,10 @@ Caveats:
 
 ## Gotchas
 
+- **Stale UI on `:1515` after a previous `build_ui.sh`** — see the
+  "Prereq" subsection above. Symptom in Terminal A: `SPA listener:
+  http://127.0.0.1:1515 (serving …\app\static\ui)`. Symptom in browser:
+  edits to `ui/src/**` don't show up.
 - **First page load after `setup`**: the SPA on `:1515` may show the
   setup wizard until the agent URL is configured. After that it sticks.
 - **Backend not picking up code changes**: kill + restart Terminal A.

@@ -12,7 +12,7 @@ survive server restarts without re-calling the gRPC embedding service.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Iterable, List, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Iterable, List, Optional, TYPE_CHECKING
 
 from app.agent.reasoning_agent import ReasoningAgent
 from app.lib.embedding import LocalEmbeddings
@@ -107,18 +107,19 @@ class OpenPAAgent:
             )
         return agent_data
 
-    def _build_connected_embeddings(self, profile: str) -> EmbeddingTable:
+    def _build_connected_embeddings(self, profile: str) -> Optional[EmbeddingTable]:
         """Build the embedding table for ``profile``.
 
         Uses the shared cache helper to load from Qdrant when available,
         falling back to in-process embedding generation and persisting for
-        next time. Returns an empty table when embedding is disabled.
+        next time. Returns ``None`` when embedding is disabled — callers
+        treat that as "no similarity ranking available" and fall back to
+        showing every tool.
         """
-        import pandas as pd
-        from app.vectorstores import get_or_build_embedding_table
-
         if self.embedding is None or self.vector_store is None:
-            return EmbeddingTable(pd.DataFrame(columns=["id", "text", "embeddings"]))
+            return None
+
+        from app.vectorstores import get_or_build_embedding_table
 
         agent_data = self._collect_tool_data(profile)
         table = get_or_build_embedding_table(
@@ -130,12 +131,20 @@ class OpenPAAgent:
         logger.debug(f"Tool card embeddings for '{profile}': {table.dataframe}")
         return table
 
-    def embedding_table_for(self, profile: str) -> EmbeddingTable:
-        """Return the profile's embedding table, building it lazily."""
+    def embedding_table_for(self, profile: str) -> Optional[EmbeddingTable]:
+        """Return the profile's embedding table, building it lazily.
+
+        Returns ``None`` when embedding is disabled.
+        """
+        if self.embedding is None or self.vector_store is None:
+            return None
         table = self._embedding_tables.get(profile)
         if table is None:
-            table = self._build_connected_embeddings(profile)
-            self._embedding_tables[profile] = table
+            built = self._build_connected_embeddings(profile)
+            if built is None:
+                return None
+            self._embedding_tables[profile] = built
+            table = built
         return table
 
     def update_embeddings(self, profile: str | None = None) -> None:
@@ -144,7 +153,14 @@ class OpenPAAgent:
         - ``profile`` given → rebuild only that profile's table (skill sync).
         - ``profile is None`` → rebuild every profile we have already touched
           (builtin / a2a / mcp mutation that could affect anyone).
+
+        No-op when embedding is disabled — pandas is in the embeddings
+        extras group and importing the cache helpers would crash on a
+        thin install.
         """
+        if self.embedding is None or self.vector_store is None:
+            return
+
         targets: Iterable[str]
         if profile is not None:
             targets = [profile]
@@ -152,7 +168,10 @@ class OpenPAAgent:
             targets = list(self._embedding_tables.keys())
 
         for p in targets:
-            self._embedding_tables[p] = self._build_connected_embeddings(p)
+            built = self._build_connected_embeddings(p)
+            if built is None:
+                continue
+            self._embedding_tables[p] = built
             logger.info(
                 f"Updated tool embeddings for '{p}' "
                 f"({len(self._embedding_tables[p])} entries)"

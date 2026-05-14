@@ -101,7 +101,7 @@ def setup_complete(
 ) -> None:
     """POST a setup payload; prints the resulting JWT (unauthenticated).
 
-    Payload shape mirrors the openpa-ui wizard: profile, server_config,
+    Payload shape mirrors the setup wizard: profile, server_config,
     llm_config, tool_configs, agent_configs.
     """
     import asyncio

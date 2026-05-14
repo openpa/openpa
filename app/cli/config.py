@@ -35,7 +35,7 @@ class Config:
         if not self.token:
             raise ConfigError(
                 f"{ENV_TOKEN} is not set - obtain a JWT from your OpenPA admin "
-                f"or openpa-ui and export it"
+                f"or the setup wizard and export it"
             )
 
 

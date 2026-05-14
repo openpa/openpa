@@ -26,14 +26,21 @@ type OpenPAInstallerEnvironment = {
   hasDocker: boolean
   hasPython: boolean
   pythonVersion: string
-  recommendedMode: 'docker' | 'native'
   channel: 'production' | 'test' | 'dev'
 }
 
 type OpenPAInstallerRunPayload = {
-  deployment: 'local' | 'server'
+  deployment: 'local' | 'server' | 'custom'
   appHost?: string
   mode: 'docker' | 'native'
+  /** Advanced .env overrides for the `custom` deployment. Keys mirror
+   *  install/catalog.toml's deployments.custom.advanced_fields[].key. */
+  customFields?: {
+    listen_host?: string
+    public_url?: string
+    allowed_origins?: string
+    wizard_preset?: string
+  }
 }
 
 type OpenPAInstallerLog = { stream: 'stdout' | 'stderr' | 'info'; line: string }
@@ -80,7 +87,7 @@ type OpenPAServerBridge = {
 type OpenPABridge = {
   config: {
     agentUrl: string
-    deploymentType: 'local' | 'server' | ''
+    deploymentType: 'local' | 'server' | 'custom' | ''
     autoUpdate: boolean
     channel: 'stable' | 'beta' | 'dev'
   }

@@ -75,8 +75,29 @@ def persist_embedding_config(body: dict, config_storage) -> None:
         )
     config_storage.set("server_config", "vectorstore.provider", vs_provider)
 
+    # ``deployment_mode`` is the Setup Wizard's choice (docker / native /
+    # external). It's stamped at the vectorstore top level by
+    # ``_resolve_vectorstore`` after provisioning, and mirrored under the
+    # provider block so a reconfigure can roundtrip the value without
+    # caring about provider layout. Default to external for older
+    # payloads that don't carry the field.
+    provider_block = vectorstore.get(vs_provider) or {}
+    deployment_mode = (
+        vectorstore.get("deployment_mode")
+        or provider_block.get("deployment_mode")
+        or "external"
+    ).lower()
+    if deployment_mode not in ("docker", "native", "external"):
+        raise ValueError(
+            f"Unknown deployment_mode: '{deployment_mode}'. "
+            "Must be 'docker', 'native', or 'external'."
+        )
+    config_storage.set("server_config", "vectorstore.deployment_mode", deployment_mode)
+
     if vs_provider == "qdrant":
-        qd = vectorstore.get("qdrant") or {}
+        # Qdrant has no Native mode in phase 1; both Docker and External
+        # use HTTP, so the persisted shape is the same in both cases.
+        qd = provider_block
         if "host" in qd:
             config_storage.set("server_config", "qdrant.host", str(qd["host"]))
         if "port" in qd:
@@ -91,14 +112,14 @@ def persist_embedding_config(body: dict, config_storage) -> None:
                 "true" if qd["https"] else "false",
             )
     else:  # chroma
-        ch = vectorstore.get("chroma") or {}
-        mode = (ch.get("mode") or "http").lower()
-        if mode not in ("http", "persistent"):
-            raise ValueError(
-                f"Unknown chroma mode: '{mode}'. Must be 'http' or 'persistent'."
-            )
-        config_storage.set("server_config", "chroma.mode", mode)
-        if mode == "http":
+        ch = provider_block
+        # The chromadb adapter still keys off ``chroma.mode`` (http vs
+        # persistent); translate the deployment mode so we don't have to
+        # touch the adapter. Native → persistent (in-process library);
+        # Docker / External → http (the adapter dials host:port).
+        chroma_mode = "persistent" if deployment_mode == "native" else "http"
+        config_storage.set("server_config", "chroma.mode", chroma_mode)
+        if chroma_mode == "http":
             if "host" in ch:
                 config_storage.set("server_config", "chroma.host", str(ch["host"]))
             if "port" in ch:
@@ -112,7 +133,7 @@ def persist_embedding_config(body: dict, config_storage) -> None:
                 config_storage.set(
                     "server_config", "chroma.api_key", str(ch["api_key"]), is_secret=True,
                 )
-        else:  # persistent
+        else:  # persistent (Native deployment mode)
             if ch.get("persist_path"):
                 config_storage.set(
                     "server_config", "chroma.persist_path", str(ch["persist_path"]),
@@ -120,23 +141,43 @@ def persist_embedding_config(body: dict, config_storage) -> None:
 
 
 def read_embedding_config(config_storage) -> dict:
-    """Read the persisted embedding config back out as a wizard-shape dict."""
+    """Read the persisted embedding config back out as a wizard-shape dict.
+
+    Surfaces ``deployment_mode`` both at the vectorstore top level and
+    inside the active provider block — the wizard reads either, and
+    keeping both makes the API symmetric with what
+    :func:`persist_embedding_config` writes. For old configs that
+    pre-date the deployment-mode work, we infer the mode from the
+    legacy ``chroma.mode`` field (persistent → native; http → external)
+    so the wizard form mounts with a sensible default.
+    """
     from app.config.settings import BaseConfig
+
+    provider = BaseConfig.get_vectorstore_provider()
+    deployment_mode = config_storage.get("server_config", "vectorstore.deployment_mode")
+    if not deployment_mode:
+        # Legacy roundtrip: pick the closest match from the old schema.
+        if provider == "chroma":
+            deployment_mode = "native" if BaseConfig.get_chroma_mode() == "persistent" else "external"
+        else:
+            deployment_mode = "external"
 
     return {
         "enabled": BaseConfig.is_embedding_enabled(),
         "provider": BaseConfig.get_embedding_provider(),
         "hf_token": BaseConfig.get_hf_token(),
         "vectorstore": {
-            "provider": BaseConfig.get_vectorstore_provider(),
+            "provider": provider,
+            "deployment_mode": deployment_mode,
             "qdrant": {
+                "deployment_mode": deployment_mode if provider == "qdrant" else "external",
                 "host": BaseConfig.get_qdrant_host(),
                 "port": BaseConfig.get_qdrant_port(),
                 "api_key": BaseConfig.get_qdrant_api_key(),
                 "https": BaseConfig.get_qdrant_https(),
             },
             "chroma": {
-                "mode": BaseConfig.get_chroma_mode(),
+                "deployment_mode": deployment_mode if provider == "chroma" else "native",
                 "host": BaseConfig.get_chroma_host(),
                 "port": BaseConfig.get_chroma_port(),
                 "ssl": BaseConfig.get_chroma_ssl(),

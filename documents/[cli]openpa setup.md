@@ -111,7 +111,7 @@ openpa setup complete [--profile <name>] (--json '<inline>' | --json-file <path|
 If neither `--json` nor `--json-file` is given, the payload is read
 from **stdin**. `--json` and `--json-file` are mutually exclusive.
 
-**Payload schema.** The body matches the openpa-ui wizard one-for-one:
+**Payload schema.** The body matches the setup wizard one-for-one:
 
 ```json
 {
@@ -201,7 +201,7 @@ openpa setup reconfigure
 ```
 
 **Behavior.** **Requires admin auth.** Silent on success. The next
-startup of openpa-ui will display the Setup Wizard, and `openpa setup
+startup of the UI will display the Setup Wizard, and `openpa setup
 status` will report `setup_complete=false` until a new `setup complete`
 call lands.
 

@@ -6,12 +6,19 @@
 #   curl -fsSL https://openpa.ai/install.sh | bash -s -- [flags]
 #
 # Flags:
-#   --deployment local|server|container
-#                               Skip the deployment-type prompt.
-#                               container = run inside Docker/Podman; bind to
-#                               0.0.0.0 so the docker host can reach the
-#                               wizard via published ports.
+#   --deployment local|server|custom
+#                               Skip the deployment-type prompt. ``custom``
+#                               exposes advanced fields (listen host, public
+#                               URL, allowed origins, wizard preset) so you
+#                               can configure unusual setups (running inside
+#                               a container, behind a reverse proxy, etc.).
+#                               ``container`` is accepted as a deprecated
+#                               alias for ``custom`` with container defaults.
 #   --host HOST                 Public IP/domain (server deployment only).
+#   --listen-host HOST          (custom deployment) Override HOST in .env.
+#   --public-url URL            (custom deployment) Override APP_URL in .env.
+#   --allowed-origins LIST      (custom deployment) Override CORS_ALLOWED_ORIGINS.
+#   --wizard-preset ID          (custom deployment) Override SETUP_WIZARD_ENV.
 #   --no-launch                 Skip opening the setup wizard at the end.
 #   --unattended                Use defaults; never prompt. Implies --no-launch
 #                               unless deployment+host are also provided.
@@ -31,6 +38,11 @@
 #                               --mode native and --mode docker (the compose
 #                               override bind-mounts the checkout at /src).
 #   --help                      Show this message.
+#
+# Service selection (database, vector store, …) is no longer made here —
+# the Setup Wizard now lets you pick each backing service's deployment
+# mode (Docker / Native / External) per-service, independent of how
+# OpenPA itself is installed.
 #
 # This is the Phase 2 installer: native install only. Docker mode is
 # detected and recommended, but the actual containerized bundle ships in
@@ -84,6 +96,13 @@ UNATTENDED=0
 REINSTALL=0
 AUTO_INSTALL_PYTHON=""   # "" = ask interactively; "1" = yes; "0" = no
 MODIFY_PATH=""           # "" = auto (1 for canonical home, 0 otherwise); 0/1 explicit
+# Custom-deployment advanced fields. Empty = prompt interactively (or use
+# the catalog default in --unattended). The keys mirror the catalog's
+# deployments.custom.advanced_fields[].key entries.
+CUSTOM_listen_host=""
+CUSTOM_public_url=""
+CUSTOM_allowed_origins=""
+CUSTOM_wizard_preset=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -95,6 +114,14 @@ while [ $# -gt 0 ]; do
         --mode=*)                 MODE="${1#*=}"; shift ;;
         --docker)                 MODE="docker"; shift ;;
         --native)                 MODE="native"; shift ;;
+        --listen-host)            CUSTOM_listen_host="$2"; shift 2 ;;
+        --listen-host=*)          CUSTOM_listen_host="${1#*=}"; shift ;;
+        --public-url)             CUSTOM_public_url="$2"; shift 2 ;;
+        --public-url=*)           CUSTOM_public_url="${1#*=}"; shift ;;
+        --allowed-origins)        CUSTOM_allowed_origins="$2"; shift 2 ;;
+        --allowed-origins=*)      CUSTOM_allowed_origins="${1#*=}"; shift ;;
+        --wizard-preset)          CUSTOM_wizard_preset="$2"; shift 2 ;;
+        --wizard-preset=*)        CUSTOM_wizard_preset="${1#*=}"; shift ;;
         --no-launch)              NO_LAUNCH=1; shift ;;
         --unattended)             UNATTENDED=1; shift ;;
         --reinstall)              REINSTALL=1; shift ;;
@@ -115,6 +142,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# ``container`` was a separate deployment in earlier installs; it's now a
+# narrow case of ``custom`` (listen on 0.0.0.0, URLs at localhost). Accept
+# the old name for one release as an alias with sensible defaults so
+# existing one-liners don't break, and warn so users update their scripts.
+if [ "$DEPLOYMENT" = "container" ]; then
+    warn "--deployment container is deprecated; using --deployment custom with container defaults."
+    DEPLOYMENT="custom"
+    : "${CUSTOM_listen_host:=0.0.0.0}"
+    : "${CUSTOM_public_url:=http://localhost:1112}"
+    : "${CUSTOM_wizard_preset:=local}"
+fi
+
 # ── channel validation / dev-mode guards ──────────────────────────────────
 
 case "$CHANNEL" in
@@ -134,7 +173,8 @@ fi
 # installer runs inside a container, ``local`` deployment binds to
 # 127.0.0.1 inside the container — unreachable from the docker host's
 # browser even with ``-p 1515:1515``. We use this to default unattended
-# installs and prompt-default to ``container`` instead.
+# installs to ``custom`` (with container-friendly field values) and to
+# steer the interactive prompt at ``custom`` instead of ``local``.
 IN_CONTAINER=0
 if [ -f /.dockerenv ] || [ -f /run/.containerenv ] \
         || (grep -qE '(docker|containerd|kubepods)' /proc/1/cgroup 2>/dev/null); then
@@ -143,7 +183,10 @@ fi
 
 if [ "$UNATTENDED" -eq 1 ] && [ -z "$DEPLOYMENT" ]; then
     if [ "$IN_CONTAINER" -eq 1 ]; then
-        DEPLOYMENT="container"
+        DEPLOYMENT="custom"
+        : "${CUSTOM_listen_host:=0.0.0.0}"
+        : "${CUSTOM_public_url:=http://localhost:1112}"
+        : "${CUSTOM_wizard_preset:=local}"
     else
         DEPLOYMENT="local"
     fi
@@ -209,6 +252,24 @@ fetch_template() {
         *)        curl -fsSL "$TEMPLATE_BASE/$name" ;;
     esac
 }
+
+# The catalog (deployments / modes / mode rules / labels) lives next to
+# install.sh in the repo and is fetched alongside templates at install
+# time. Source it now so every prompt and rendered .env can read its
+# variables. ``OPENPA_CATALOG_BASE`` overrides the URL for testing.
+if [ "$CHANNEL" = "dev" ]; then
+    CATALOG_BASE="$REPO_ROOT/install"
+    . "$CATALOG_BASE/_catalog.sh"
+else
+    CATALOG_BASE="${OPENPA_CATALOG_BASE:-https://raw.githubusercontent.com/openpa/openpa/main/install}"
+    CATALOG_TMP="$(mktemp 2>/dev/null || echo "$OPENPA_HOME/_catalog.sh")"
+    if ! curl -fsSL "$CATALOG_BASE/_catalog.sh" -o "$CATALOG_TMP"; then
+        err "Failed to fetch install catalog from $CATALOG_BASE/_catalog.sh"
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    . "$CATALOG_TMP"
+fi
 
 # ── banner ────────────────────────────────────────────────────────────────
 
@@ -302,41 +363,61 @@ fi
 
 step "Deployment"
 
+# Render the deployment options from the catalog so install.sh,
+# install.ps1, and the Setup Wizard share the same prompts.
+# DEPLOYMENT_IDS is set in _catalog.sh; the indirect ``${!varname}``
+# lookups read DEPLOYMENT_LABEL_<id> / DEPLOYMENT_DESC_<id> for each.
 if [ -z "$DEPLOYMENT" ]; then
     if [ "$IN_CONTAINER" -eq 1 ]; then
-        default_choice=3
         cat <<EOF
 ${YELLOW}${BOLD}Detected: this installer is running inside a container.${RESET}
-${DIM}Pick option 3 — local would bind to 127.0.0.1 inside the container,
-which is unreachable from the docker host's browser even with -p forwarding.${RESET}
+${DIM}Pick ${BOLD}custom${RESET}${DIM} — ${BOLD}local${RESET}${DIM} would bind to 127.0.0.1 inside the
+container, which is unreachable from the docker host's browser even
+with -p forwarding.${RESET}
 
-How will you run OpenPA?
-  ${BOLD}1)${RESET} ${BOLD}local${RESET}      — bind to 127.0.0.1, only this machine can reach it
-  ${BOLD}2)${RESET} ${BOLD}server${RESET}     — bind to all interfaces, reachable from other devices
-  ${BOLD}3)${RESET} ${BOLD}container${RESET}  — bind to 0.0.0.0; URLs use localhost (recommended here)
 EOF
+        default_choice="custom"
     else
-        default_choice=1
-        cat <<EOF
-How will you run OpenPA?
-  ${BOLD}1)${RESET} ${BOLD}local${RESET}      — bind to 127.0.0.1, only this machine can reach it
-  ${BOLD}2)${RESET} ${BOLD}server${RESET}     — bind to all interfaces, reachable from other devices
-  ${BOLD}3)${RESET} ${BOLD}container${RESET}  — bind to 0.0.0.0; URLs use localhost
-                  ${DIM}(pick this if you're running this script inside a container
-                   and will browse from the docker host)${RESET}
-EOF
+        default_choice="local"
     fi
+    echo "How will you run OpenPA?"
+    idx=0
+    default_idx=1
+    for d_id in $DEPLOYMENT_IDS; do
+        idx=$((idx + 1))
+        [ "$d_id" = "$default_choice" ] && default_idx=$idx
+        label_var="DEPLOYMENT_LABEL_$d_id"; label="${!label_var}"
+        desc_var="DEPLOYMENT_DESC_$d_id";   desc="${!desc_var}"
+        printf '  %s%d)%s %s%s%s — %s\n' \
+            "$BOLD" "$idx" "$RESET" "$BOLD" "$label" "$RESET" "$desc"
+    done
     while :; do
-        read -r -p "Choice [$default_choice]: " choice </dev/tty || choice=""
-        case "${choice:-$default_choice}" in
-            1|local)     DEPLOYMENT=local;     break ;;
-            2|server)    DEPLOYMENT=server;    break ;;
-            3|container) DEPLOYMENT=container; break ;;
-            *) warn "Pick 1, 2, or 3." ;;
-        esac
+        read -r -p "Choice [$default_idx]: " choice </dev/tty || choice=""
+        choice="${choice:-$default_idx}"
+        # Resolve numeric or name choice against DEPLOYMENT_IDS.
+        DEPLOYMENT=""
+        idx=0
+        for d_id in $DEPLOYMENT_IDS; do
+            idx=$((idx + 1))
+            if [ "$choice" = "$idx" ] || [ "$choice" = "$d_id" ]; then
+                DEPLOYMENT="$d_id"; break
+            fi
+        done
+        [ -n "$DEPLOYMENT" ] && break
+        warn "Pick a number 1-$idx or a deployment id."
     done
 fi
 ok "Deployment: $DEPLOYMENT"
+
+# Guard against ``--deployment <unknown>`` flags slipping through.
+DEPLOYMENT_KNOWN=0
+for d_id in $DEPLOYMENT_IDS; do
+    [ "$d_id" = "$DEPLOYMENT" ] && DEPLOYMENT_KNOWN=1
+done
+if [ "$DEPLOYMENT_KNOWN" -ne 1 ]; then
+    err "Unknown deployment: $DEPLOYMENT (must be one of: $DEPLOYMENT_IDS)"
+    exit 2
+fi
 
 if [ "$DEPLOYMENT" = "server" ] && [ -z "$APP_HOST" ]; then
     while :; do
@@ -350,31 +431,100 @@ if [ "$DEPLOYMENT" = "server" ] && [ -z "$APP_HOST" ]; then
 fi
 [ -n "$APP_HOST" ] && ok "Host: $APP_HOST"
 
+# ── custom deployment fields ─────────────────────────────────────────────
+
+# When the user picks ``custom``, walk the advanced-field array from the
+# catalog and prompt for each one with its plain-English question + hint.
+# Already-set values (from --listen-host etc., or from the deprecated
+# container-deployment alias above) skip the prompt. In --unattended the
+# catalog default is used silently.
+if [ "$DEPLOYMENT" = "custom" ]; then
+    echo
+    info "Custom deployment — answer a few questions about how OpenPA should be reached."
+    for field in $CUSTOM_FIELD_IDS; do
+        var_name="CUSTOM_$field"
+        current="${!var_name}"
+        if [ -n "$current" ]; then
+            ok "$field: $current"
+            continue
+        fi
+        prompt_var="CUSTOM_FIELD_PROMPT_$field"; prompt="${!prompt_var}"
+        hint_var="CUSTOM_FIELD_HINT_$field";     hint="${!hint_var}"
+        default_var="CUSTOM_FIELD_DEFAULT_$field"; default="${!default_var}"
+        choices_var="CUSTOM_FIELD_CHOICES_$field"; choices="${!choices_var}"
+        if [ "$UNATTENDED" -eq 1 ]; then
+            eval "CUSTOM_$field=\"\$default\""
+            ok "$field: $default (default)"
+            continue
+        fi
+        echo
+        printf '%s%s%s\n' "$BOLD" "$prompt" "$RESET"
+        printf '%s%s%s\n' "$DIM" "$hint" "$RESET"
+        if [ -n "$choices" ]; then
+            printf '%sChoices: %s%s\n' "$DIM" "$choices" "$RESET"
+        fi
+        while :; do
+            read -r -p "  [$default]: " answer </dev/tty || answer=""
+            answer="${answer:-$default}"
+            if [ -n "$choices" ]; then
+                ok_choice=0
+                for c in $choices; do
+                    [ "$c" = "$answer" ] && ok_choice=1
+                done
+                if [ "$ok_choice" -ne 1 ]; then
+                    warn "Pick one of: $choices"
+                    continue
+                fi
+            fi
+            eval "CUSTOM_$field=\"\$answer\""
+            break
+        done
+    done
+    # Fall back to a sensible value for allowed_origins when the user
+    # left it blank — defaulting to "public URL + localhost variants"
+    # keeps a copy-paste-the-URL-into-the-browser flow working without
+    # asking the user to construct a CORS list by hand.
+    if [ -z "$CUSTOM_allowed_origins" ]; then
+        CUSTOM_allowed_origins="$CUSTOM_public_url,http://localhost:1515,http://127.0.0.1:1515"
+    fi
+fi
+
 # ── mode (docker vs native) ──────────────────────────────────────────────
 
 # Default: docker if available, native otherwise. We sandbox the agent in
 # a desktop container by default — the user opts out explicitly if they
-# want a native install.
+# want a native install. Both labels + descriptions come from the
+# catalog ($MODE_IDS / MODE_LABEL_<id> / MODE_DESC_<id>).
 if [ -z "$MODE" ]; then
     if [ "$HAS_DOCKER" -eq 1 ]; then
         if [ "$UNATTENDED" -eq 1 ]; then
             MODE="docker"
         else
-            cat <<EOF
-
-${BOLD}How do you want to run OpenPA?${RESET}
-  ${BOLD}1)${RESET} ${BOLD}docker${RESET}  — sandboxed VNC desktop with bundled Postgres + Qdrant
-                ${DIM}recommended; the agent gets its own GUI environment${RESET}
-  ${BOLD}2)${RESET} ${BOLD}native${RESET}  — Python venv at ~/.openpa/venv with SQLite
-                ${DIM}simpler, but the agent shares your desktop${RESET}
-EOF
+            echo
+            printf '%sHow do you want to run OpenPA?%s\n' "$BOLD" "$RESET"
+            idx=0
+            for m_id in $MODE_IDS; do
+                idx=$((idx + 1))
+                label_var="MODE_LABEL_$m_id"; label="${!label_var}"
+                desc_var="MODE_DESC_$m_id";   desc="${!desc_var}"
+                hint_var="MODE_HINT_$m_id";   hint="${!hint_var}"
+                printf '  %s%d)%s %s%s%s — %s\n' \
+                    "$BOLD" "$idx" "$RESET" "$BOLD" "$label" "$RESET" "$desc"
+                [ -n "$hint" ] && printf '                  %s%s%s\n' "$DIM" "$hint" "$RESET"
+            done
             while :; do
                 read -r -p "Choice [1]: " choice </dev/tty || choice=""
-                case "${choice:-1}" in
-                    1|docker) MODE=docker; break ;;
-                    2|native) MODE=native; break ;;
-                    *) warn "Pick 1 or 2." ;;
-                esac
+                choice="${choice:-1}"
+                MODE=""
+                idx=0
+                for m_id in $MODE_IDS; do
+                    idx=$((idx + 1))
+                    if [ "$choice" = "$idx" ] || [ "$choice" = "$m_id" ]; then
+                        MODE="$m_id"; break
+                    fi
+                done
+                [ -n "$MODE" ] && break
+                warn "Pick a number 1-$idx or a mode id."
             done
         fi
     else
@@ -421,22 +571,38 @@ if [ "$MODE" = "docker" ]; then
 
     # Idempotency: if the bundle is already running, just bring it up
     # again (which no-ops if everything is healthy) and skip generation.
+    # Sidecar services (postgres / qdrant / chroma) are no longer
+    # provisioned here — the Setup Wizard activates each one on demand
+    # via its own per-service deployment-mode picker.
     if [ -f "$DOCKER_DIR/.env" ] && [ -f "$DOCKER_DIR/docker-compose.yml" ] && [ "$REINSTALL" -ne 1 ]; then
         info "Existing Docker bundle detected at $DOCKER_DIR — reusing config."
     else
         VNC_PASSWORD="$(gen_secret)"
-        PG_PASSWORD="$(gen_secret)"
         OPENPA_VERSION="$(resolve_version)"
-        OPENPA_UI_REF="${OPENPA_UI_REF:-main}"
 
-        if [ "$DEPLOYMENT" = "local" ]; then
-            DOCKER_APP_URL="http://localhost:1112"
-            DOCKER_CORS="http://localhost:1515,http://127.0.0.1:1515"
-            DOCKER_WIZARD_ENV="local"
-        else
-            DOCKER_APP_URL="http://$APP_HOST:1112"
-            DOCKER_CORS="http://$APP_HOST:1515,http://localhost:1515"
-            DOCKER_WIZARD_ENV="server"
+        case "$DEPLOYMENT" in
+            local)
+                DOCKER_APP_URL="http://localhost:1112"
+                DOCKER_CORS="http://localhost:1515,http://127.0.0.1:1515"
+                DOCKER_WIZARD_ENV="local"
+                ;;
+            server)
+                DOCKER_APP_URL="http://$APP_HOST:1112"
+                DOCKER_CORS="http://$APP_HOST:1515,http://localhost:1515"
+                DOCKER_WIZARD_ENV="server"
+                ;;
+            custom)
+                DOCKER_APP_URL="$CUSTOM_public_url"
+                DOCKER_CORS="$CUSTOM_allowed_origins"
+                DOCKER_WIZARD_ENV="$CUSTOM_wizard_preset"
+                ;;
+        esac
+
+        # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
+        # and other ad-hoc dev origins can hit the API without preflight
+        # failures. Production and test installs keep the locked-down list.
+        if [ "$CHANNEL" = "dev" ]; then
+            DOCKER_CORS="*"
         fi
 
         info "Fetching docker-compose template"
@@ -446,11 +612,10 @@ if [ "$MODE" = "docker" ]; then
         fetch_template "docker.env.tmpl" \
             | sed \
                 -e "s|__OPENPA_VERSION__|$OPENPA_VERSION|g" \
-                -e "s|__OPENPA_UI_REF__|$OPENPA_UI_REF|g" \
                 -e "s|__APP_URL__|$DOCKER_APP_URL|g" \
                 -e "s|__CORS_ALLOWED_ORIGINS__|$DOCKER_CORS|g" \
                 -e "s|__SETUP_WIZARD_ENV__|$DOCKER_WIZARD_ENV|g" \
-                -e "s|__PG_PASSWORD__|$PG_PASSWORD|g" \
+                -e "s|__INSTALL_MODE__|$MODE|g" \
                 -e "s|__VNC_PASSWORD__|$VNC_PASSWORD|g" \
             > "$DOCKER_DIR/.env"
 
@@ -464,6 +629,13 @@ OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/
 OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/
 EOF
         fi
+
+        # Stamp the channel into docker.env so the running container's
+        # upgrader and feature installer see it. Without this, dev images
+        # fall back to ``production`` semantics at runtime — which makes
+        # ``pip_spec()`` pin to ``openpa==<version>`` and look up PyPI
+        # for a release that may not be published yet during release prep.
+        printf 'OPENPA_UPGRADE_CHANNEL=%s\n' "$CHANNEL" >>"$DOCKER_DIR/.env"
         chmod 600 "$DOCKER_DIR/.env"
 
         # Dev channel: emit a docker-compose.override.yml that points the
@@ -491,8 +663,16 @@ EOF
     (cd "$DOCKER_DIR" && docker compose up -d --build >>"$LOG_FILE" 2>&1)
 
     # Health gate: don't open the wizard until the backend is reachable.
+    # Custom installs already picked the public URL — strip the scheme
+    # and trailing path so we can probe :1112/health on its hostname.
     if [ "$DEPLOYMENT" = "local" ]; then
         HEALTH_HOST="localhost"
+    elif [ "$DEPLOYMENT" = "custom" ]; then
+        # http://foo.bar:1112 → foo.bar
+        HEALTH_HOST="${CUSTOM_public_url#*://}"
+        HEALTH_HOST="${HEALTH_HOST%%/*}"
+        HEALTH_HOST="${HEALTH_HOST%%:*}"
+        [ -z "$HEALTH_HOST" ] && HEALTH_HOST="localhost"
     else
         HEALTH_HOST="$APP_HOST"
     fi
@@ -692,6 +872,13 @@ else
     # Resolve the spec passed to ``pip install``. Test channel pins a
     # direct wheel URL (see Test PyPI rationale below); production uses
     # the bare package name.
+    #
+    # The bare ``openpa`` install is intentionally thin — it ships only
+    # the core deps the server + Setup Wizard + SQLite need. Optional
+    # feature groups (vector embedding, vector stores, browser, channels,
+    # LLM SDKs, postgres) are installed on demand by ``app/features/``
+    # when the user enables them in the wizard. The Docker desktop image
+    # pre-bakes ``openpa[all]`` instead (see ``Dockerfile.desktop``).
     INSTALL_SPEC=""
     INSTALL_SOURCE_LABEL=""
     case "$CHANNEL" in
@@ -853,15 +1040,32 @@ if [ ! -f "$ENV_FILE" ]; then
         local)
             fetch_template "local.env" > "$ENV_FILE"
             ;;
-        container)
-            fetch_template "container.env" > "$ENV_FILE"
-            ;;
         server)
             # __APP_HOST__ is the only placeholder; the user-provided host
             # gets substituted as-is (validated against [a-zA-Z0-9.:-]+ above).
             fetch_template "server.env.tmpl" | sed "s|__APP_HOST__|$APP_HOST|g" > "$ENV_FILE"
             ;;
+        custom)
+            # All four advanced fields come from the user (or the catalog
+            # defaults in --unattended); render them straight into the
+            # template. They're already validated by the catalog's
+            # choice list (wizard_preset) or by being copy-pasted by the
+            # operator, so no further sanitisation is applied.
+            fetch_template "custom.env.tmpl" \
+                | sed \
+                    -e "s|__LISTEN_HOST__|$CUSTOM_listen_host|g" \
+                    -e "s|__PUBLIC_URL__|$CUSTOM_public_url|g" \
+                    -e "s|__CORS_ALLOWED_ORIGINS__|$CUSTOM_allowed_origins|g" \
+                    -e "s|__SETUP_WIZARD_ENV__|$CUSTOM_wizard_preset|g" \
+                > "$ENV_FILE"
+            ;;
     esac
+    # Stamp the install mode so the backend's mode-rule filter knows which
+    # service modes to expose in the wizard. Native installs land here too;
+    # docker installs stamp INSTALL_MODE into docker.env above.
+    if ! grep -q '^INSTALL_MODE=' "$ENV_FILE" 2>/dev/null; then
+        printf 'INSTALL_MODE=%s\n' "$MODE" >> "$ENV_FILE"
+    fi
     ok "Wrote $ENV_FILE"
 else
     info ".env already exists — keeping it. Edit $ENV_FILE if you need to."
@@ -889,11 +1093,26 @@ case "$CHANNEL" in
         fi
         ;;
     dev)
-        # Deliberately leave OPENPA_UPGRADE_CHANNEL unset. get_channel()
-        # defaults to "production" when missing (app/upgrade/channel.py),
-        # which is harmless here: ``openpa upgrade`` from a dev editable
-        # install is a footgun anyway and the dev path is to ``git pull``.
-        :
+        # Stamp the channel so the feature installer's ``pip_spec()`` knows
+        # to skip the ``==<version>`` pin (the editable install in /src or
+        # the developer's checkout already satisfies the requirement, and
+        # pinning to a release that hasn't been published to PyPI yet
+        # fails at install time). ``openpa upgrade`` itself is still a
+        # footgun in dev — the dev path is ``git pull`` — but the
+        # upgrader's no-op behavior on dev is preferable to it silently
+        # treating dev as production.
+        if ! grep -q '^OPENPA_UPGRADE_CHANNEL=' "$ENV_FILE" 2>/dev/null; then
+            printf '\nOPENPA_UPGRADE_CHANNEL=dev\n' >> "$ENV_FILE"
+        fi
+        # Replace the static template's locked-down CORS list with ``*``
+        # so ``npm run dev`` (Vite at localhost:5173) and other ad-hoc dev
+        # origins work without preflight failures. Idempotent: skip if
+        # already wildcarded so re-runs don't churn the file.
+        if ! grep -q '^CORS_ALLOWED_ORIGINS=\*$' "$ENV_FILE" 2>/dev/null; then
+            sed -i.bak '/^CORS_ALLOWED_ORIGINS=/d' "$ENV_FILE"
+            rm -f "${ENV_FILE}.bak"
+            printf 'CORS_ALLOWED_ORIGINS=*\n' >> "$ENV_FILE"
+        fi
         ;;
 esac
 
@@ -995,11 +1214,19 @@ fi
 
 # ── wizard handoff ────────────────────────────────────────────────────────
 
-# ``container`` mode binds to 0.0.0.0 inside the container, but the user
-# browses from the docker host where the published port surfaces as
-# localhost — so the wizard URL is the same as ``local``.
+# ``custom`` installs honour the public URL the user provided; ``server``
+# uses the host from --host; ``local`` is loopback. Custom URLs may
+# include a path/scheme; swap the port to 1515 (the wizard's SPA port)
+# while preserving the hostname.
 if [ "$DEPLOYMENT" = "server" ]; then
     WIZARD_URL="http://$APP_HOST:1515/#/setup"
+elif [ "$DEPLOYMENT" = "custom" ]; then
+    # http://foo.bar:1112 → http://foo.bar:1515/#/setup
+    CUSTOM_HOSTPART="${CUSTOM_public_url#*://}"
+    CUSTOM_HOSTPART="${CUSTOM_HOSTPART%%/*}"
+    CUSTOM_HOSTPART="${CUSTOM_HOSTPART%%:*}"
+    [ -z "$CUSTOM_HOSTPART" ] && CUSTOM_HOSTPART="localhost"
+    WIZARD_URL="http://${CUSTOM_HOSTPART}:1515/#/setup"
 else
     WIZARD_URL="http://localhost:1515/#/setup"
 fi

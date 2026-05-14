@@ -3,7 +3,7 @@
 Mirrors `cli/internal/wsclient/wsclient.go`. Authentication is via the
 `Sec-WebSocket-Protocol` subprotocol header — the OpenPA server reads
 `subprotocols[0] == "bearer"` and `subprotocols[1] == <token>` (see
-`app/api/processes.py:185`). This matches what openpa-ui does, because the
+`app/api/processes.py:185`). This matches what the UI does, because the
 browser WebSocket constructor cannot set arbitrary headers.
 """
 

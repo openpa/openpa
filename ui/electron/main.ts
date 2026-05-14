@@ -23,7 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 type OpenPAConfig = {
   agentUrl: string
-  deploymentType: 'local' | 'server' | ''
+  deploymentType: 'local' | 'server' | 'custom' | ''
   autoUpdate: boolean
   channel: 'stable' | 'beta' | 'dev'
 }
@@ -308,18 +308,25 @@ type InstallerEnvironment = {
   hasDocker: boolean
   hasPython: boolean
   pythonVersion: string
-  recommendedMode: 'docker' | 'native'
-  // Baked-in install channel. The renderer uses this to disable mode
-  // options that aren't supported on the current channel (e.g. docker
-  // is rejected under --channel dev because the Dockerfile would need
-  // a source-COPY path; see install.sh's dev-channel guard).
+  // Baked-in install channel. The renderer uses this for display
+  // (badge in the welcome step) and as one of the inputs to
+  // ``recommendInstallMode``; the recommended mode itself is no
+  // longer computed here.
   channel: 'production' | 'test' | 'dev'
 }
 
 type InstallerRunPayload = {
-  deployment: 'local' | 'server'
+  deployment: 'local' | 'server' | 'custom'
   appHost?: string
   mode: 'docker' | 'native'
+  /** Advanced .env overrides for the `custom` deployment. Keys mirror
+   *  install/catalog.toml's deployments.custom.advanced_fields[].key. */
+  customFields?: {
+    listen_host?: string
+    public_url?: string
+    allowed_origins?: string
+    wizard_preset?: string
+  }
 }
 
 async function detectInstallEnvironment(): Promise<InstallerEnvironment> {
@@ -336,7 +343,6 @@ async function detectInstallEnvironment(): Promise<InstallerEnvironment> {
     hasDocker: false,
     hasPython: false,
     pythonVersion: '',
-    recommendedMode: 'native',
     channel: INSTALL_CHANNEL,
   }
 
@@ -364,13 +370,12 @@ async function detectInstallEnvironment(): Promise<InstallerEnvironment> {
     }
   }
 
-  // Dev channel: native is faster to iterate on (no image build, no
-  // container restart for source edits), so default to it even when
-  // Docker is available. Users can still pick Docker manually in the UI.
-  detected.recommendedMode =
-    INSTALL_CHANNEL === 'dev' ? 'native'
-      : detected.hasDocker ? 'docker'
-      : 'native'
+  // Recommendation is no longer computed here — the renderer derives
+  // it from install/catalog.toml's [modes] table via
+  // ``recommendInstallMode`` so install.sh, install.ps1, and the
+  // Setup Wizard agree on the default. Detection only reports raw
+  // capabilities (hasDocker, hasPython); the recommendation falls out
+  // from the catalog's mode order + requires.
   return detected
 }
 
@@ -454,6 +459,16 @@ async function runInstaller(
     '--no-launch',
   ]
   if (payload.appHost) args.push('--host', payload.appHost)
+  // Forward custom-deployment overrides so the install scripts skip
+  // their interactive prompts. Empty values are dropped so the scripts'
+  // catalog defaults take effect for fields the user didn't fill in.
+  if (payload.deployment === 'custom' && payload.customFields) {
+    const cf = payload.customFields
+    if (cf.listen_host)     args.push('--listen-host',     cf.listen_host)
+    if (cf.public_url)      args.push('--public-url',      cf.public_url)
+    if (cf.allowed_origins) args.push('--allowed-origins', cf.allowed_origins)
+    if (cf.wizard_preset)   args.push('--wizard-preset',   cf.wizard_preset)
+  }
 
   // Channel routing — both shells accept --channel / -Channel. Production
   // is the default in both installers, so only forward non-production
@@ -469,12 +484,16 @@ async function runInstaller(
     // -ExecutionPolicy Bypass sidesteps the user's machine policy without
     // mutating it; the bypass is scoped to this single invocation.
     const psArgs = args.flatMap((a) => {
-      if (a === '--deployment') return ['-Deployment']
-      if (a === '--host')       return ['-AppHost']
-      if (a === '--mode')       return ['-Mode']
-      if (a === '--unattended') return ['-Unattended']
-      if (a === '--no-launch')  return ['-NoLaunch']
-      if (a === '--channel')    return ['-Channel']
+      if (a === '--deployment')      return ['-Deployment']
+      if (a === '--host')            return ['-AppHost']
+      if (a === '--mode')            return ['-Mode']
+      if (a === '--unattended')      return ['-Unattended']
+      if (a === '--no-launch')       return ['-NoLaunch']
+      if (a === '--channel')         return ['-Channel']
+      if (a === '--listen-host')     return ['-ListenHost']
+      if (a === '--public-url')      return ['-PublicUrl']
+      if (a === '--allowed-origins') return ['-AllowedOrigins']
+      if (a === '--wizard-preset')   return ['-WizardPreset']
       return [a]
     })
     cmdArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...psArgs]
@@ -539,9 +558,32 @@ async function runInstaller(
         // script also writes its own .env files; this just keeps the
         // Electron-side runtime config in sync so the next launch
         // routes straight to /setup.
-        const host = payload.deployment === 'local' ? 'localhost' : payload.appHost!
+        // Resolve the agent URL the renderer should connect to next.
+        //   - local : loopback
+        //   - server: the public host the user typed
+        //   - custom: the public URL the user gave (or localhost if blank)
+        let resolvedAgentUrl: string
+        if (payload.deployment === 'local') {
+          resolvedAgentUrl = 'http://localhost:1112'
+        } else if (payload.deployment === 'custom') {
+          const pub = payload.customFields?.public_url ?? ''
+          // Drop the path component, keep the scheme+host+port. Falls back
+          // to localhost:1112 when the operator left public_url empty.
+          if (pub) {
+            try {
+              const u = new URL(pub)
+              resolvedAgentUrl = `${u.protocol}//${u.host}`
+            } catch {
+              resolvedAgentUrl = 'http://localhost:1112'
+            }
+          } else {
+            resolvedAgentUrl = 'http://localhost:1112'
+          }
+        } else {
+          resolvedAgentUrl = `http://${payload.appHost!}:1112`
+        }
         updateConfig({
-          agentUrl: `http://${host}:1112`,
+          agentUrl: resolvedAgentUrl,
           deploymentType: payload.deployment,
         })
       }

@@ -12,8 +12,11 @@ import { useEmbeddingStatusStore } from '../stores/embeddingStatus';
 import {
   getEmbeddingConfig,
   applyEmbeddingConfig,
+  fetchServiceCapabilities,
   type EmbeddingConfig,
+  type ServiceCapabilitiesResponse,
 } from '../services/configApi';
+import DeploymentModeRadio from '../components/setup/DeploymentModeRadio.vue';
 
 const props = defineProps<{ profile: string }>();
 const router = useRouter();
@@ -33,16 +36,22 @@ const form = ref<EmbeddingConfig>({
   hf_token: '',
   vectorstore: {
     provider: 'chroma',
-    qdrant: { host: 'localhost', port: 6333, api_key: '', https: false },
-    chroma: { mode: 'persistent', host: 'localhost', port: 8000, ssl: false, api_key: '', persist_path: '' },
+    deployment_mode: 'native',
+    qdrant: { deployment_mode: 'external', host: 'localhost', port: 6333, api_key: '', https: false },
+    chroma: { deployment_mode: 'native', host: 'localhost', port: 8000, ssl: false, api_key: '', persist_path: '' },
   },
 });
+
+const serviceCapabilities = ref<ServiceCapabilitiesResponse | null>(null);
+const qdrantCapability = computed(() => serviceCapabilities.value?.services?.qdrant ?? null);
+const chromaCapability = computed(() => serviceCapabilities.value?.services?.chroma ?? null);
+const dockerAvailable = computed(() => serviceCapabilities.value?.docker_available ?? false);
 
 const showGemmaToken = computed(() => form.value.enabled && form.value.provider === 'gemma');
 const showQdrant = computed(() => form.value.enabled && form.value.vectorstore.provider === 'qdrant');
 const showChroma = computed(() => form.value.enabled && form.value.vectorstore.provider === 'chroma');
-const showChromaHttp = computed(() => showChroma.value && form.value.vectorstore.chroma.mode === 'http');
-const showChromaPersistent = computed(() => showChroma.value && form.value.vectorstore.chroma.mode === 'persistent');
+const qdrantMode = computed(() => form.value.vectorstore.qdrant.deployment_mode);
+const chromaMode = computed(() => form.value.vectorstore.chroma.deployment_mode);
 
 const phaseLabel = computed(() => {
   if (!phase.value) return '';
@@ -77,12 +86,27 @@ async function loadConfig() {
     // comes from the SSE store.
     const res = await getEmbeddingConfig(settingsStore.agentUrl, settingsStore.authToken);
     form.value = res.config;
+    try {
+      serviceCapabilities.value = await fetchServiceCapabilities(settingsStore.agentUrl);
+    } catch {
+      // Capability fetch is best-effort — the deployment radios just
+      // won't render, the form falls back to External-only behaviour.
+      serviceCapabilities.value = null;
+    }
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : 'Failed to load embedding config');
   } finally {
     loading.value = false;
   }
 }
+
+// When the user keeps editing, mirror the active provider's
+// deployment_mode up to the top-level vectorstore key so the persisted
+// shape stays consistent.
+watch(form, (val) => {
+  const provider = val.vectorstore.provider;
+  val.vectorstore.deployment_mode = val.vectorstore[provider].deployment_mode;
+}, { deep: true });
 
 // Detect a busy→ready transition so we can confirm to the user that
 // the rebuild they triggered actually finished. We only flash the
@@ -228,29 +252,62 @@ onMounted(() => {
             </ElFormItem>
 
             <template v-if="showQdrant">
-              <ElFormItem label="Qdrant Host">
-                <ElInput v-model="form.vectorstore.qdrant.host" placeholder="localhost" />
+              <ElFormItem v-if="qdrantCapability" label="Qdrant Deployment">
+                <DeploymentModeRadio
+                  v-model="form.vectorstore.qdrant.deployment_mode"
+                  :service="qdrantCapability"
+                  :docker-available="dockerAvailable"
+                />
               </ElFormItem>
-              <ElFormItem label="Qdrant Port">
-                <ElInputNumber v-model="form.vectorstore.qdrant.port" :min="1" :max="65535" />
-              </ElFormItem>
-              <ElFormItem label="API Key (optional)">
-                <ElInput v-model="form.vectorstore.qdrant.api_key" type="password" show-password />
-              </ElFormItem>
-              <ElFormItem label="Use HTTPS">
-                <ElSwitch v-model="form.vectorstore.qdrant.https" />
-              </ElFormItem>
+              <template v-if="qdrantMode === 'docker'">
+                <div class="info-box">
+                  OpenPA will start a <code>qdrant/qdrant</code> container alongside
+                  itself and connect on <code>qdrant:6333</code>.
+                </div>
+              </template>
+              <template v-else>
+                <ElFormItem label="Qdrant Host">
+                  <ElInput v-model="form.vectorstore.qdrant.host" placeholder="localhost" />
+                </ElFormItem>
+                <ElFormItem label="Qdrant Port">
+                  <ElInputNumber v-model="form.vectorstore.qdrant.port" :min="1" :max="65535" />
+                </ElFormItem>
+                <ElFormItem label="API Key (optional)">
+                  <ElInput v-model="form.vectorstore.qdrant.api_key" type="password" show-password />
+                </ElFormItem>
+                <ElFormItem label="Use HTTPS">
+                  <ElSwitch v-model="form.vectorstore.qdrant.https" />
+                </ElFormItem>
+              </template>
             </template>
 
             <template v-if="showChroma">
-              <ElFormItem label="Mode">
-                <ElSelect v-model="form.vectorstore.chroma.mode" style="width: 100%">
-                  <ElOption value="http" label="HTTP server" />
-                  <ElOption value="persistent" label="Persistent (local file)" />
-                </ElSelect>
+              <ElFormItem v-if="chromaCapability" label="ChromaDB Deployment">
+                <DeploymentModeRadio
+                  v-model="form.vectorstore.chroma.deployment_mode"
+                  :service="chromaCapability"
+                  :docker-available="dockerAvailable"
+                />
               </ElFormItem>
 
-              <template v-if="showChromaHttp">
+              <template v-if="chromaMode === 'docker'">
+                <div class="info-box">
+                  OpenPA will start a <code>chromadb/chroma</code> container alongside
+                  itself and connect on <code>chroma:8000</code>.
+                </div>
+              </template>
+              <template v-else-if="chromaMode === 'native'">
+                <ElFormItem label="Persist Path">
+                  <ElInput
+                    v-model="form.vectorstore.chroma.persist_path"
+                    placeholder="Leave blank for <working_dir>/storage/chroma"
+                  />
+                  <div class="field-hint">
+                    OpenPA runs the <code>chromadb</code> Python library in-process — no separate service.
+                  </div>
+                </ElFormItem>
+              </template>
+              <template v-else>
                 <ElFormItem label="Chroma Host">
                   <ElInput v-model="form.vectorstore.chroma.host" placeholder="localhost" />
                 </ElFormItem>
@@ -262,15 +319,6 @@ onMounted(() => {
                 </ElFormItem>
                 <ElFormItem label="API Key (optional)">
                   <ElInput v-model="form.vectorstore.chroma.api_key" type="password" show-password />
-                </ElFormItem>
-              </template>
-
-              <template v-if="showChromaPersistent">
-                <ElFormItem label="Persist Path">
-                  <ElInput
-                    v-model="form.vectorstore.chroma.persist_path"
-                    placeholder="Leave blank for <working_dir>/storage/chroma"
-                  />
                 </ElFormItem>
               </template>
             </template>
@@ -332,5 +380,11 @@ onMounted(() => {
 .section-title { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin: 0 0 10px 0; }
 .field-hint { margin-top: 4px; font-size: 0.775rem; color: var(--text-secondary); line-height: 1.4; }
 .field-hint code { background: var(--surface-color); padding: 1px 4px; border-radius: 3px; font-size: 0.78rem; }
+.info-box {
+  margin: 8px 0 16px 0; padding: 12px 16px;
+  background: var(--hover-bg); border-radius: 8px;
+  font-size: 0.825rem; color: var(--text-secondary); line-height: 1.5;
+}
+.info-box code { background: var(--surface-color); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
 .actions { margin-top: 24px; }
 </style>

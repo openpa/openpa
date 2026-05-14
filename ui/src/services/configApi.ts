@@ -22,11 +22,56 @@ function authHeaders(token: string): Record<string, string> {
 export async function checkSetupStatus(
   agentUrl: string,
   profile?: string
-): Promise<{ setup_complete: boolean; profile_exists?: boolean; has_profiles?: boolean }> {
+): Promise<{
+  setup_complete: boolean;
+  profile_exists?: boolean;
+  has_profiles?: boolean;
+}> {
   const base = resolveBaseUrl(agentUrl);
   const params = profile ? `?profile=${encodeURIComponent(profile)}` : '';
   const res = await fetch(`${base}/api/config/setup-status${params}`);
   if (!res.ok) throw new Error(`Failed to check setup status: ${res.statusText}`);
+  return res.json();
+}
+
+// ── Per-service deployment capabilities ──
+//
+// Returned by GET /api/services/capabilities. Drives the Deployment-mode
+// radio in each Setup Wizard step: which modes does this service support,
+// and what defaults should each mode seed the form with? SQLite is
+// intentionally absent — the wizard renders no radio for local-only
+// services.
+
+export type DeploymentMode = 'docker' | 'native' | 'external';
+
+export interface ServiceCapability {
+  id: string;
+  display_name: string;
+  category: 'database' | 'vectorstore';
+  supported_modes: DeploymentMode[];
+  docker_defaults: { in_network_host: string; in_network_port: number } | null;
+  native_defaults: { kind: 'in_process' | 'subprocess'; data_subpath: string; port: number | null } | null;
+  external_defaults: { host: string; port: number } | null;
+}
+
+export interface ServiceCapabilitiesResponse {
+  services: Record<string, ServiceCapability>;
+  /** False when the openpa process can't drive ``docker compose`` on
+   *  this host (no socket, no compose file). The wizard masks the
+   *  Docker radio for every service in that case. */
+  docker_available: boolean;
+  /** INSTALL_MODE from the rendered .env. The backend has already
+   *  filtered each service's ``supported_modes`` by the catalog's
+   *  mode rule for this mode; the UI just renders what came back. */
+  install_mode?: string | null;
+}
+
+export async function fetchServiceCapabilities(
+  agentUrl: string,
+): Promise<ServiceCapabilitiesResponse> {
+  const base = resolveBaseUrl(agentUrl);
+  const res = await fetch(`${base}/api/services/capabilities`);
+  if (!res.ok) throw new Error(`Failed to fetch service capabilities: ${res.statusText}`);
   return res.json();
 }
 
@@ -51,13 +96,24 @@ export interface EmbeddingSetupConfig {
   hf_token: string;
   vectorstore: {
     provider: 'qdrant' | 'chroma';
-    qdrant: { host: string; port: number; api_key: string; https: boolean };
+    /** Stamped by ``_resolve_vectorstore`` on the backend after
+     *  provisioning; also accepted on input so the wizard can request
+     *  a specific mode. */
+    deployment_mode: DeploymentMode;
+    qdrant: {
+      deployment_mode: DeploymentMode;
+      host: string;
+      port: number;
+      api_key: string;
+      https: boolean;
+    };
     chroma: {
-      mode: 'http' | 'persistent';
+      deployment_mode: DeploymentMode;
       host: string;
       port: number;
       ssl: boolean;
       api_key: string;
+      /** Only used when deployment_mode === 'native'. */
       persist_path: string;
     };
   };
@@ -102,23 +158,8 @@ export interface EmbeddingStatusResponse {
   error: string | null;
 }
 
-export interface EmbeddingConfig {
-  enabled: boolean;
-  provider: 'me5' | 'gemma';
-  hf_token: string;
-  vectorstore: {
-    provider: 'qdrant' | 'chroma';
-    qdrant: { host: string; port: number; api_key: string; https: boolean };
-    chroma: {
-      mode: 'http' | 'persistent';
-      host: string;
-      port: number;
-      ssl: boolean;
-      api_key: string;
-      persist_path: string;
-    };
-  };
-}
+// EmbeddingConfig is the same shape the Settings page reads/writes back.
+export type EmbeddingConfig = EmbeddingSetupConfig;
 
 export async function getEmbeddingConfig(
   agentUrl: string,

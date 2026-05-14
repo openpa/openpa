@@ -10,14 +10,17 @@ subscribed to a filesystem event so a saved instruction runs later.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
-
-from openai.types.chat import ChatCompletionMessageParam
+from typing import TYPE_CHECKING, Any, Dict
 
 from app.config.user_config import resolve_skill_classifier_config
 from app.constants import ChatCompletionTypeEnum
 from app.lib.llm.base import LLMProvider
 from app.utils.logger import logger
+
+# Stringified annotation usage only; keep the type loadable for static
+# checking without forcing ``openai`` onto the boot path.
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 
 _SYSTEM_PROMPT = (

@@ -50,12 +50,12 @@ function openConversationStreamRaw(
   authToken: string,
   conversationId: string,
   onEvent: (e: ConversationStreamEvent) => void,
-  onError: (err: any) => void,
+  _onError: (err: any) => void,
 ): SharedStreamRawHandle {
   const controller = new AbortController();
   let closed = false;
   let attempt = 0;
-  const backoffs = [1000, 2000, 5000];
+  const backoffs = [1000, 2000, 5000, 10000, 30000];
 
   const run = async () => {
     while (!closed) {
@@ -126,10 +126,6 @@ function openConversationStreamRaw(
         if (closed || err?.name === 'AbortError') return;
         const wait = backoffs[Math.min(attempt, backoffs.length - 1)];
         attempt += 1;
-        if (attempt > backoffs.length) {
-          onError(err);
-          return;
-        }
         console.warn(`[conversationStream] reconnecting in ${wait}ms after error:`, err);
         await new Promise(r => setTimeout(r, wait));
       }

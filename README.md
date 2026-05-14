@@ -32,7 +32,7 @@ The CLI is configured via environment variables:
 | `OPA_OUTPUT`    | `table`                  | `table` or `json` output mode          |
 | `OPA_NO_COLOR`  | (unset)                  | When set, disable ANSI colors          |
 
-Obtain a JWT either from `openpa-ui` after first-run setup, or from
+Obtain a JWT either from the OpenPA setup wizard after first-run setup, or from
 `openpa setup complete` (which posts the setup payload and prints a token):
 
 ```bash

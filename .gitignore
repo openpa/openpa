@@ -53,7 +53,7 @@ output.txt
 cli/openpa
 cli/openpa.exe
 
-# Built openpa-ui SPA — populated by scripts/build_ui.sh, picked up by
+# Built SPA — populated by scripts/build_ui.sh, picked up by
 # ``openpa serve`` and bundled into the wheel. The built artifacts are
 # regenerated on every release so we don't track them in git.
 app/static/ui/*

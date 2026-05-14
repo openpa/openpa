@@ -1,11 +1,17 @@
-from typing import AsyncGenerator, List, Optional, Dict, Any, Union, AsyncIterator
+from __future__ import annotations
 
-from openai.types.chat import ChatCompletionMessageParam
+from typing import TYPE_CHECKING, AsyncGenerator, List, Optional, Dict, Any, Union, AsyncIterator
 
 from app.constants import ChatCompletionTypeEnum
 from app.types import ChatCompletionStreamResponseType
 from app.utils import logger
 from .base import LLMProvider
+
+# OpenAI types are PEP 563-stringified in the annotations below; load
+# them under TYPE_CHECKING so this module imports without the
+# ``llm-openai`` extras group installed.
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 
 async def llm_quick_prompt(

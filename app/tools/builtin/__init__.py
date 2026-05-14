@@ -50,6 +50,7 @@ __all__ = [
     "register_builtin_tools",
     "refresh_builtin_tool_oauth",
     "get_builtin_tool_config",
+    "list_builtin_tool_catalog",
 ]
 
 
@@ -68,6 +69,79 @@ _BUILTIN_MODULE_NAMES: tuple[str, ...] = (
     "documentation_search",
     "change_working_directory",
 )
+
+
+def list_builtin_tool_catalog() -> list[dict]:
+    """Static built-in tool catalog, drawn from ``TOOL_CONFIG`` only.
+
+    Used by ``GET /api/tools`` during the Setup Wizard's deferred-storage
+    window — the registry is not built until ``boot_storage_and_post_storage``
+    runs, but the wizard still needs to render the tool list. Rows mirror
+    the post-enrichment shape of :meth:`ToolRegistry.visible_for_profile`,
+    with ``enabled`` / ``configured`` / ``config`` reflecting an empty,
+    no-DB baseline.
+    """
+    rows: list[dict] = []
+    for module_name in _BUILTIN_MODULE_NAMES:
+        try:
+            module = importlib.import_module(f"app.tools.builtin.{module_name}")
+        except ImportError as e:
+            logger.warning(
+                f"Built-in tool module '{module_name}' not importable for catalog: {e}"
+            )
+            continue
+
+        tool_info = getattr(module, "TOOL_CONFIG", None)
+        if not isinstance(tool_info, dict):
+            continue
+        if not tool_info.get("visible", True):
+            continue
+
+        server_name = getattr(module, "SERVER_NAME", module_name)
+        tool_id = slugify(server_name)
+        llm_defaults: dict = dict(tool_info.get("llm_parameters") or {})
+        required_fields = tool_info.get("required_config", {}) or {}
+        locked_raw = tool_info.get("locked_llm_fields") or []
+        locked_llm_fields: list[str] = (
+            [str(k) for k in locked_raw if isinstance(k, str)]
+            if isinstance(locked_raw, list) else []
+        )
+
+        # Match ``_is_tool_configured`` semantics when the snapshot is empty:
+        # a tool with no required fields, or with defaults on every required
+        # field, is "configured".
+        configured = True
+        if required_fields:
+            configured = all(
+                field_spec.get("default") is not None
+                for field_spec in required_fields.values()
+            )
+
+        rows.append({
+            "tool_id": tool_id,
+            "name": server_name,
+            "display_name": server_name,
+            "description": (
+                llm_defaults.get("description")
+                or llm_defaults.get("tool_instructions")
+                or server_name
+            ),
+            "tool_type": "builtin",
+            # Default-enabled in the wizard catalog so new installs are
+            # useful out of the box. Tools with unfilled required vars
+            # still surface a "Needs Config" tag in the UI, and the user
+            # can opt out per-tool before submitting.
+            "enabled": True,
+            "configured": configured,
+            "config": {},
+            "required_fields": required_fields,
+            "llm_defaults": llm_defaults,
+            "locked_llm_fields": locked_llm_fields,
+            "full_reasoning": bool(llm_defaults.get("full_reasoning", False)),
+            "is_stub": False,
+            "arguments_schema": tool_info.get("arguments"),
+        })
+    return rows
 
 
 def get_builtin_tool_config(config_name: str) -> dict:

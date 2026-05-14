@@ -137,12 +137,20 @@ const router = createRouter({
 // flow. We deliberately don't apply this in the web build (no
 // ``window.openpa``) because there the agent URL comes from
 // VITE_AGENT_URL at build time.
+//
+// ``bridge.config.agentUrl`` is the snapshot the Electron preload
+// captured at startup; it never refreshes mid-session even after
+// ``setAgentUrl`` writes the new value through to disk. To avoid
+// bouncing post-setup navigation back to /setup when the bridge
+// snapshot is stale, consult the live Pinia ref as a fallback — it's
+// the same source ``a2aClient.getBaseUrl`` uses.
 router.beforeEach((to) => {
   const bridge = window.openpa
-  if (bridge && !bridge.config.agentUrl && to.name !== 'setup' && to.name !== 'setup-profile') {
-    return { path: '/setup', replace: true }
-  }
-  return true
+  if (!bridge) return true
+  if (bridge.config.agentUrl) return true
+  if (useSettingsStore().agentUrl) return true
+  if (to.name === 'setup' || to.name === 'setup-profile') return true
+  return { path: '/setup', replace: true }
 });
 
 // Synchronously activate the per-profile auth token before any view renders.

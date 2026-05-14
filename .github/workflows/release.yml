@@ -6,6 +6,8 @@
 #   - Windows NSIS installer + latest.yml
 #   - macOS DMG + latest-mac.yml
 #   - Linux AppImage + latest-linux.yml
+# Plus, pushed to Docker Hub:
+#   - openpa/openpa-desktop:X.Y.Z and openpa/openpa-desktop:latest
 #
 # Flow:
 #   1. ``prepare-draft`` creates a draft GitHub Release with auto-generated
@@ -16,12 +18,20 @@
 #   3. ``electron`` (matrix: ubuntu, macos, windows) runs ``npm run build``
 #      in ui/. electron-builder with ``releaseType: "draft"`` uploads each
 #      platform's installer + update manifest to the same draft.
-#   4. ``publish`` promotes the draft only after wheel AND every electron
-#      matrix job succeed. Half-finished releases never reach users.
+#   4. ``docker`` waits for ``wheel`` (PyPI must serve the new wheel),
+#      then builds Dockerfile.desktop with OPENPA_PIP_SPEC=openpa==X.Y.Z
+#      and pushes openpa/openpa-desktop:X.Y.Z + :latest to Docker Hub.
+#      BuildKit GHA cache keeps the heavy base layers warm across releases.
+#   5. ``publish`` promotes the draft only after wheel AND every electron
+#      matrix job AND docker succeed. Half-finished releases never reach
+#      users.
 #
 # Required repo secrets:
-#   PYPI_API_TOKEN      — for PyPI publish.
-#   GITHUB_TOKEN        — auto-provided; used by electron-builder + gh CLI.
+#   PYPI_API_TOKEN       — for PyPI publish.
+#   DOCKERHUB_USERNAME   — Docker Hub account with push rights to
+#                          openpa/openpa-desktop.
+#   DOCKERHUB_TOKEN      — Docker Hub PAT (Read+Write scope).
+#   GITHUB_TOKEN         — auto-provided; used by electron-builder + gh CLI.
 # Optional (for code signing):
 #   CSC_LINK + CSC_KEY_PASSWORD                     — Windows + macOS certs.
 #   APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD
@@ -157,10 +167,9 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Builds the SPA into app/static/ui/ from the in-tree ui/ source.
-      # scripts/build_ui.sh defaults to $REPO_ROOT/ui after the merger —
-      # no OPENPA_UI_REF needed because the UI lives in this repo now.
-      - name: Build openpa-ui SPA
+      # Builds the SPA from the in-tree ui/ source into app/static/ui/
+      # so the wheel ``hatch build`` produces ships with the UI bundled.
+      - name: Build SPA
         run: bash scripts/build_ui.sh
 
       - name: Install hatch
@@ -278,8 +287,84 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run build -- --publish always
 
+  # Builds openpa/openpa-desktop and pushes it to Docker Hub. Runs in
+  # parallel with ``electron`` (no shared artifacts) but depends on
+  # ``wheel`` because the image's ``RUN pip install openpa==X.Y.Z`` must
+  # resolve against PyPI — see Dockerfile.desktop's OPENPA_PIP_SPEC arg.
+  #
+  # The expensive base layers (Ubuntu + XFCE + Chrome + Python 3.13 +
+  # Docker CLI) are cached via BuildKit's GHA cache (scope=desktop),
+  # shared with release-test.yml so a test build right before a prod
+  # build can be a near-instant rebuild of only the final pip layer.
+  # Docker Hub deduplicates layer blobs by digest, so re-pushing the
+  # cached base layers under a new tag is a no-op for storage and
+  # uploads only the small (~50MB) per-version pip layer.
+  docker:
+    needs: [verify, prepare-draft, wheel]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out openpa
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-draft.outputs.tag }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # PyPI's Fastly cache fills eventually-consistent: the upload step
+      # above returns when the file is stored, but the JSON / Simple
+      # index serving the new version can lag by a few seconds. Polling
+      # ``/pypi/<name>/<version>/json`` is the canonical existence check.
+      # Without this guard a transient miss inside ``pip install`` would
+      # poison the (otherwise-cached) build and waste several minutes
+      # of runner time.
+      - name: Wait for PyPI to serve openpa==${{ needs.verify.outputs.version }}
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "https://pypi.org/pypi/openpa/${VERSION}/json" >/dev/null; then
+              echo "PyPI has openpa==${VERSION}"
+              exit 0
+            fi
+            echo "Not yet ($i/30); sleeping 5s"
+            sleep 5
+          done
+          echo "::error::PyPI never served openpa==${VERSION} after 150s"
+          exit 1
+
+      # ``provenance: false`` keeps the published manifest a plain
+      # single-arch image. With provenance on, BuildKit pushes a manifest
+      # list with an attestation entry, which older Docker daemons
+      # (24.x without containerd-snapshotter) flag with cosmetic
+      # "unknown platform" warnings on pull.
+      - name: Build & push openpa/openpa-desktop
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.desktop
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            openpa/openpa-desktop:${{ needs.verify.outputs.version }}
+            openpa/openpa-desktop:latest
+          build-args: |
+            OPENPA_PIP_SPEC=openpa==${{ needs.verify.outputs.version }}
+          cache-from: type=gha,scope=desktop
+          cache-to: type=gha,scope=desktop,mode=max
+
   publish:
-    needs: [prepare-draft, wheel, electron]
+    needs: [prepare-draft, wheel, electron, docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write

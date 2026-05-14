@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
-# Build the openpa-ui SPA and stage it into ``app/static/ui/`` so the
-# wheel produced by ``hatch build`` carries the built UI alongside the
-# server.
+# Build the SPA from the in-tree ``ui/`` directory and stage it into
+# ``app/static/ui/`` so the wheel produced by ``hatch build`` carries the
+# built UI alongside the server.
 #
 # Run this:
 #   - In CI before ``hatch build`` (so released wheels include the SPA).
 #   - Locally before ``pip install -e .`` if you want the SPA served
 #     by ``openpa serve`` from a checkout.
-#
-# Sources, in priority order:
-#   1. OPENPA_UI_REPO + OPENPA_UI_REF       — clone from a fork / tag.
-#                                             Opt-in escape hatch for
-#                                             emergency rebuilds.
-#   2. OPENPA_UI_LOCAL=/path/to/openpa-ui   — override the source path.
-#   3. Default: the in-tree ./ui/ directory (since the UI lives in this
-#      repo alongside the backend).
 #
 # Output layout:
 #   app/static/ui/
@@ -29,27 +21,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATIC_DIR="$REPO_ROOT/app/static/ui"
 
-UI_LOCAL="${OPENPA_UI_LOCAL:-$REPO_ROOT/ui}"
-UI_REPO="${OPENPA_UI_REPO:-}"
-UI_REF="${OPENPA_UI_REF:-main}"
-
-cleanup_dir=""
-trap '[ -n "$cleanup_dir" ] && rm -rf "$cleanup_dir"' EXIT
-
-if [ -n "$UI_REPO" ]; then
-    cleanup_dir="$(mktemp -d)"
-    src="$cleanup_dir/openpa-ui"
-    echo "[build_ui] cloning $UI_REPO @ $UI_REF"
-    git clone --depth 1 --branch "$UI_REF" "$UI_REPO" "$src"
-elif [ -d "$UI_LOCAL" ]; then
-    src="$UI_LOCAL"
-    echo "[build_ui] using local source at $src"
-else
-    echo "[build_ui] no UI source: $UI_LOCAL does not exist." >&2
-    echo "  Run from the openpa repo root (ui/ subdir is the default source)" >&2
-    echo "  or set OPENPA_UI_REPO=<git url> to clone from a fork/tag." >&2
+src="$REPO_ROOT/ui"
+if [ ! -d "$src" ]; then
+    echo "[build_ui] expected $src to exist (in-tree UI source)." >&2
     exit 1
 fi
+echo "[build_ui] using local source at $src"
 
 # Pin Node deps with ``ci`` (lockfile-strict) so the wheel build is
 # reproducible across runs. Fall back to a fresh ``npm install`` if

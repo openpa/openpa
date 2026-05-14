@@ -1,9 +1,10 @@
 # Releasing OpenPA
 
-OpenPA's Python wheel (PyPI) and Electron app (GitHub Releases installers
-+ auto-update manifests) ship from this single repo. Every production
-release is the promotion of a tested commit — there's no separate "test"
-and "prod" pipeline. CI enforces this.
+OpenPA's Python wheel (PyPI), Electron app (GitHub Releases installers
++ auto-update manifests), and Docker image (`openpa/openpa-desktop` on
+Docker Hub) all ship from this single repo. Every production release is
+the promotion of a tested commit — there's no separate "test" and "prod"
+pipeline. CI enforces this.
 
 ## Version source
 
@@ -130,7 +131,7 @@ A release cycle covers ONE version. It starts when you decide to ship
 
 ### What ships on `v0.1.8`
 
-The release workflow runs five jobs:
+The release workflow runs six jobs:
 
 1. **`verify`** — CI gates described below.
 2. **`prepare-draft`** — creates a draft GitHub Release with
@@ -141,15 +142,27 @@ The release workflow runs five jobs:
 4. **`electron`** matrix (windows / macos / ubuntu) — `npm run build` in
    `ui/`. electron-builder publishes installers + `latest*.yml` update
    manifests to the same draft.
-5. **`publish`** — promotes the draft to public, but **only** after all
+5. **`docker`** (ubuntu) — builds `Dockerfile.desktop` with
+   `OPENPA_PIP_SPEC=openpa==0.1.8` and pushes
+   `openpa/openpa-desktop:0.1.8` and `openpa/openpa-desktop:latest` to
+   Docker Hub. Heavy base layers (Ubuntu + XFCE + Chrome + Python +
+   Docker CLI) come from BuildKit GHA cache; only the small per-version
+   pip layer is built and uploaded.
+6. **`publish`** — promotes the draft to public, but **only** after all
    of the above succeed.
 
 The promoted release contains:
 
-- `openpa-0.1.8-py3-none-any.whl` + `openpa-0.1.8.tar.gz`
+- `openpa-0.1.8-py3-none-any.whl` + `openpa-0.1.8.tar.gz` (PyPI + GH)
 - `OpenPA Web UI-Windows-0.1.8-Setup.exe` + `latest.yml`
 - `OpenPA Web UI-Mac-0.1.8-Installer.dmg` + `latest-mac.yml`
 - `OpenPA Web UI-Linux-0.1.8.AppImage` + `latest-linux.yml`
+- `openpa/openpa-desktop:0.1.8` and `openpa/openpa-desktop:latest` on
+  Docker Hub
+
+The test workflow (`release-test.yml`) emits a parallel set:
+`openpa==0.1.8.dev1` on Test PyPI plus `openpa/openpa-desktop:0.1.8.dev1`
+on Docker Hub (no `:latest`).
 
 ## CI enforcement
 
@@ -221,6 +234,40 @@ succeeds, but users see SmartScreen / Gatekeeper warnings.
 The per-job gating logic is in
 [`.github/workflows/release.yml`](.github/workflows/release.yml)'s
 "Configure code-signing env" step.
+
+## Docker Hub credentials
+
+The `docker` jobs in both `release.yml` and `release-test.yml` push
+to `openpa/openpa-desktop` on Docker Hub. Unlike code-signing, these
+secrets are **required** — a missing secret fails the job, which fails
+the release.
+
+One-time setup:
+
+1. **Create the repo on Docker Hub.** At
+   [hub.docker.com](https://hub.docker.com) → *Create Repository* →
+   name `openpa-desktop`, namespace `openpa`, visibility **Public**.
+   (If the first push creates it private by accident, unauthenticated
+   `docker compose pull` from the installer will fall back to local
+   build, which works but takes ~25 minutes.)
+
+2. **Create a Personal Access Token.** Docker Hub → *Account Settings →
+   Security → New Access Token*. Scope **Read & Write** (Delete is not
+   needed). Name it `openpa-gha-release`. Copy the token string
+   immediately — Docker Hub shows it once.
+
+3. **Add the GitHub repo secrets.** Repo → *Settings → Secrets and
+   variables → Actions → New repository secret*:
+
+   - `DOCKERHUB_USERNAME` — the Docker Hub account or org username.
+     Stored as a secret for log-redaction consistency, even though
+     usernames aren't sensitive.
+   - `DOCKERHUB_TOKEN` — the PAT from step 2.
+
+Once these are in place, every `v*-testN` and `v*` tag will publish a
+matching image. The base layers are cached in GitHub Actions cache under
+`scope=desktop`, shared between the prod and test workflows, so each
+release rebuilds only the small (~50 MB) final `pip install` layer.
 
 ## Cheat sheet
 

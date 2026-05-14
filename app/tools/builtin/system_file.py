@@ -14,8 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from tiktoken import encoding_for_model
-
 from app.tools.builtin.base import BuiltInTool, BuiltInToolResult
 from app.types import ToolConfig, ToolResultFile, ToolResultWithFiles
 from app.utils.logger import logger
@@ -65,8 +63,16 @@ _encoder = None
 
 
 def _get_encoder():
+    """Lazy-build the tiktoken encoder.
+
+    Imported here rather than at module top so the system_file tool can
+    still load when the ``tokenization`` extras group isn't installed —
+    callers that need a token count get a clear ImportError instead of
+    failing at server boot.
+    """
     global _encoder
     if _encoder is None:
+        from tiktoken import encoding_for_model
         _encoder = encoding_for_model("gpt-4o")
     return _encoder
 

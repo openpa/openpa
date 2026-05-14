@@ -1,7 +1,6 @@
 import asyncio
 import uuid
 from typing import Any, Dict, List, Tuple, cast
-from tiktoken import encoding_for_model
 
 from a2a.server.agent_execution import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
@@ -26,7 +25,7 @@ from app.agent.agent import OpenPAAgent
 from app.agent.summary import summarize_reasoning
 from app.config.settings import BaseConfig
 from app.constants import ChatCompletionTypeEnum
-from app.lib.llm import (LLMProvider, GroqLLMProvider)
+from app.lib.llm import LLMProvider
 from app.storage.conversation_storage import ConversationStorage
 
 from app.utils import logger, build_table_embeddings, find_similar_items
@@ -112,7 +111,10 @@ class OpenPAAgentExecutor(AgentExecutor):
         collected_file_parts: list[Part] = []
         reasoning_input_section: str | None = None
 
-        # Initialize tiktoken encoder for token-by-token streaming
+        # Initialize tiktoken encoder for token-by-token streaming. Lazy
+        # import: tiktoken lives in the ``tokenization`` extras group and
+        # may not be present on a thin-core install.
+        from tiktoken import encoding_for_model
         encoder = encoding_for_model("gpt-4o")
 
         # Load history from DB (includes message IDs for the message_detail tool).
