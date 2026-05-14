@@ -1,7 +1,12 @@
 # Dev-channel override. The installer emits this next to
 # docker-compose.yml only when --channel=dev && --mode=docker; compose
-# merges files in the same directory automatically, so production
-# installs never see these overrides.
+# merges files in the same directory automatically, so production and
+# test installs never see these overrides.
+#
+# The main ``docker-compose.yml`` template has no ``build:`` section —
+# production and test channels pull a pre-built image from Docker Hub.
+# This override re-introduces the ``build:`` block so dev installs
+# compile the image from the local checkout instead of pulling.
 #
 # - ``build.context`` points at the local checkout (the main compose
 #   template's ``../..`` would resolve to ~/.openpa/.. and miss the
@@ -18,6 +23,7 @@ services:
   openpa:
     build:
       context: "__REPO_ROOT__"
+      dockerfile: Dockerfile.desktop
       args:
         OPENPA_PIP_SPEC: "-e /src"
     volumes:

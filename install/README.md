@@ -39,14 +39,16 @@ shows no radio (it's local-only).
 1. Detect Docker, ask deployment type (local / server / custom) and host or advanced fields.
 2. Generate a random VNC password.
 3. Render [`docker-compose.yml`](templates/docker-compose.yml.tmpl) and an `.env` file (VNC password, ports, app URL, CORS) into `~/.openpa/docker/`. The Setup Wizard later appends to `COMPOSE_PROFILES` as the user activates Docker-mode services; the bundle starts with only the `openpa` container running.
-4. `docker compose pull` (best-effort), then `docker compose up -d --build`.
+4. Per-channel image strategy:
+   - `production` / `test`: resolve the latest version from PyPI / Test PyPI, then `docker compose pull` + `docker compose up -d` (no local build; a missing tag fails hard).
+   - `dev`: `docker compose pull --ignore-pull-failures` for sidecars, then `docker compose up -d --build` against the local checkout via `docker-compose.override.yml`.
 5. Wait for `http://<host>:1112/health` to return 200.
 6. Open `http://<host>:1515/#/setup` in your browser.
 
 The bundle defines four services. Only `openpa` is started at install
 time; the others are activated by the wizard:
 
-- **openpa** — XFCE + TigerVNC + noVNC + Python 3.13 + the OpenPA agent + the SPA static server. Always started. Built from [`Dockerfile.desktop`](../Dockerfile.desktop). Mounts `/var/run/docker.sock` so the in-container wizard can `docker compose up -d` the sibling services on demand.
+- **openpa** — XFCE + TigerVNC + noVNC + Python 3.13 + the OpenPA agent + the SPA static server. Always started. Production / test installs pull a pre-built `openpa/openpa-desktop:<version>` from Docker Hub; dev installs build from [`Dockerfile.desktop`](../Dockerfile.desktop). Mounts `/var/run/docker.sock` so the in-container wizard can `docker compose up -d` the sibling services on demand.
 - **postgres** — Application DB (`postgres:16`). Activated when the wizard's Database step picks **Postgres + Docker**.
 - **qdrant** — Vector store (`qdrant/qdrant:latest`). Activated when the wizard's Embedding step picks **Qdrant + Docker**.
 - **chroma** — Vector store (`chromadb/chroma:latest`). Activated when the wizard's Embedding step picks **ChromaDB + Docker**.

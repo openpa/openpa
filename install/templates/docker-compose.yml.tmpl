@@ -25,23 +25,16 @@
 
 services:
   openpa:
+    # Pre-built image pulled from Docker Hub. ``release.yml`` pushes
+    # ``openpa/openpa-desktop:<version>`` and ``:latest`` for the
+    # production channel; ``release-test.yml`` pushes
+    # ``openpa/openpa-desktop:<dev-version>`` for the test channel.
+    # ``OPENPA_VERSION`` is resolved at install time by install.sh /
+    # install.ps1 against PyPI (production) or Test PyPI (test). The
+    # dev channel re-adds a ``build:`` section via
+    # docker-compose.override.yml so it can build from a local
+    # checkout instead of pulling.
     image: openpa/openpa-desktop:${OPENPA_VERSION}
-    build:
-      context: ../..
-      dockerfile: Dockerfile.desktop
-      args:
-        # Thin core: filesystem watching (documents sync, skills
-        # hot-reload, file-browser SSE, the ``register_file_watcher``
-        # built-in tool) ships in core, so no extras pin is needed at
-        # this stage. The optional feature groups (vector embedding,
-        # vectorstores, browser, LLM SDKs, postgres, ...) are installed
-        # at runtime when the user enables them in the wizard. Runtime
-        # ``pip install``s land in the ``openpa-venv`` named volume
-        # (mounted at /opt/openpa/venv) so they persist across
-        # container recreation.
-        OPENPA_PIP_SPEC: "openpa==${OPENPA_VERSION}"
-        OPENPA_PIP_INDEX_URL: ${OPENPA_PIP_INDEX_URL:-}
-        OPENPA_PIP_EXTRA_INDEX_URL: ${OPENPA_PIP_EXTRA_INDEX_URL:-}
     ports:
       - "${API_PORT:-1112}:1112"
       - "${SPA_PORT:-1515}:1515"

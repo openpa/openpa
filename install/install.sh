@@ -547,20 +547,71 @@ gen_secret() {
     echo
 }
 
-# Read the version pinned in the installed package, falling back to
-# ``main`` when we don't have a Python install yet (Docker mode is
-# allowed without Python on the host).
+# Pick the OPENPA_VERSION tag to bake into the rendered docker .env.
+# Channel-driven:
+#   production → latest stable from PyPI JSON
+#   test       → latest pre-release from Test PyPI's simple index
+#                (same regex the native test installer uses below)
+#   dev        → literal 'dev'; the docker-compose.override.yml
+#                rebuilds locally and re-tags so the value is only
+#                a cosmetic image label
+# Hard-fails on network errors for prod / test — the previous
+# 'main' fallback silently mis-tagged the image and masked the
+# failure behind ``docker compose up --build``.
 resolve_version() {
-    local v=""
-    if [ -n "$PYTHON" ]; then
-        v="$("$PYTHON" -c 'from importlib.metadata import version, PackageNotFoundError
-try:
-    print(version("openpa"))
-except PackageNotFoundError:
-    pass' 2>/dev/null || true)"
-    fi
-    if [ -z "$v" ]; then v="main"; fi
-    echo "$v"
+    case "$CHANNEL" in
+        production)
+            info "Resolving latest openpa version from PyPI" >&2
+            local body v py
+            body="$(curl -fsSL https://pypi.org/pypi/openpa/json)" || {
+                err "Failed to fetch https://pypi.org/pypi/openpa/json"
+                exit 1
+            }
+            # Python is the only reliable JSON parser we can count on
+            # cross-distro. Prefer the discovered $PYTHON (3.10+), fall
+            # back to the system ``python3`` (3.x is sufficient for
+            # ``json.load``).
+            py="${PYTHON:-python3}"
+            v="$(printf '%s' "$body" | "$py" -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null)" || {
+                err "Failed to parse PyPI JSON for openpa (need python3 in PATH)"
+                exit 1
+            }
+            if [ -z "$v" ]; then
+                err "PyPI JSON returned no version for openpa"
+                exit 1
+            fi
+            ok "Resolved openpa==$v from PyPI" >&2
+            echo "$v"
+            ;;
+        test)
+            info "Resolving latest openpa pre-release from Test PyPI" >&2
+            local v
+            # Same regex shape as the native test installer below — match
+            # the wheel URL, then strip out the version segment from the
+            # filename (``openpa-<version>-py3-none-any.whl``). ``sort -V``
+            # gives a sensible ordering across .devN / rcN suffixes.
+            v="$(curl -fsSL https://test.pypi.org/simple/openpa/ \
+                | grep -oE 'openpa-[^"/]+-py3-none-any\.whl' \
+                | sed -E 's/^openpa-(.+)-py3-none-any\.whl$/\1/' \
+                | sort -V -u \
+                | tail -n 1)"
+            if [ -z "$v" ]; then
+                err "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                exit 1
+            fi
+            ok "Resolved openpa==$v from Test PyPI" >&2
+            echo "$v"
+            ;;
+        dev)
+            # Dev mode rebuilds via docker-compose.override.yml; the tag is
+            # only the local image label.
+            echo "dev"
+            ;;
+        *)
+            err "Unknown channel: $CHANNEL"
+            exit 1
+            ;;
+    esac
 }
 
 if [ "$MODE" = "docker" ]; then
@@ -576,6 +627,9 @@ if [ "$MODE" = "docker" ]; then
     # via its own per-service deployment-mode picker.
     if [ -f "$DOCKER_DIR/.env" ] && [ -f "$DOCKER_DIR/docker-compose.yml" ] && [ "$REINSTALL" -ne 1 ]; then
         info "Existing Docker bundle detected at $DOCKER_DIR — reusing config."
+        # Read OPENPA_VERSION from the existing .env so the pull-stage
+        # info / error messages can reference the actual image tag.
+        OPENPA_VERSION="$(grep -E '^OPENPA_VERSION=' "$DOCKER_DIR/.env" | head -n 1 | cut -d= -f2-)"
     else
         VNC_PASSWORD="$(gen_secret)"
         OPENPA_VERSION="$(resolve_version)"
@@ -652,15 +706,36 @@ EOF
         ok "Wrote $DOCKER_DIR/docker-compose.yml + .env"
     fi
 
-    # ``compose pull`` is best-effort — if the published image isn't
-    # available yet (dev release), Compose's ``build:`` directive picks
-    # up the slack on ``up -d``.
-    info "Pulling images (this may take a few minutes the first time)"
-    (cd "$DOCKER_DIR" && docker compose pull --ignore-pull-failures \
-        >>"$LOG_FILE" 2>&1) || warn "Some images couldn't be pulled; will build locally."
+    # Per-channel pull / build strategy:
+    #   production / test → pull the pre-built image from Docker Hub
+    #                       and refuse to fall back to a local build.
+    #                       The main compose template has no ``build:``
+    #                       section, so a missing tag fails hard at
+    #                       ``compose pull`` with a clear error rather
+    #                       than silently rebuilding off the user's
+    #                       checkout.
+    #   dev               → the docker-compose.override.yml re-adds a
+    #                       ``build:`` section pointing at the local
+    #                       checkout. ``compose pull`` is best-effort
+    #                       (the dev image isn't published), and
+    #                       ``compose up --build`` forces a rebuild
+    #                       so host-side edits land in the image.
+    if [ "$CHANNEL" = "dev" ]; then
+        info "Pulling sidecar images (openpa image is built locally for dev)"
+        (cd "$DOCKER_DIR" && docker compose pull --ignore-pull-failures \
+            >>"$LOG_FILE" 2>&1) || warn "Some images couldn't be pulled; will build locally."
 
-    info "Starting bundle"
-    (cd "$DOCKER_DIR" && docker compose up -d --build >>"$LOG_FILE" 2>&1)
+        info "Building openpa image and starting bundle"
+        (cd "$DOCKER_DIR" && docker compose up -d --build >>"$LOG_FILE" 2>&1)
+    else
+        info "Pulling openpa/openpa-desktop:$OPENPA_VERSION and sidecar images from Docker Hub"
+        if ! (cd "$DOCKER_DIR" && docker compose pull >>"$LOG_FILE" 2>&1); then
+            err "docker compose pull failed — openpa/openpa-desktop:$OPENPA_VERSION may not be published yet (see $LOG_FILE)"
+            exit 1
+        fi
+        info "Starting bundle"
+        (cd "$DOCKER_DIR" && docker compose up -d >>"$LOG_FILE" 2>&1)
+    fi
 
     # Health gate: don't open the wizard until the backend is reachable.
     # Custom installs already picked the public URL — strip the scheme

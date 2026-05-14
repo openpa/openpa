@@ -509,13 +509,65 @@ function New-Secret {
 }
 
 function Resolve-OpenPAVersion {
-    if ($Python) {
-        try {
-            $v = & $Python -c "from importlib.metadata import version, PackageNotFoundError`ntry:`n    print(version('openpa'))`nexcept PackageNotFoundError:`n    pass" 2>$null
-            if ($v) { return $v.Trim() }
-        } catch {}
+    # Pick the OPENPA_VERSION tag to bake into the rendered docker .env.
+    # Channel-driven:
+    #   production → latest stable from PyPI JSON
+    #   test       → latest pre-release from Test PyPI's simple index
+    #                (same regex the native test installer uses below)
+    #   dev        → literal 'dev'; the docker-compose.override.yml
+    #                rebuilds locally and re-tags so the value is only
+    #                a cosmetic image label
+    # Hard-fails on network errors for prod / test — the previous
+    # 'main' fallback silently mis-tagged the image and masked the
+    # failure behind ``docker compose up --build``.
+    switch ($Channel) {
+        'production' {
+            Write-Info "Resolving latest openpa version from PyPI"
+            try {
+                $body = (Invoke-WebRequest -UseBasicParsing -Uri 'https://pypi.org/pypi/openpa/json').Content
+                $v = ($body | ConvertFrom-Json).info.version
+            } catch {
+                Write-Err2 "Failed to resolve openpa version from https://pypi.org/pypi/openpa/json : $_"
+                exit 1
+            }
+            if (-not $v) {
+                Write-Err2 "PyPI JSON returned no version for openpa"
+                exit 1
+            }
+            Write-Ok "Resolved openpa==$v from PyPI"
+            return $v.Trim()
+        }
+        'test' {
+            Write-Info "Resolving latest openpa pre-release from Test PyPI"
+            try {
+                $indexBody = (Invoke-WebRequest -UseBasicParsing -Uri 'https://test.pypi.org/simple/openpa/').Content
+            } catch {
+                Write-Err2 "Failed to fetch https://test.pypi.org/simple/openpa/ : $_"
+                exit 1
+            }
+            # Same regex shape as the native test installer below — match
+            # the wheel URL, then strip out the version segment from the
+            # filename (``openpa-<version>-py3-none-any.whl``).
+            $wheelNames = [regex]::Matches($indexBody, 'openpa-([^"/]+)-py3-none-any\.whl') |
+                ForEach-Object { $_.Groups[1].Value } |
+                Select-Object -Unique |
+                Sort-Object
+            $v = $wheelNames | Select-Object -Last 1
+            if (-not $v) {
+                Write-Err2 "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                exit 1
+            }
+            Write-Ok "Resolved openpa==$v from Test PyPI"
+            return $v.Trim()
+        }
+        'dev' {
+            # Dev mode rebuilds via docker-compose.override.yml; the tag is
+            # only the local image label.
+            return 'dev'
+        }
     }
-    return 'main'
+    Write-Err2 "Unknown channel: $Channel"
+    exit 1
 }
 
 if ($Mode -eq 'docker') {
@@ -532,6 +584,9 @@ if ($Mode -eq 'docker') {
     # via its own per-service deployment-mode picker.
     if ((Test-Path $ComposeFile) -and (Test-Path $EnvDocker) -and (-not $Reinstall)) {
         Write-Info "Existing Docker bundle detected at $DockerDir - reusing config."
+        # Read OPENPA_VERSION from the existing .env so the pull-stage
+        # info / error messages can reference the actual image tag.
+        $OpenpaVer = (Select-String -Path $EnvDocker -Pattern '^OPENPA_VERSION=' | Select-Object -First 1).Line -replace '^OPENPA_VERSION=', ''
     } else {
         $VncPwd      = New-Secret
         $OpenpaVer   = Resolve-OpenPAVersion
@@ -616,17 +671,44 @@ if ($Mode -eq 'docker') {
         Write-Ok "Wrote $ComposeFile + .env"
     }
 
-    Write-Info "Pulling images (this may take a few minutes the first time)"
+    # Per-channel pull / build strategy:
+    #   production / test → pull the pre-built image from Docker Hub
+    #                       and refuse to fall back to a local build.
+    #                       The main compose template has no ``build:``
+    #                       section, so a missing tag fails hard at
+    #                       ``compose pull`` with a clear error rather
+    #                       than silently rebuilding off the user's
+    #                       checkout.
+    #   dev               → the docker-compose.override.yml re-adds a
+    #                       ``build:`` section pointing at the local
+    #                       checkout. ``compose pull`` is best-effort
+    #                       (the dev image isn't published), and
+    #                       ``compose up --build`` forces a rebuild
+    #                       so host-side edits land in the image.
     Push-Location $DockerDir
     try {
-        Invoke-NativeLogged { & docker compose pull --ignore-pull-failures }
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warn2 "Some images couldn't be pulled; will build locally."
-        }
-        Write-Info "Starting bundle"
-        Invoke-NativeLogged { & docker compose up -d --build }
-        if ($LASTEXITCODE -ne 0) {
-            throw "docker compose up failed (see $LogFile)"
+        if ($Channel -eq 'dev') {
+            Write-Info "Pulling sidecar images (openpa image is built locally for dev)"
+            Invoke-NativeLogged { & docker compose pull --ignore-pull-failures }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn2 "Some images couldn't be pulled; will build locally."
+            }
+            Write-Info "Building openpa image and starting bundle"
+            Invoke-NativeLogged { & docker compose up -d --build }
+            if ($LASTEXITCODE -ne 0) {
+                throw "docker compose up failed (see $LogFile)"
+            }
+        } else {
+            Write-Info "Pulling openpa/openpa-desktop:$OpenpaVer and sidecar images from Docker Hub"
+            Invoke-NativeLogged { & docker compose pull }
+            if ($LASTEXITCODE -ne 0) {
+                throw "docker compose pull failed — openpa/openpa-desktop:$OpenpaVer may not be published yet (see $LogFile)"
+            }
+            Write-Info "Starting bundle"
+            Invoke-NativeLogged { & docker compose up -d }
+            if ($LASTEXITCODE -ne 0) {
+                throw "docker compose up failed (see $LogFile)"
+            }
         }
     } finally {
         Pop-Location
