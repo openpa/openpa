@@ -254,21 +254,29 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Test PyPI's Fastly cache fills eventually-consistent — same
-      # concern as the prod docker job, just pointed at the test index.
-      - name: Wait for Test PyPI to serve openpa==${{ needs.wheel.outputs.version }}
+      # Test PyPI serves the JSON API (``/pypi/<pkg>/<ver>/json``) and the
+      # simple index (``/simple/<pkg>/``) from separate cache paths on
+      # Fastly; the JSON API can refresh ahead of the simple index. The
+      # next step reads the wheel URL from the simple index, so polling
+      # the JSON API previously gave false-positive readiness signals
+      # (v0.1.9-test3 hit exactly this — wheel published, JSON API
+      # ready, but the simple index didn't list it yet, so the resolve
+      # step failed). Poll the simple index directly so its readiness
+      # is the same readiness the next step needs.
+      - name: Wait for Test PyPI simple index to list openpa==${{ needs.wheel.outputs.version }}
         env:
           VERSION: ${{ needs.wheel.outputs.version }}
         run: |
-          for i in $(seq 1 30); do
-            if curl -fsS "https://test.pypi.org/pypi/openpa/${VERSION}/json" >/dev/null; then
-              echo "Test PyPI has openpa==${VERSION}"
+          for i in $(seq 1 60); do
+            if curl -fsSL https://test.pypi.org/simple/openpa/ \
+                | grep -qE "openpa-${VERSION}-py3-none-any\.whl"; then
+              echo "Test PyPI simple index lists openpa-${VERSION}"
               exit 0
             fi
-            echo "Not yet ($i/30); sleeping 5s"
+            echo "Not yet ($i/60); sleeping 5s"
             sleep 5
           done
-          echo "::error::Test PyPI never served openpa==${VERSION} after 150s"
+          echo "::error::Test PyPI simple index never listed openpa-${VERSION} after 300s"
           exit 1
 
       # Resolve the openpa wheel to a direct URL so pip installs it without
