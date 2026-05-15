@@ -273,6 +273,49 @@ fi
 
 # ── banner ────────────────────────────────────────────────────────────────
 
+# Single-quoted heredoc: every char ($, \, backtick, apostrophe) is literal.
+cat <<'LOGO'
+                            xrjjjjjjjjjrrxc
+                      xrjfffjrx        jxjjfffjx
+                   rjffj1                     jjfjr:
+                rjfjj         *W8%%%%%%8&*       /ffjx
+              rffj        M%%%BBBBBB@@@B%%%BB&      jjjj1
+            jjjr       o%%%BB@@@@@@@@@@@BBB%%%B@8     rjjr
+           jfx       C8%%B@@@@@@@@@@@BBBBBB%%%%%B@&     cjjr
+         jfj      LJOB%B@@@@@@@@@BBBB%%%%%%88888%8BBQ     rjj
+        jjx     xUYpBBB@@@@a|lllI;:,"^',tb&88888888%8C     ujj\
+      :rjn     UYXq%%BB@v;;;:::,""^`'..      \M&&&&8%&YU    njjx
+      jjj    cYXzZB%BB/,,""""^^``''.            CWW&8BmYU    xjr1
+   $8%WU    YXzzcW%B8:^^`````'''..               ;*MW&*czY    :jj\
+   &8&8%%M UzccvQ%%%>'''';UQ0Q].          ...     .*MWBXczXO   xjn
+   &8&&8%B8cvvvu*%%k ...fX:```xu'      .-QZZ0U^    f#M%QvccX    rjn
+   r8&W&&8%Wnuunp%8k                   11....iX;   ?*#8muvvvc   rjr
+   fL&WWW&88%vxxn&%8>                              ]o*%Jnnunu    rj
+  xfx&WMMWW&8%mrju888Y                             Ja*Wrxxxxn    ujn
+  jjOM&MMMMMW&8*fff0WWWWv                        ;dka%zrrrrrrn   0jr
+  rj  MW###MMWW&8ntt/j*M######Xl             ILbbbbo#ffjjjjjjr    jf
+  fj   MM***##MMM8\\\(|00Um#*aaaaooooaahhhkkkbbbk#Q|//tttttfff    jj
+  jj    M#*o****##ZoMbqmOLJYzuxjftjYwkaooabZYzYLmoQ|\\///////t    jj
+  rfz    0#ooooooob@%%BB*bdpwmO0LCUYXzcccczzXUJLW%BQ||\\\\\||t   Ojj
+  nfr    1)ooaaahhq@%%%%BBBBBBB@@BBBBBBBBBB%&WM*oaWhBM|((((((Y   nfn
+   jjJ   )11roaahhx@%%%BBBBBB%%888&&&WWWMM##*oohdpZMW8Bn))))(    jj
+   rjr    (1111111|@%%%%BBB%888&&&WWWMM##X0Uhahbw0hoMW8%f111|   rjr
+   jjj     11111111B%%BBBB%%88&&&WWMM##*L0wZbhkwZQka#M&8B(1(    rfn
+    zfr    |{{1{{{{uB%%%%%88&&&WWMMM##****M*akpmmQbho#W&%J1    jjn
+     rfx    ){{{{{{1W%%%%88&&&WWWM###**oooahhdwwqLQha*M&88    nfr
+      jjr    |{{{{{{Z%8%%8&&WWWMM###**oooaahkpqph){hho#W&%d  rfj
+       rfr    :1{{{{}#%88&&WWWMM##**oooaaahkdqphY{[qha*M&%* jjj:
+        rjr:    1{{{{f%88&WWMMM##***oaaaaahbddh#{{}XahoM&%orfr
+         rfjx     {{{}f%8&WMM##***ooaaahhhkddao1{{{c*ha*W%rfr
+           ffj\     ){}Z8&WM##***oaaaahhhkbbaM{{1(  aah*WMtx
+            fffr       {0&WM#**ooahhhhhkkbkoW)1     a#hoW&
+              fjfj\      o&W#*ooaahhhhhkkk*#b       fu*#&a
+                :fffr     hWW#oaahhhhkkkoMa      nffffZh$
+                   \jffjj   kMMoahhhhho#k    ujffjj
+                       rjffffjjJoM#M*d rxjfjfjj1
+                            Onjjjffffjjjr\
+LOGO
+
 cat <<EOF
 ${BOLD}OpenPA installer${RESET}
 ${DIM}Logs: $LOG_FILE${RESET}
@@ -806,6 +849,17 @@ EOF
             fi
         fi
     fi
+
+    # Top-level marker so the Electron app's reconcileInstallStateWithDisk()
+    # sees a Docker install as "installed". The real compose config lives in
+    # $DOCKER_DIR/.env; this file is intentionally minimal. Rewritten on
+    # every run to match the unconditional bundle regeneration above.
+    info "Writing $ENV_FILE (install marker)"
+    cat > "$ENV_FILE" <<EOF
+# OpenPA Docker install marker. Compose config: $DOCKER_DIR/.env
+INSTALL_MODE=docker
+EOF
+    chmod 600 "$ENV_FILE"
 
     case "$CHANNEL" in
         test) ok "Done. Welcome to OpenPA (test build)." ;;

@@ -10,6 +10,8 @@ import App from './App.vue'
 import router from './router'
 import { useSettingsStore } from './stores/settings'
 
+document.title = __IS_ELECTRON__ ? 'OpenPA App' : 'OpenPA Web UI'
+
 const app = createApp(App)
 const pinia = createPinia()
 

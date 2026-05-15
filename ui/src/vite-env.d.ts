@@ -84,6 +84,26 @@ type OpenPAServerBridge = {
   start: () => Promise<{ ok: boolean; error?: string }>
 }
 
+// In-app ``openpa upgrade`` flow. ``apply`` spawns the CLI under the
+// main process; ``onLog`` streams every line it prints; ``onStatus``
+// emits coarse phase transitions; ``onDone`` carries the terminal
+// result. ``apply`` itself resolves with the same final shape, so
+// callers can await it as a one-shot without subscribing to events.
+type OpenPABackendUpgradePhase = 'starting' | 'upgrading' | 'restarting'
+type OpenPABackendUpgradeStatus = { phase: OpenPABackendUpgradePhase }
+type OpenPABackendUpgradeLog = { stream: 'stdout' | 'stderr' | 'info'; line: string }
+type OpenPABackendUpgradeDone = { exitCode: number; ok: boolean; error?: string }
+
+type OpenPABackendUpgradeBridge = {
+  apply: () => Promise<OpenPABackendUpgradeDone>
+  onStatus: (cb: (payload: OpenPABackendUpgradeStatus) => void) => void
+  offStatus: (cb: (payload: OpenPABackendUpgradeStatus) => void) => void
+  onLog: (cb: (entry: OpenPABackendUpgradeLog) => void) => void
+  offLog: (cb: (entry: OpenPABackendUpgradeLog) => void) => void
+  onDone: (cb: (result: OpenPABackendUpgradeDone) => void) => void
+  offDone: (cb: (result: OpenPABackendUpgradeDone) => void) => void
+}
+
 type OpenPABridge = {
   config: {
     agentUrl: string
@@ -98,6 +118,7 @@ type OpenPABridge = {
   installer: OpenPAInstallerBridge
   server: OpenPAServerBridge
   updater: OpenPAUpdaterBridge
+  backendUpgrade: OpenPABackendUpgradeBridge
 }
 
 interface Window {

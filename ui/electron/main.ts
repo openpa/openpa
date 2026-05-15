@@ -73,11 +73,20 @@ function updateConfig(patch: Partial<OpenPAConfig>): OpenPAConfig {
 // on this machine" marker. We reconcile runtimeConfig.agentUrl against
 // it on each launch so the user can re-trigger the first-run installer
 // by deleting ~/.openpa (or wiping the contents).
-function installEnvFile(): string {
-  return path.join(app.getPath('home'), '.openpa', '.env')
+//
+// Docker installs also stamp a marker into ~/.openpa/docker/.env (the
+// compose env file). We treat that as a fallback so users whose Docker
+// install predates the top-level marker fix don't get bounced back to
+// the wizard on app upgrade.
+function installMarkerExists(): boolean {
+  const home = app.getPath('home')
+  return (
+    fs.existsSync(path.join(home, '.openpa', '.env')) ||
+    fs.existsSync(path.join(home, '.openpa', 'docker', '.env'))
+  )
 }
 function reconcileInstallStateWithDisk(): void {
-  const installed = fs.existsSync(installEnvFile())
+  const installed = installMarkerExists()
   if (!installed && runtimeConfig.agentUrl) {
     // User wiped ~/.openpa to re-run the first-run installer.
     updateConfig({ agentUrl: '', deploymentType: '' })
@@ -108,9 +117,17 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
-let win: BrowserWindow | null
+type WindowKind = 'main' | 'settings' | 'vnc'
+const windows = new Set<BrowserWindow>()
+const windowKinds = new WeakMap<BrowserWindow, WindowKind>()
+// Most recently focused non-VNC window. Used by tray "Show", the
+// second-instance fallback, and by `installer` / `backend-upgrade` IPC
+// senders that need to know which window initiated them.
+let mainWin: BrowserWindow | null = null
 let tray: Tray | null = null
-let isQuitting = false
+// Populated by fetchCapabilities() once the backend is reachable. Drives
+// the conditional "Open VNC Desktop" entry in the tray / jumplist / dock.
+let installMode: 'docker' | 'native' | null = null
 
 // App version handler
 ipcMain.handle('get-app-version', () => {
@@ -125,7 +142,13 @@ ipcMain.on('openpa:get-config-sync', (event) => {
 })
 ipcMain.handle('openpa:get-config', () => runtimeConfig)
 ipcMain.handle('openpa:set-config', (_event, patch: Partial<OpenPAConfig>) => {
-  return updateConfig(patch)
+  const next = updateConfig(patch)
+  if (patch.agentUrl !== undefined) {
+    // Backend host changed — its install_mode may have flipped, so the
+    // VNC tray/jumplist entry may need to appear or disappear.
+    void fetchCapabilities()
+  }
+  return next
 })
 
 // ── First-run installer bridge ──────────────────────────────────────────────
@@ -155,6 +178,10 @@ let installerProcess: ChildProcess | null = null
 // to Setup Wizard (and on subsequent launches when an install is
 // detected). Tracked so before-quit can tear it down cleanly.
 let backendProcess: ChildProcess | null = null
+// Short-lived ``openpa upgrade --yes`` child spawned by the in-app
+// upgrade flow. At most one in flight; tracked so before-quit can kill
+// it (the runner's lock-file recovery will roll back on next launch).
+let upgradeProcess: ChildProcess | null = null
 
 // ── Backend (``openpa serve``) lifecycle ──────────────────────────────────
 //
@@ -284,6 +311,28 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
 }
 
 ipcMain.handle('openpa:server:start', async () => startBackend())
+
+// ── In-app backend upgrade ──────────────────────────────────────────────
+//
+// Runs ``openpa upgrade --yes`` as a subprocess and streams its output
+// to the renderer so the UpdateBanner can show a live progress modal
+// instead of telling the user to open a terminal. Matches the manual
+// CLI flow exactly:
+//
+//   - The backend stays running during the upgrade. The Python runner's
+//     ``_wait_for_health`` step probes /health on the (still-running)
+//     old backend; if /health doesn't answer the runner rolls back.
+//     This is the same contract the CLI relies on.
+//   - On successful exit we restart the backend so the new wheel's code
+//     gets imported. The shell holds the subprocess handle for its
+//     lifetime; without a restart, the user would keep running the old
+//     code until they quit the app.
+//   - On failure, the runner has already restored the backup and pip-
+//     installed the previous version. We leave the (old) backend
+//     running and surface the failure to the renderer.
+ipcMain.handle('openpa:backend-upgrade:apply', async (event) => {
+  return runBackendUpgrade(event.sender)
+})
 
 ipcMain.handle('openpa:installer:detect', async () => detectInstallEnvironment())
 
@@ -595,6 +644,125 @@ async function runInstaller(
   })
 }
 
+// ── Backend upgrade implementation ──────────────────────────────────────
+//
+// Spawns ``openpa upgrade --yes`` and forwards its stdout/stderr to the
+// renderer line-by-line. The renderer mirrors the events into a modal
+// log view. Three IPC channels are used:
+//
+//   openpa:backend-upgrade:status — phase transitions ('starting',
+//                                   'upgrading', 'restarting')
+//   openpa:backend-upgrade:log    — every raw line of upgrade output
+//   openpa:backend-upgrade:done   — terminal result + exit code
+//
+// Reuses the existing log buffering pattern from runInstaller so the
+// renderer can subscribe with the same shape as the installer bridge.
+
+async function runBackendUpgrade(
+  sender: Electron.WebContents,
+): Promise<{ exitCode: number; ok: boolean; error?: string }> {
+  if (upgradeProcess) {
+    throw new Error('An upgrade is already running.')
+  }
+
+  const send = (channel: string, message: unknown) => {
+    if (!sender.isDestroyed()) sender.send(channel, message)
+  }
+
+  const exe = openpaExePath()
+  if (!fs.existsSync(exe)) {
+    const error = `openpa executable missing at ${exe}`
+    send('openpa:backend-upgrade:done', { exitCode: -1, ok: false, error })
+    return { exitCode: -1, ok: false, error }
+  }
+
+  send('openpa:backend-upgrade:status', { phase: 'starting' })
+  send('openpa:backend-upgrade:log', {
+    stream: 'info',
+    line: `$ ${exe} upgrade --yes`,
+  })
+
+  return new Promise((resolve) => {
+    let child: ChildProcess
+    try {
+      child = spawn(exe, ['upgrade', '--yes'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (err) {
+      const error = String(err)
+      send('openpa:backend-upgrade:done', { exitCode: -1, ok: false, error })
+      resolve({ exitCode: -1, ok: false, error })
+      return
+    }
+    upgradeProcess = child
+    send('openpa:backend-upgrade:status', { phase: 'upgrading' })
+
+    const forward = (stream: 'stdout' | 'stderr') => (chunk: Buffer) => {
+      // The Python runner prints one event per line; preserve that
+      // boundary for the renderer instead of re-buffering by chunk.
+      const text = chunk.toString()
+      for (const line of text.split(/\r?\n/)) {
+        if (line.length > 0) {
+          send('openpa:backend-upgrade:log', { stream, line })
+        }
+      }
+    }
+    child.stdout?.on('data', forward('stdout'))
+    child.stderr?.on('data', forward('stderr'))
+
+    let settled = false
+    const finish = async (code: number | null, err?: unknown) => {
+      if (settled) return
+      settled = true
+      upgradeProcess = null
+
+      if (err !== undefined) {
+        const error = String(err)
+        send('openpa:backend-upgrade:done', { exitCode: -1, ok: false, error })
+        resolve({ exitCode: -1, ok: false, error })
+        return
+      }
+
+      const exitCode = code ?? -1
+      if (exitCode !== 0) {
+        // The Python runner already restored the backup and pip-
+        // installed the previous version. The old backend is still
+        // running; nothing to restart.
+        send('openpa:backend-upgrade:done', { exitCode, ok: false })
+        resolve({ exitCode, ok: false })
+        return
+      }
+
+      // Success path: restart the backend so the new wheel is loaded.
+      send('openpa:backend-upgrade:status', { phase: 'restarting' })
+      if (backendProcess && backendProcess.pid) {
+        killProcessTreeSync(backendProcess.pid)
+        backendProcess = null
+      }
+      // Give the OS a beat to release the listen port before we respawn;
+      // SO_REUSEADDR isn't set on Windows by default and a too-fast
+      // restart can hit EADDRINUSE.
+      await new Promise((r) => setTimeout(r, 1000))
+      const restart = await startBackend()
+      if (!restart.ok) {
+        send('openpa:backend-upgrade:done', {
+          exitCode,
+          ok: false,
+          error: `backend failed to restart: ${restart.error ?? 'unknown'}`,
+        })
+        resolve({ exitCode, ok: false, error: restart.error })
+        return
+      }
+      send('openpa:backend-upgrade:done', { exitCode, ok: true })
+      void fetchCapabilities()
+      resolve({ exitCode, ok: true })
+    }
+    child.on('error', (e) => { void finish(null, e) })
+    child.on('exit', (code) => { void finish(code) })
+  })
+}
+
 function downloadFile(url: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest)
@@ -623,37 +791,226 @@ function downloadFile(url: string, dest: string): Promise<void> {
 }
 
 
-function createTray() {
-  const icon = nativeImage.createFromPath(path.join(process.env.VITE_PUBLIC, 'tray-logo-64x64.png'))
-  tray = new Tray(icon)
-  tray.setToolTip('A2A Client')
-  
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Show',
-      click: () => {
-        if (win) win.show()
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Exit',
-      click: () => {
-        isQuitting = true
-        app.quit()
-      }
+// ── Multi-window: tray, jumplist, dock, and the window factory ──────────
+//
+// One process, one tray icon, many BrowserWindows. The tray menu, the
+// Windows taskbar jumplist, and the macOS dock menu all surface the
+// same three actions (VNC entry conditional on the backend being the
+// `openpa/openpa-desktop` Docker image). Each click opens a fresh
+// independent window — repeat clicks intentionally do NOT focus an
+// existing window. The single-instance lock + the ``second-instance``
+// handler ensure jumplist re-launches dispatch into the existing
+// process rather than spawning a duplicate (which would yield a second
+// tray icon).
+
+function broadcastToAppWindows(channel: string, payload: unknown): void {
+  for (const w of windows) {
+    if (w.isDestroyed()) continue
+    // VNC windows have no preload and no contextBridge, so IPC channels
+    // would land in a renderer that can't decode them. Skip.
+    if (windowKinds.get(w) === 'vnc') continue
+    w.webContents.send(channel, payload)
+  }
+}
+
+function focusMostRecentAppWindow(): void {
+  const focusOne = (w: BrowserWindow): void => {
+    if (w.isMinimized()) w.restore()
+    if (!w.isVisible()) w.show()
+    w.focus()
+  }
+  if (mainWin && !mainWin.isDestroyed()) { focusOne(mainWin); return }
+  for (const w of windows) {
+    if (w.isDestroyed()) continue
+    if (windowKinds.get(w) === 'vnc') continue
+    focusOne(w)
+    return
+  }
+  createAppWindow('main')
+}
+
+function vncUrlFromAgentUrl(agentUrl: string): string | null {
+  if (!agentUrl) return null
+  try {
+    const u = new URL(agentUrl)
+    // noVNC is served from the same host as the agent, but on the
+    // docker-compose default port 6080. (See NOVNC_PORT:-6080 in
+    // install/templates/docker-compose.yml.tmpl.)
+    u.port = '6080'
+    u.pathname = '/vnc.html'
+    u.search = ''
+    u.hash = ''
+    // ``autoconnect`` skips noVNC's connect splash; ``resize=remote`` is
+    // standard UX polish for a windowed viewer.
+    return `${u.toString()}?autoconnect=1&resize=remote`
+  } catch {
+    return null
+  }
+}
+
+function fetchCapabilities(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      rebuildTrayMenu()
+      rebuildJumpList()
+      rebuildDockMenu()
+      resolve()
     }
-  ])
-  
-  tray.setContextMenu(contextMenu)
-  
-  tray.on('click', () => {
-    if (win) win.show()
+    if (!runtimeConfig.agentUrl) {
+      installMode = null
+      finish()
+      return
+    }
+    let url: URL
+    try {
+      url = new URL('/api/services/capabilities', runtimeConfig.agentUrl)
+    } catch {
+      finish()
+      return
+    }
+    const client = url.protocol === 'https:' ? https : http
+    const req = client.get(url.toString(), { timeout: 4000 }, (res) => {
+      if ((res.statusCode ?? 0) >= 400) { res.resume(); finish(); return }
+      let body = ''
+      res.setEncoding('utf8')
+      res.on('data', (chunk) => { body += chunk })
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body) as { install_mode?: 'docker' | 'native' | null }
+          installMode = parsed.install_mode ?? null
+        } catch { /* leave installMode unchanged on parse failure */ }
+        finish()
+      })
+    })
+    // Network errors or timeouts: keep last-known installMode to avoid
+    // flickering the VNC entry off during transient outages.
+    req.on('error', () => finish())
+    req.on('timeout', () => { req.destroy(); finish() })
   })
 }
 
-function createWindow() {
-  win = new BrowserWindow({
+// ── Windows taskbar jumplist ────────────────────────────────────────────
+//
+// Each task uses ``--open=<target>`` so the ``second-instance`` handler
+// in the original process knows which window to spawn. Using
+// ``setJumpList`` (rather than ``setUserTasks``) gives us an explicit
+// category list, so Windows shows ONLY our entries and doesn't stitch
+// in a default "launch via installed shortcut" task derived from the
+// AppUserModelID.
+
+function rebuildJumpList(): void {
+  if (process.platform !== 'win32') return
+  // In dev, ``process.execPath`` is node_modules/electron/dist/electron.exe;
+  // running it with no args lands on default_app.asar's "Electron is
+  // running" page. Pass the project root (the directory containing
+  // package.json) so electron.exe boots our own main entry. In packaged
+  // mode, ``process.execPath`` is "OpenPA App.exe" and runs the app
+  // on its own — no leading args needed.
+  const baseArg = app.isPackaged ? '' : (process.env.APP_ROOT ?? '')
+  const iconPath = path.join(process.env.VITE_PUBLIC, 'logo.ico')
+  const mkTask = (target: WindowKind, title: string, description: string): Electron.JumpListItem => {
+    const argParts: string[] = []
+    if (baseArg) argParts.push(`"${baseArg}"`)
+    argParts.push(`--open=${target}`)
+    return {
+      type: 'task',
+      program: process.execPath,
+      args: argParts.join(' '),
+      iconPath,
+      iconIndex: 0,
+      title,
+      description,
+    }
+  }
+
+  const items: Electron.JumpListItem[] = []
+  if (runtimeConfig.agentUrl && installMode === 'docker' && vncUrlFromAgentUrl(runtimeConfig.agentUrl)) {
+    items.push(mkTask('vnc', 'Open VNC Desktop', 'Open the OpenPA desktop VNC viewer'))
+  }
+  if (runtimeConfig.agentUrl) {
+    items.push(mkTask('main', 'Open Main Page', 'Open a new OpenPA chat window'))
+    items.push(mkTask('settings', 'Open Settings', 'Open the OpenPA settings window'))
+  } else {
+    // Pre-install: at least give the user a way to relaunch the wizard.
+    items.push(mkTask('main', 'Open OpenPA', 'Open the OpenPA application'))
+  }
+
+  app.setJumpList([{ type: 'tasks', items }])
+}
+
+function rebuildTrayMenu(): void {
+  if (!tray) return
+  const items: Electron.MenuItemConstructorOptions[] = []
+  if (runtimeConfig.agentUrl && installMode === 'docker' && vncUrlFromAgentUrl(runtimeConfig.agentUrl)) {
+    items.push({ label: 'Open VNC Desktop', click: () => { createAppWindow('vnc') } })
+  }
+  if (runtimeConfig.agentUrl) {
+    items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
+    items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
+    items.push({ type: 'separator' })
+  }
+  items.push({ label: 'Show', click: () => focusMostRecentAppWindow() })
+  items.push({ label: 'Exit', click: () => { app.quit() } })
+  tray.setContextMenu(Menu.buildFromTemplate(items))
+}
+
+function rebuildDockMenu(): void {
+  if (process.platform !== 'darwin') return
+  const dock = app.dock
+  if (!dock) return
+  const items: Electron.MenuItemConstructorOptions[] = []
+  if (runtimeConfig.agentUrl && installMode === 'docker' && vncUrlFromAgentUrl(runtimeConfig.agentUrl)) {
+    items.push({ label: 'Open VNC Desktop', click: () => { createAppWindow('vnc') } })
+  }
+  if (runtimeConfig.agentUrl) {
+    items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
+    items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
+  }
+  dock.setMenu(Menu.buildFromTemplate(items))
+}
+
+function createTray(): void {
+  const icon = nativeImage.createFromPath(path.join(process.env.VITE_PUBLIC, 'tray-logo-64x64.png'))
+  tray = new Tray(icon)
+  tray.setToolTip('OpenPA')
+  rebuildTrayMenu()
+  tray.on('click', () => focusMostRecentAppWindow())
+}
+
+function createAppWindow(target: WindowKind): BrowserWindow {
+  if (target === 'vnc') {
+    const vncUrl = vncUrlFromAgentUrl(runtimeConfig.agentUrl)
+    if (!vncUrl) {
+      // Shouldn't reach here — the tray/jumplist gating hides the entry
+      // when there's no agentUrl. Belt-and-suspenders: fall back to main.
+      return createAppWindow('main')
+    }
+    const w = new BrowserWindow({
+      width: 1280,
+      height: 800,
+      resizable: true,
+      autoHideMenuBar: true,
+      icon: path.join(process.env.VITE_PUBLIC, 'logo.png'),
+      title: 'OpenPA VNC Desktop',
+      webPreferences: {
+        // No preload — this window loads third-party content (noVNC)
+        // and must not have access to the openpa IPC bridge.
+        contextIsolation: true,
+        sandbox: true,
+        devTools: !app.isPackaged,
+      },
+    })
+    windows.add(w)
+    windowKinds.set(w, 'vnc')
+    w.on('closed', () => {
+      windows.delete(w)
+      if (mainWin === w) mainWin = null
+    })
+    void w.loadURL(vncUrl)
+    return w
+  }
+
+  const w = new BrowserWindow({
     width: 1100,
     height: 750,
     resizable: true,
@@ -662,7 +1019,7 @@ function createWindow() {
     titleBarOverlay: {
       color: '#242424',
       symbolColor: '#ffffff',
-      height: 32
+      height: 32,
     },
     icon: path.join(process.env.VITE_PUBLIC, 'logo.png'),
     webPreferences: {
@@ -670,26 +1027,29 @@ function createWindow() {
       devTools: !app.isPackaged,
     },
   })
+  windows.add(w)
+  windowKinds.set(w, target)
+  mainWin = w
 
-  // Test active push message to Renderer-process.
-  win.webContents.on('did-finish-load', () => {
-    win?.webContents.send('main-process-message', (new Date).toLocaleString())
+  w.on('focus', () => { mainWin = w })
+  w.on('closed', () => {
+    windows.delete(w)
+    if (mainWin === w) mainWin = null
   })
 
-  // Handle close event to hide window instead of quitting
-  win.on('close', (event) => {
-    if (!isQuitting) {
-      event.preventDefault()
-      win?.hide()
-      return false
+  w.webContents.on('did-finish-load', () => {
+    if (!w.isDestroyed()) {
+      w.webContents.send('main-process-message', (new Date).toLocaleString())
     }
   })
 
+  const hash = target === 'settings' ? '#/?openpa_window=settings' : '#/?openpa_window=main'
   if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL)
+    void w.loadURL(VITE_DEV_SERVER_URL + hash)
   } else {
-    win.loadFile(path.join(RENDERER_DIST, 'index.html'))
+    void w.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: hash.slice(1) })
   }
+  return w
 }
 
 // ── Process tree cleanup on quit ────────────────────────────────────────
@@ -745,18 +1105,25 @@ function killTrackedProcessesSync(): void {
     killProcessTreeSync(installerProcess.pid)
     installerProcess = null
   }
+
+  // 4. An in-flight ``openpa upgrade`` child, if the user quit mid-
+  //    upgrade. Killing it leaves ``~/.openpa/.upgrade.lock`` behind;
+  //    the runner's ``acquire_lock_or_recover`` rolls back from the
+  //    captured backup on the next backend boot.
+  if (upgradeProcess && upgradeProcess.pid) {
+    killProcessTreeSync(upgradeProcess.pid)
+    upgradeProcess = null
+  }
 }
 
-// Quit when all windows are closed
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-    win = null
-  }
-})
+// Closing the last window does NOT quit. The tray icon stays alive so
+// the user can reopen Main / Settings / VNC from it. Exit is reached
+// only via Tray > Exit, which calls app.quit() and triggers the
+// before-quit cleanup below. Default Electron behavior on non-macOS
+// would quit here; this handler suppresses that.
+app.on('window-all-closed', () => { /* keep app alive in tray */ })
 
 app.on('before-quit', () => {
-  isQuitting = true
   killTrackedProcessesSync()
 })
 
@@ -796,12 +1163,9 @@ function setupAutoUpdater(): void {
   updater.autoInstallOnAppQuit = true     // staged install on next quit
 
   const send = (status: string, payload: Record<string, unknown> = {}) => {
-    // BrowserWindow may not exist yet on the very first event; in that
-    // case we drop. The renderer queries ``openpa:updater:status`` on
-    // mount via ``check`` and gets the latest known state.
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('openpa:updater:status', { status, ...payload })
-    }
+    // No windows yet? Drop — renderers re-query via
+    // ``openpa:updater:check`` on mount to fetch the latest state.
+    broadcastToAppWindows('openpa:updater:status', { status, ...payload })
   }
 
   updater.on('checking-for-update',    () => send('checking'))
@@ -848,6 +1212,51 @@ ipcMain.handle('openpa:updater:install', () => {
   return { ok: true }
 })
 
+// Identify OpenPA distinctly to Windows shell as early as possible
+// (before app.whenReady, before any window is created). Must match the
+// appId in electron-builder.json5 so the installer's shortcut and the
+// running process group under the same taskbar entry.
+//
+// Dev runs use a ".dev" suffix so they don't share a taskbar identity
+// with the installed packaged build — otherwise Windows surfaces the
+// installed "OpenPA App" Start Menu shortcut as an extra jumplist
+// entry that launches a parallel packaged instance, bypassing our
+// single-instance lock.
+//
+// Note: in dev mode the jumplist will still show an extra "Electron"
+// entry because Windows derives a fallback launch label from the
+// running .exe's VersionInfo (node_modules/electron/dist/electron.exe
+// declares FileDescription="Electron") when the AppUserModelID has no
+// registered Start Menu shortcut. The packaged build doesn't hit this
+// — its .exe has the right metadata and the installer registers a
+// proper shortcut.
+if (process.platform === 'win32') {
+  app.setAppUserModelId(app.isPackaged ? 'openpa-ui.client' : 'openpa-ui.client.dev')
+}
+
+// Single-instance lock — clicking the taskbar jumplist task re-runs the
+// .exe, which would otherwise spawn a duplicate process. Acquiring the
+// lock makes the second invocation exit immediately while the original
+// process opens the requested window via the ``second-instance`` event.
+// This is also what guarantees a single tray icon: only the first
+// process ever runs createTray().
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const openArg = argv.find((a) => a.startsWith('--open='))
+    if (openArg) {
+      const target = openArg.slice('--open='.length)
+      if (target === 'main' || target === 'settings' || target === 'vnc') {
+        createAppWindow(target)
+        return
+      }
+    }
+    focusMostRecentAppWindow()
+  })
+}
+
 app.whenReady().then(() => {
   // Load the persisted config before the window opens so the preload's
   // sync IPC returns a populated value on the very first request.
@@ -856,14 +1265,19 @@ app.whenReady().then(() => {
   // the first-run installer instead of falling through to a broken UI.
   reconcileInstallStateWithDisk();
   createTray();
-  createWindow();
+  rebuildJumpList();
+  rebuildDockMenu();
+  createAppWindow('main');
   setupAutoUpdater();
   // Subsequent launches: if the install has already completed, fire the
   // backend up so the chat / profile-selector views have a server to
   // talk to. First-run launches skip this — the backend (and the
   // SQLite DB) only spawn after the user clicks Continue in the
   // installer flow.
-  if (fs.existsSync(installEnvFile())) {
-    void startBackend()
+  if (installMarkerExists()) {
+    void (async () => {
+      const r = await startBackend()
+      if (r.ok) await fetchCapabilities()
+    })()
   }
 })

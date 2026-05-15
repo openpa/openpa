@@ -71,6 +71,53 @@ contextBridge.exposeInMainWorld('openpa', {
       ipcRenderer.invoke('openpa:server:start'),
   },
 
+  // Backend upgrade bridge — runs ``openpa upgrade --yes`` as a child
+  // process under main, streaming progress back so the renderer can
+  // show a live log modal without sending the user to a terminal.
+  // ``apply`` resolves when the child has exited AND the backend has
+  // been restarted (on success). ``onStatus`` / ``onLog`` / ``onDone``
+  // mirror the installer bridge's shape so consumers can reuse the
+  // same subscribe/unsubscribe pattern.
+  backendUpgrade: {
+    apply: () => ipcRenderer.invoke('openpa:backend-upgrade:apply'),
+    onStatus(callback: (payload: { phase: string }) => void) {
+      const wrapper = (_event: any, payload: any) => callback(payload)
+      installerListeners.set(callback, wrapper)
+      ipcRenderer.on('openpa:backend-upgrade:status', wrapper)
+    },
+    offStatus(callback: (payload: { phase: string }) => void) {
+      const wrapper = installerListeners.get(callback)
+      if (wrapper) {
+        ipcRenderer.off('openpa:backend-upgrade:status', wrapper)
+        installerListeners.delete(callback)
+      }
+    },
+    onLog(callback: (entry: { stream: string; line: string }) => void) {
+      const wrapper = (_event: any, payload: any) => callback(payload)
+      installerListeners.set(callback, wrapper)
+      ipcRenderer.on('openpa:backend-upgrade:log', wrapper)
+    },
+    offLog(callback: (entry: { stream: string; line: string }) => void) {
+      const wrapper = installerListeners.get(callback)
+      if (wrapper) {
+        ipcRenderer.off('openpa:backend-upgrade:log', wrapper)
+        installerListeners.delete(callback)
+      }
+    },
+    onDone(callback: (result: { exitCode: number; ok: boolean; error?: string }) => void) {
+      const wrapper = (_event: any, payload: any) => callback(payload)
+      installerListeners.set(callback, wrapper)
+      ipcRenderer.on('openpa:backend-upgrade:done', wrapper)
+    },
+    offDone(callback: (result: { exitCode: number; ok: boolean; error?: string }) => void) {
+      const wrapper = installerListeners.get(callback)
+      if (wrapper) {
+        ipcRenderer.off('openpa:backend-upgrade:done', wrapper)
+        installerListeners.delete(callback)
+      }
+    },
+  },
+
   // Auto-updater bridge — fronts ``electron-updater`` running in the
   // main process. The renderer calls ``check``/``download``/``install``
   // explicitly; the user is always in control of when the new build

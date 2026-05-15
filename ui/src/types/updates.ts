@@ -38,3 +38,11 @@ export type BackendStatus =
   | { status: 'error'; reason: string }
 
 export type UpdaterStatus = OpenPAUpdaterStatus
+
+// Re-exports for the in-app backend-upgrade flow so consumers can
+// import all upgrade-related types from one module instead of dipping
+// into the global vite-env declarations directly.
+export type BackendUpgradePhase = OpenPABackendUpgradePhase
+export type BackendUpgradeStatus = OpenPABackendUpgradeStatus
+export type BackendUpgradeLog = OpenPABackendUpgradeLog
+export type BackendUpgradeDone = OpenPABackendUpgradeDone

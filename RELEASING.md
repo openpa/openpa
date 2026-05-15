@@ -49,6 +49,93 @@ Merge when green.
 | Bundled smoke | `bash scripts/build_ui.sh ; openpa serve` — SPA served from `app/static/ui/` on `:1515`. |
 | Electron dev | `cd ui ; npm run dev` |
 
+## Preparing a feature for release
+
+Before you bump the version, walk through this checklist. Which steps
+apply depends on what the feature touches — UI, backend, or database.
+Operator-facing guidance for these same scenarios lives in
+[UPGRADING.md](UPGRADING.md); the two files should always agree.
+
+### Always
+
+1. **Update [CHANGELOG.md](CHANGELOG.md).** Move bullets from `[Unreleased]`
+   into a new `## [X.Y.Z] — TBD` section, or add bullets there if the
+   section already exists. Use the existing category headers (Added /
+   Changed / Fixed / Schema / Compatibility).
+2. **Update [UPGRADING.md](UPGRADING.md).** Add a per-version subsection
+   under "Per-version notes" — even if the body is just "No manual
+   steps required." Operators value the explicit confirmation; an
+   empty section reads as "I forgot to write this," not "nothing
+   changed."
+
+### UI-only change (no new or changed backend API)
+
+Nothing extra. The Electron shell auto-updates via electron-updater;
+the bundled SPA ships inside the wheel and via the desktop installer
+in lockstep with the rest of the release.
+
+### UI change that calls a new or changed backend API
+
+The risk is an Electron user whose shell auto-updated but whose backend
+hasn't been upgraded yet. The new UI hits a route the old backend
+doesn't have. To handle it:
+
+1. **Bump `MIN_COMPATIBLE_UI`** in [`app/__version__.py`](app/__version__.py)
+   to this release's version. The old backend will then refuse the new
+   UI and the UpdateBanner shows "upgrade backend" instead of letting
+   individual features silently 404.
+2. **Add a `Compatibility` bullet to CHANGELOG.md** for this release
+   documenting the bumped floor.
+3. **No reverse check is needed** for the common case — the in-app
+   "Apply now" flow in [`ui/src/components/UpdateBanner.vue`](ui/src/components/UpdateBanner.vue)
+   prompts the user to run the backend upgrade as soon as the
+   blocking banner appears. Web-UI / non-Electron users still need to
+   run `openpa upgrade -y` manually; the banner spells it out.
+
+### Schema change
+
+1. **Edit the ORM model** in [`app/storage/models.py`](app/storage/models.py).
+   Never write raw `CREATE TABLE` outside of an Alembic revision.
+2. **Generate the migration:**
+   ```
+   openpa db revision --autogenerate -m "short_description"
+   ```
+   (or whatever the project's wrapper command is — check
+   [`app/cli/commands/db.py`](app/cli/commands/db.py).) The new
+   revision lands in [`app/alembic/versions/`](app/alembic/versions/).
+3. **Review the generated revision by hand.** Alembic autogenerate
+   misses or mis-handles:
+   - **Column renames** — sees them as drop + add, which is data loss.
+     Fix to `op.alter_column(..., new_column_name=...)`.
+   - **`server_default` changes**.
+   - **Check constraints** and **enum value additions**.
+   - **Index renames**.
+4. **Prefer additive shapes within one release.** Add nullable columns
+   or new tables rather than dropping or renaming. If a destructive
+   change is unavoidable, split it across two releases (release N
+   adds the new shape and dual-writes; release N+1 drops the old
+   shape) so a rollback from N+1 → N still works.
+5. **Backfill inside the migration**, not in application code. Use
+   `op.execute(...)` or a batched UPDATE. Application-level backfill
+   races with rolling restarts that haven't yet picked up the new
+   wheel.
+6. **Test the upgrade from a real older install**, not just a fresh
+   DB. Boot a `0.1.x` SQLite install (and a Postgres install if you
+   support it), then `openpa upgrade -y` to your candidate; the
+   first-time path through `compat_preflight` only fires on real
+   pre-Alembic data.
+7. **Add a `Schema` bullet to CHANGELOG.md** describing the migration
+   in one line.
+8. **Add an UPGRADING.md note** if the migration takes meaningful
+   downtime, requires action, or has a non-obvious failure mode.
+
+### When in doubt
+
+If a change might trip operators, ask: "Will a user with a fresh
+install at the previous version succeed at `openpa upgrade -y`
+without reading anything?" If the answer isn't a confident yes, the
+feature needs an UPGRADING.md subsection.
+
 ## Release cycle
 
 A release cycle covers ONE version. It starts when you decide to ship
@@ -154,9 +241,9 @@ The release workflow runs six jobs:
 The promoted release contains:
 
 - `openpa-0.1.8-py3-none-any.whl` + `openpa-0.1.8.tar.gz` (PyPI + GH)
-- `OpenPA Web UI-Windows-0.1.8-Setup.exe` + `latest.yml`
-- `OpenPA Web UI-Mac-0.1.8-Installer.dmg` + `latest-mac.yml`
-- `OpenPA Web UI-Linux-0.1.8.AppImage` + `latest-linux.yml`
+- `OpenPA App-Windows-<version>-Setup.exe` + `latest.yml`
+- `OpenPA App-Mac-<version>-Installer.dmg` + `latest-mac.yml`
+- `OpenPA App-Linux-<version>.AppImage` + `latest-linux.yml`
 - `openpa/openpa-desktop:0.1.8` and `openpa/openpa-desktop:latest` on
   Docker Hub
 

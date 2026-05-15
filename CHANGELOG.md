@@ -13,8 +13,14 @@ operators is in [UPGRADING.md](UPGRADING.md).
 ## [Unreleased]
 
 <!--
-Add bullets under one of: Added / Changed / Deprecated / Removed /
-Fixed / Security / Schema. Move to a dated section on release.
+Add bullets under one of:
+  Added / Changed / Deprecated / Removed / Fixed / Security
+  Schema       — for Alembic revisions and any DB shape change
+  Compatibility — when MIN_COMPATIBLE_UI or MIN_SUPPORTED_UPGRADE_FROM
+                  changes, or when an Electron shell built on this
+                  version requires a backend ≥ X. See UPGRADING.md
+                  for why this matters for Electron users.
+Move to a dated section on release.
 -->
 
 ## [0.1.9] — TBD

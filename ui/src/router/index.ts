@@ -3,6 +3,14 @@ import ChatView from '../views/ChatView.vue';
 import { useSettingsStore } from '../stores/settings';
 import { PROFILE_ROUTES } from './profileRoutes';
 
+declare module 'vue-router' {
+  interface RouteMeta {
+    title?: string;
+  }
+}
+
+const APP_NAME = __IS_ELECTRON__ ? 'OpenPA App' : 'OpenPA Web UI';
+
 const routes = [
   // Root: profile selector (or redirect to setup if first time)
   {
@@ -15,12 +23,14 @@ const routes = [
     path: '/setup',
     name: 'setup',
     component: () => import('../views/SetupWizard.vue'),
+    meta: { title: 'Setup' },
   },
   {
     path: '/setup/:profile',
     name: 'setup-profile',
     component: () => import('../views/SetupWizard.vue'),
     props: true,
+    meta: { title: 'Setup' },
   },
   // Login route for a specific profile
   {
@@ -28,6 +38,7 @@ const routes = [
     name: 'login',
     component: () => import('../views/LoginPage.vue'),
     props: true,
+    meta: { title: 'Login' },
   },
   // Profile-scoped routes
   {
@@ -35,42 +46,49 @@ const routes = [
     name: 'chat',
     component: ChatView,
     props: true,
+    meta: { title: 'Chat' },
   },
   {
     path: '/:profile/c/:conversationId',
     name: 'conversation',
     component: ChatView,
     props: true,
+    meta: { title: 'Chat' },
   },
   {
     path: '/:profile/settings',
     name: 'settings',
     component: () => import('../views/SettingsPage.vue'),
     props: true,
+    meta: { title: 'Settings' },
   },
   {
     path: '/:profile/settings/llm',
     name: 'llm-settings',
     component: () => import('../views/LLMSettings.vue'),
     props: true,
+    meta: { title: 'LLM Providers' },
   },
   {
     path: '/:profile/settings/tools-skills',
     name: 'tools-skills-settings',
     component: () => import('../views/AgentsToolsSettings.vue'),
     props: true,
+    meta: { title: 'Tools & Skills' },
   },
   {
     path: '/:profile/settings/config',
     name: 'user-config-settings',
     component: () => import('../views/UserConfigSettings.vue'),
     props: true,
+    meta: { title: 'Config' },
   },
   {
     path: '/:profile/settings/embedding',
     name: 'embedding-settings',
     component: () => import('../views/EmbeddingSettings.vue'),
     props: true,
+    meta: { title: 'Vector Embedding' },
     // Vector Embedding is a server-wide configuration owned by the
     // admin profile. Backend already enforces this with require_admin,
     // but block the navigation up-front so non-admin users never see
@@ -88,24 +106,28 @@ const routes = [
     name: 'profile-settings',
     component: () => import('../views/ProfileSettings.vue'),
     props: true,
+    meta: { title: 'Profiles' },
   },
   {
     path: '/:profile/settings/channels',
     name: 'channels-settings',
     component: () => import('../views/ChannelsSettings.vue'),
     props: true,
+    meta: { title: 'Channels' },
   },
   {
     path: '/:profile/settings/updates',
     name: 'updates-settings',
     component: () => import('../views/UpdatesSettings.vue'),
     props: true,
+    meta: { title: 'Updates' },
   },
   {
     path: '/:profile/channels',
     name: 'channels-page',
     component: () => import('../views/ChannelsPage.vue'),
     props: true,
+    meta: { title: 'Channels' },
   },
   // Process Manager — long-running exec_shell processes
   {
@@ -113,12 +135,14 @@ const routes = [
     name: 'process-list',
     component: () => import('../views/ProcessList.vue'),
     props: true,
+    meta: { title: 'Process Manager' },
   },
   {
     path: '/:profile/processes/:pid',
     name: 'process-terminal',
     component: () => import('../views/ProcessTerminal.vue'),
     props: true,
+    meta: { title: 'Process Terminal' },
   },
   // Skill Events — conversation-scoped event subscriptions
   {
@@ -126,6 +150,7 @@ const routes = [
     name: 'skill-events',
     component: () => import('../views/SkillEventsPage.vue'),
     props: true,
+    meta: { title: 'Events' },
   },
 ];
 
@@ -159,6 +184,23 @@ router.beforeEach((to) => {
   return { path: '/setup', replace: true }
 });
 
+// Multi-window hint. Tray / jumplist / dock entries open new windows
+// loading ``#/?openpa_window=<target>`` (main or settings). Resolve the
+// hint to a profile-scoped route on the first navigation so the user
+// lands on chat or settings directly. ProfileSelector preserves the
+// hint when no profile is logged in yet (see selectProfile there).
+router.beforeEach((to) => {
+  const hint = to.query.openpa_window
+  if (typeof hint !== 'string') return true
+  const settingsStore = useSettingsStore()
+  const profiles = settingsStore.getLoggedInProfiles()
+  if (profiles.length === 0) return true
+  const profile = profiles[0]
+  const { openpa_window: _consumed, ...rest } = to.query
+  const dest = hint === 'settings' ? `/${profile}/settings` : `/${profile}`
+  return { path: dest, query: rest, replace: true }
+});
+
 // Synchronously activate the per-profile auth token before any view renders.
 // Without this, child views' onMounted fires API calls before App.vue's
 // onMounted has a chance to load the token (parent onMounted runs after
@@ -175,6 +217,16 @@ router.beforeEach((to) => {
   }
   settingsStore.activateProfile(profile);
   return true;
+});
+
+// Keep document.title in sync with the active route. Runs only after
+// every beforeEach guard has accepted the navigation, so we never set
+// a title for a route the user was redirected away from. Routes
+// without ``meta.title`` (currently only ``home``) show just the app
+// name.
+router.afterEach((to) => {
+  const pageTitle = to.meta.title;
+  document.title = pageTitle ? `${pageTitle} — ${APP_NAME}` : APP_NAME;
 });
 
 export default router;

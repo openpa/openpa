@@ -34,6 +34,61 @@ The Docker desktop image runs `openpa db upgrade` from its entrypoint
 on every container start, so `docker pull openpa/openpa-desktop:latest`
 followed by `docker compose up` is sufficient for Docker installs.
 
+## Upgrading the Electron desktop app
+
+An Electron install is **two artifacts on different upgrade tracks**:
+
+- The **Electron shell** (window, tray, auto-launch, bundled web UI)
+  updates itself through `electron-updater`. At app launch it checks
+  the `latest*.yml` manifests attached to the GitHub Release; if a
+  newer version is available, it downloads in the background and
+  installs on the next app restart. No user action.
+- The **Python backend** (`openpa serve`, spawned as a subprocess by
+  the shell — see [`ui/electron/main.ts`](ui/electron/main.ts)) is the
+  same `~/.openpa/venv` install any non-Electron user has. It is
+  **not** updated by `electron-updater`. It updates only when the user
+  runs `openpa upgrade` in a terminal.
+
+The in-app banner from `/api/upgrade/check` surfaces both: it tells the
+user when a newer backend is available and prints the exact command to
+run. Until that command runs, the new UI is talking to the old backend.
+
+### What to do on each release
+
+The Electron shell ships an in-app **Apply now** button on the
+"backend update available" banner. Clicking it opens a modal that
+runs `openpa upgrade --yes` under the shell, streams the output, and
+restarts the backend on success — no terminal needed.
+
+1. **After Electron auto-updates the shell, restart the app once.**
+   electron-updater applies the update at quit; until you quit and
+   relaunch, you're still running the old shell — and on a brand-new
+   shell version, the *previous* shell does not yet carry the in-app
+   apply button. The first upgrade after adopting this build still
+   needs the manual `openpa upgrade -y` step; every subsequent one is
+   one click.
+2. **Click "Apply now" in the banner.** Leave the modal open until it
+   reports "Upgrade complete." Do not close OpenPA while the upgrade
+   is in progress — quitting mid-flight leaves a lock file behind and
+   the next launch will roll back from the captured backup.
+3. **Manual fallback.** If the modal reports an error, or you prefer
+   the CLI, open a terminal and run `openpa upgrade -y` followed by
+   restarting the Electron app.
+
+### When shell and backend versions disagree
+
+The two artifacts can drift because their upgrade triggers are
+independent. The combinations:
+
+| Shell | Backend | Behaviour |
+|---|---|---|
+| new | new | Normal. |
+| old | old | Normal — no upgrade attempted yet. |
+| old | new | Usually fine. The backend's `MIN_COMPATIBLE_UI` floor (see below) will reject genuinely stale shells. |
+| new | old | The risky case. New UI may call endpoints the old backend doesn't have. If the release bumped `MIN_COMPATIBLE_UI`, the banner blocks the UI with "upgrade backend"; otherwise individual features can silently 404 until the user runs `openpa upgrade`. |
+
+The per-version notes below call out releases where this drift matters.
+
 ## Version floor
 
 This build refuses to upgrade an install older than

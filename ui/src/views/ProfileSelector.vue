@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { ElButton, ElInput, ElDivider } from 'element-plus';
 import { Icon } from '@iconify/vue';
 import { useSettingsStore } from '../stores/settings';
@@ -8,7 +8,18 @@ import { checkSetupStatus, resetOrphanedSetup, listProfiles } from '../services/
 import { fetchMe } from '../services/agentApi';
 
 const router = useRouter();
+const route = useRoute();
 const settingsStore = useSettingsStore();
+
+// Tray / jumplist / dock entries can deep-link to a profile-scoped
+// route via ``?openpa_window=<target>``. When no profile is logged in
+// the router falls through to this selector; once the user picks one
+// we honor the hint instead of dumping them on chat.
+function destinationFor(profile: string): string {
+  const hint = route.query.openpa_window;
+  if (hint === 'settings') return `/${profile}/settings`;
+  return `/${profile}`;
+}
 
 const loggedInProfiles = ref<string[]>([]);
 const checking = ref(true);
@@ -66,7 +77,7 @@ onMounted(async () => {
 });
 
 function selectProfile(profile: string) {
-  router.push(`/${profile}`);
+  router.push(destinationFor(profile));
 }
 
 async function handleLogin() {
@@ -94,7 +105,7 @@ async function handleLogin() {
     // Save and navigate
     settingsStore.setTokenForProfile(profile, token);
     settingsStore.activateProfile(profile);
-    router.push(`/${profile}`);
+    router.push(destinationFor(profile));
   } catch {
     loginError.value = 'Invalid or expired token';
   } finally {

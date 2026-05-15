@@ -19,10 +19,17 @@
  * is silently skipped. The backend banner still works via fetch.
  */
 
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '../stores/settings'
-import type { BackendStatus, UpdaterStatus } from '../types/updates'
+import type {
+  BackendStatus,
+  BackendUpgradeDone,
+  BackendUpgradeLog,
+  BackendUpgradePhase,
+  BackendUpgradeStatus,
+  UpdaterStatus,
+} from '../types/updates'
 
 const settingsStore = useSettingsStore()
 const route = useRoute()
@@ -77,6 +84,99 @@ async function installUiUpdate() {
   // The app will quit immediately after; nothing else to do here.
 }
 
+// ── In-app backend upgrade (Electron only) ───────────────────────────────
+//
+// Available iff ``window.openpa.backendUpgrade`` exists — i.e. running
+// under an Electron shell new enough to carry the IPC handler. Web /
+// browser users see the "copy this command" banner unchanged.
+
+const upgradeAvailable = computed(() => !!window.openpa?.backendUpgrade)
+
+const upgradeOpen = ref(false)
+const upgradePhase = ref<BackendUpgradePhase | 'idle' | 'done' | 'failed'>('idle')
+const upgradeLog = ref<string[]>([])
+const upgradeError = ref<string | null>(null)
+const logTailEl = ref<HTMLElement | null>(null)
+
+const MAX_LOG_LINES = 500  // cap the rendered tail; the runner also writes ~/.openpa/upgrade.log
+
+function onUpgradeStatus(p: BackendUpgradeStatus) {
+  upgradePhase.value = p.phase
+}
+
+function onUpgradeLog(entry: BackendUpgradeLog) {
+  upgradeLog.value.push(entry.line)
+  if (upgradeLog.value.length > MAX_LOG_LINES) {
+    upgradeLog.value.splice(0, upgradeLog.value.length - MAX_LOG_LINES)
+  }
+  // Auto-scroll the log view to the bottom on each new line so the
+  // user sees live progress without having to manually scroll.
+  nextTick(() => {
+    const el = logTailEl.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function onUpgradeDone(result: BackendUpgradeDone) {
+  if (result.ok) {
+    upgradePhase.value = 'done'
+    upgradeError.value = null
+    // Refresh the backend status so the banner clears once the new
+    // version reports itself.
+    checkBackend()
+  } else {
+    upgradePhase.value = 'failed'
+    upgradeError.value = result.error ?? `upgrade exited with code ${result.exitCode}`
+  }
+}
+
+async function applyBackendUpgrade() {
+  if (!window.openpa?.backendUpgrade) return
+  upgradeOpen.value = true
+  upgradePhase.value = 'starting'
+  upgradeLog.value = []
+  upgradeError.value = null
+  // The promise resolves with the same payload onDone receives; we
+  // subscribe to the live stream for the in-flight UI and rely on the
+  // promise only as a backstop (e.g. if the IPC handler throws before
+  // emitting any event).
+  try {
+    await window.openpa.backendUpgrade.apply()
+  } catch (err) {
+    // Main throws synchronously (e.g. "an upgrade is already running")
+    // before any event is emitted, so the done handler hasn't run yet
+    // — set the terminal state directly here.
+    upgradePhase.value = 'failed'
+    upgradeError.value = String(err)
+  }
+}
+
+function closeUpgradeModal() {
+  // Only allow closing in a terminal state; during the upgrade the
+  // backend may be mid-restart and quitting the modal mid-flight would
+  // strand the user with no banner and no way back into the log view.
+  if (upgradePhase.value === 'done' || upgradePhase.value === 'failed') {
+    upgradeOpen.value = false
+  }
+}
+
+const upgradeInFlight = computed(() => {
+  return upgradePhase.value === 'starting'
+      || upgradePhase.value === 'upgrading'
+      || upgradePhase.value === 'restarting'
+})
+
+const upgradePhaseLabel = computed(() => {
+  switch (upgradePhase.value) {
+    case 'starting':   return 'Starting upgrade…'
+    case 'upgrading':  return 'Installing new version and migrating database…'
+    case 'restarting': return 'Restarting backend…'
+    case 'done':       return 'Upgrade complete.'
+    case 'failed':     return 'Upgrade failed.'
+    default:           return ''
+  }
+})
+
 // ── Lifecycle ────────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -90,11 +190,21 @@ onMounted(() => {
   if (window.openpa?.updater) {
     window.openpa.updater.onStatus(onUpdaterStatus)
   }
+  if (window.openpa?.backendUpgrade) {
+    window.openpa.backendUpgrade.onStatus(onUpgradeStatus)
+    window.openpa.backendUpgrade.onLog(onUpgradeLog)
+    window.openpa.backendUpgrade.onDone(onUpgradeDone)
+  }
 })
 
 onUnmounted(() => {
   if (backendTimer) clearInterval(backendTimer)
   window.openpa?.updater.offStatus(onUpdaterStatus)
+  if (window.openpa?.backendUpgrade) {
+    window.openpa.backendUpgrade.offStatus(onUpgradeStatus)
+    window.openpa.backendUpgrade.offLog(onUpgradeLog)
+    window.openpa.backendUpgrade.offDone(onUpgradeDone)
+  }
 })
 
 // ── Visibility computed ──────────────────────────────────────────────────
@@ -141,6 +251,54 @@ void APP_VERSION
 </script>
 
 <template>
+  <!-- In-app upgrade modal. Lives at the root so it stays visible even
+       after the backend banner clears (e.g. when the upgrade reaches
+       the 'done' phase and the new version is reported). -->
+  <Teleport to="body">
+    <div
+      v-if="upgradeOpen"
+      class="upgrade-modal-overlay"
+      @click.self="closeUpgradeModal"
+    >
+      <div class="upgrade-modal" role="dialog" aria-modal="true">
+        <header class="upgrade-modal-header">
+          <strong>Upgrading OpenPA backend</strong>
+          <button
+            class="dismiss"
+            :disabled="upgradeInFlight"
+            :title="upgradeInFlight ? 'Upgrade in progress — please wait' : 'Close'"
+            @click="closeUpgradeModal"
+          >×</button>
+        </header>
+
+        <div class="upgrade-modal-phase" :class="{ failed: upgradePhase === 'failed', done: upgradePhase === 'done' }">
+          <span v-if="upgradeInFlight" class="spinner" aria-hidden="true" />
+          {{ upgradePhaseLabel }}
+        </div>
+
+        <div v-if="upgradeInFlight" class="upgrade-modal-warning">
+          Do not close OpenPA while the upgrade is in progress.
+        </div>
+
+        <pre ref="logTailEl" class="upgrade-modal-log">{{ upgradeLog.join('\n') }}</pre>
+
+        <div v-if="upgradeError" class="upgrade-modal-error">
+          {{ upgradeError }}
+        </div>
+
+        <footer class="upgrade-modal-footer">
+          <button
+            class="link"
+            :disabled="upgradeInFlight"
+            @click="closeUpgradeModal"
+          >
+            Close
+          </button>
+        </footer>
+      </div>
+    </div>
+  </Teleport>
+
   <div v-if="showBackend || showUpdater" class="update-banner-stack">
     <!-- Backend update available -->
     <div
@@ -151,10 +309,23 @@ void APP_VERSION
       <div class="text">
         <strong>OpenPA backend update available</strong>
         — {{ backend.current }} → {{ backend.latest }}.
-        Run
+        <template v-if="upgradeAvailable">
+          Apply it from inside the app, or run
+        </template>
+        <template v-else>
+          Run
+        </template>
         <code>{{ applyCommand() }}</code>
         from the machine that's running OpenPA.
       </div>
+      <button
+        v-if="upgradeAvailable"
+        class="link primary"
+        :disabled="upgradeInFlight"
+        @click="applyBackendUpgrade"
+      >
+        Apply now
+      </button>
       <button class="link" @click="copyCommand">Copy</button>
       <a class="link" :href="backend.release_url" target="_blank" rel="noopener">Notes</a>
       <button v-if="settingsHref" class="link" @click="openSettings">Manage</button>
@@ -222,6 +393,57 @@ void APP_VERSION
       <button class="link" @click="downloadUiUpdate">Download</button>
     </div>
   </div>
+
+  <!-- In-app backend upgrade modal — Electron only. Mounted to <body>
+       so the overlay covers the whole viewport (including any modal
+       opened by another component). Stays blocking while the runner is
+       in flight so the user can't dismiss it mid-restart. -->
+  <Teleport to="body">
+    <div v-if="upgradeOpen" class="upgrade-modal-overlay">
+      <div class="upgrade-modal" role="dialog" aria-modal="true">
+        <header class="upgrade-modal-header">
+          <strong>Applying OpenPA backend update</strong>
+          <button
+            class="dismiss"
+            :disabled="upgradeInFlight"
+            title="Close"
+            @click="closeUpgradeModal"
+          >×</button>
+        </header>
+
+        <div class="upgrade-modal-phase" :class="upgradePhase">
+          <span v-if="upgradeInFlight" class="spinner" />
+          <span v-else-if="upgradePhase === 'done'">✓</span>
+          <span v-else-if="upgradePhase === 'failed'">✕</span>
+          <span>{{ upgradePhaseLabel }}</span>
+        </div>
+
+        <div v-if="upgradeInFlight" class="upgrade-modal-warning">
+          Don't close OpenPA while the upgrade is running. If it fails,
+          the previous version is restored automatically.
+        </div>
+
+        <div v-if="upgradeError" class="upgrade-modal-error">
+          {{ upgradeError }}
+        </div>
+
+        <div ref="logTailEl" class="upgrade-modal-log">
+          <div v-if="upgradeLog.length === 0">Waiting for output…</div>
+          <div v-for="(line, i) in upgradeLog" :key="i">{{ line }}</div>
+        </div>
+
+        <footer class="upgrade-modal-footer">
+          <button
+            class="link"
+            :disabled="upgradeInFlight"
+            @click="closeUpgradeModal"
+          >
+            Close
+          </button>
+        </footer>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -298,5 +520,138 @@ void APP_VERSION
   line-height: 1;
   cursor: pointer;
   padding: 0 4px;
+}
+.update-banner .link.primary {
+  background: rgba(255, 255, 255, 0.95);
+  color: #1f4d8a;
+  border-color: transparent;
+  font-weight: 600;
+}
+.update-banner .link.primary:hover:not(:disabled) {
+  background: #fff;
+}
+
+/* ── Upgrade modal ──────────────────────────────────────────────────── */
+.upgrade-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.upgrade-modal {
+  background: #1e1e1e;
+  color: #eaeaea;
+  border: 1px solid #333;
+  border-radius: 6px;
+  width: min(720px, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.upgrade-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #333;
+}
+.upgrade-modal-header .dismiss {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.upgrade-modal-header .dismiss:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.upgrade-modal-phase {
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #bbb;
+}
+.upgrade-modal-phase.done {
+  color: #6ec76e;
+}
+.upgrade-modal-phase.failed {
+  color: #e08080;
+}
+.upgrade-modal-warning {
+  margin: 0 16px 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #f0c46c;
+  background: rgba(240, 196, 108, 0.08);
+  border: 1px solid rgba(240, 196, 108, 0.3);
+  border-radius: 4px;
+}
+.upgrade-modal-log {
+  margin: 0 16px;
+  padding: 10px;
+  flex: 1;
+  overflow-y: auto;
+  background: #0e0e0e;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 200px;
+  max-height: 50vh;
+}
+.upgrade-modal-error {
+  margin: 10px 16px 0;
+  padding: 8px 10px;
+  background: rgba(224, 128, 128, 0.1);
+  border: 1px solid rgba(224, 128, 128, 0.4);
+  color: #e08080;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.upgrade-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid #333;
+}
+.upgrade-modal-footer .link {
+  background: transparent;
+  border: 1px solid #555;
+  color: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.upgrade-modal-footer .link:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.upgrade-modal-footer .link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #6ec76e;
+  border-radius: 50%;
+  animation: upgrade-spin 0.9s linear infinite;
+  display: inline-block;
+}
+@keyframes upgrade-spin {
+  to { transform: rotate(360deg); }
 }
 </style>
