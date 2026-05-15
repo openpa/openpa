@@ -582,94 +582,99 @@ if ($Mode -eq 'docker') {
     # Sidecar services (postgres / qdrant / chroma) are no longer
     # provisioned here — the Setup Wizard activates each one on demand
     # via its own per-service deployment-mode picker.
-    if ((Test-Path $ComposeFile) -and (Test-Path $EnvDocker) -and (-not $Reinstall)) {
-        Write-Info "Existing Docker bundle detected at $DockerDir - reusing config."
-        # Read OPENPA_VERSION from the existing .env so the pull-stage
-        # info / error messages can reference the actual image tag.
-        $OpenpaVer = (Select-String -Path $EnvDocker -Pattern '^OPENPA_VERSION=' | Select-Object -First 1).Line -replace '^OPENPA_VERSION=', ''
-    } else {
-        $VncPwd      = New-Secret
-        $OpenpaVer   = Resolve-OpenPAVersion
-
-        switch ($Deployment) {
-            'local' {
-                $DockerAppUrl    = 'http://localhost:1112'
-                $DockerCors      = 'http://localhost:1515,http://127.0.0.1:1515'
-                $DockerWizardEnv = 'local'
-            }
-            'server' {
-                $DockerAppUrl    = "http://${AppHost}:1112"
-                $DockerCors      = "http://${AppHost}:1515,http://localhost:1515"
-                $DockerWizardEnv = 'server'
-            }
-            'custom' {
-                $DockerAppUrl    = $CustomValues['public_url']
-                $DockerCors      = $CustomValues['allowed_origins']
-                $DockerWizardEnv = $CustomValues['wizard_preset']
-            }
-        }
-
-        # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
-        # and other ad-hoc dev origins can hit the API without preflight
-        # failures. Production and test installs keep the locked-down list.
-        if ($Channel -eq 'dev') {
-            $DockerCors = '*'
-        }
-
-        Write-Info "Fetching docker-compose template"
-        Get-TemplateContent 'docker-compose.yml.tmpl' | Set-Content -Path $ComposeFile -Encoding utf8
-
-        Write-Info "Writing $EnvDocker (secrets, do not commit)"
-        $rendered = (Get-TemplateContent 'docker.env.tmpl') `
-            -replace '__OPENPA_VERSION__', $OpenpaVer `
-            -replace '__APP_URL__',        $DockerAppUrl `
-            -replace '__CORS_ALLOWED_ORIGINS__', $DockerCors `
-            -replace '__SETUP_WIZARD_ENV__', $DockerWizardEnv `
-            -replace '__INSTALL_MODE__',   $Mode `
-            -replace '__VNC_PASSWORD__',   $VncPwd
-        $rendered | Set-Content -Path $EnvDocker -Encoding utf8
-
-        # Test channel: forward Test PyPI indices into the Dockerfile build
-        # via the compose .env. Prod leaves both unset (Dockerfile treats
-        # empty as default PyPI). Dev uses ``-e /src`` via the override
-        # file below, so pip index overrides don't apply.
-        if ($Channel -eq 'test') {
-            Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/' -Encoding utf8
-            Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/' -Encoding utf8
-        }
-
-        # Stamp the channel into docker.env so the running container's
-        # upgrader and feature installer see it. Without this, dev images
-        # fall back to ``production`` semantics at runtime — which makes
-        # ``pip_spec()`` pin to ``openpa==<version>`` and look up PyPI
-        # for a release that may not be published yet during release prep.
-        if ($Channel -eq 'production') {
-            Add-Content -Path $EnvDocker -Value 'OPENPA_UPGRADE_CHANNEL=production' -Encoding utf8
-        }
-        elseif ($Channel -eq 'test') {
-            Add-Content -Path $EnvDocker -Value 'OPENPA_UPGRADE_CHANNEL=test' -Encoding utf8
-        }
-        elseif ($Channel -eq 'dev') {
-            Add-Content -Path $EnvDocker -Value 'OPENPA_UPGRADE_CHANNEL=dev' -Encoding utf8
-        }
-
-        # Dev channel: emit a docker-compose.override.yml that points the
-        # build context at the local checkout, switches the pip install
-        # to ``-e /src``, and bind-mounts the checkout for runtime
-        # imports. Compose auto-merges this when running from $DockerDir.
-        # Backslashes are converted to forward slashes — Docker Desktop
-        # accepts either, and forward slashes keep the YAML readable.
-        if ($Channel -eq 'dev') {
-            $OverrideFile = Join-Path $DockerDir 'docker-compose.override.yml'
-            $RepoRootCompose = $RepoRoot -replace '\\', '/'
-            Write-Info "Writing $OverrideFile (bind-mounts $RepoRoot at /src)"
-            $overrideRendered = (Get-TemplateContent 'docker-compose.override.yml.tmpl') `
-                -replace '__REPO_ROOT__', $RepoRootCompose
-            $overrideRendered | Set-Content -Path $OverrideFile -Encoding utf8
-        }
-
-        Write-Ok "Wrote $ComposeFile + .env"
+    #
+    # Bundle regeneration is unconditional. Channel-dependent fields
+    # (OPENPA_VERSION, OPENPA_UPGRADE_CHANNEL, OPENPA_PIP_INDEX_URL) all
+    # drift if the .env is reused across runs, and a previous-channel
+    # docker-compose.override.yml silently keeps a stale ``build:``
+    # context alive on dev→test/prod switches. Regenerating from
+    # templates on every run is the only way to keep state honest;
+    # VNC_PASSWORD is the only true secret here and the installer
+    # surfaces it at the end of the run, so re-rolling it is cheap.
+    if (Test-Path $ComposeFile) {
+        Write-Info "Regenerating $DockerDir config (templates re-render every run)"
     }
+
+    $VncPwd      = New-Secret
+    $OpenpaVer   = Resolve-OpenPAVersion
+
+    switch ($Deployment) {
+        'local' {
+            $DockerAppUrl    = 'http://localhost:1112'
+            $DockerCors      = 'http://localhost:1515,http://127.0.0.1:1515'
+            $DockerWizardEnv = 'local'
+        }
+        'server' {
+            $DockerAppUrl    = "http://${AppHost}:1112"
+            $DockerCors      = "http://${AppHost}:1515,http://localhost:1515"
+            $DockerWizardEnv = 'server'
+        }
+        'custom' {
+            $DockerAppUrl    = $CustomValues['public_url']
+            $DockerCors      = $CustomValues['allowed_origins']
+            $DockerWizardEnv = $CustomValues['wizard_preset']
+        }
+    }
+
+    # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
+    # and other ad-hoc dev origins can hit the API without preflight
+    # failures. Production and test installs keep the locked-down list.
+    if ($Channel -eq 'dev') {
+        $DockerCors = '*'
+    }
+
+    Write-Info "Fetching docker-compose template"
+    Get-TemplateContent 'docker-compose.yml.tmpl' | Set-Content -Path $ComposeFile -Encoding utf8
+
+    Write-Info "Writing $EnvDocker (secrets, do not commit)"
+    $rendered = (Get-TemplateContent 'docker.env.tmpl') `
+        -replace '__OPENPA_VERSION__', $OpenpaVer `
+        -replace '__APP_URL__',        $DockerAppUrl `
+        -replace '__CORS_ALLOWED_ORIGINS__', $DockerCors `
+        -replace '__SETUP_WIZARD_ENV__', $DockerWizardEnv `
+        -replace '__INSTALL_MODE__',   $Mode `
+        -replace '__VNC_PASSWORD__',   $VncPwd
+    $rendered | Set-Content -Path $EnvDocker -Encoding utf8
+
+    # Test channel: forward Test PyPI indices into the Dockerfile build
+    # via the compose .env. Prod leaves both unset (Dockerfile treats
+    # empty as default PyPI). Dev uses ``-e /src`` via the override
+    # file below, so pip index overrides don't apply.
+    if ($Channel -eq 'test') {
+        Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/' -Encoding utf8
+        Add-Content -Path $EnvDocker -Value 'OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/' -Encoding utf8
+    }
+
+    # Stamp the channel into docker.env so the running container's
+    # upgrader and feature installer see it. Without this, dev images
+    # fall back to ``production`` semantics at runtime — which makes
+    # ``pip_spec()`` pin to ``openpa==<version>`` and look up PyPI
+    # for a release that may not be published yet during release prep.
+    Add-Content -Path $EnvDocker -Value "OPENPA_UPGRADE_CHANNEL=$Channel" -Encoding utf8
+
+    # Dev channel: emit a docker-compose.override.yml that points the
+    # build context at the local checkout, switches the pip install
+    # to ``-e /src``, and bind-mounts the checkout for runtime
+    # imports. Compose auto-merges this when running from $DockerDir.
+    # Backslashes are converted to forward slashes — Docker Desktop
+    # accepts either, and forward slashes keep the YAML readable.
+    #
+    # Non-dev channels must remove any previously-written override:
+    # a stale dev override silently re-adds a local ``build:`` context
+    # that wins over the pulled image.
+    $OverrideFile = Join-Path $DockerDir 'docker-compose.override.yml'
+    if ($Channel -eq 'dev') {
+        $RepoRootCompose = $RepoRoot -replace '\\', '/'
+        Write-Info "Writing $OverrideFile (bind-mounts $RepoRoot at /src)"
+        $overrideRendered = (Get-TemplateContent 'docker-compose.override.yml.tmpl') `
+            -replace '__REPO_ROOT__', $RepoRootCompose
+        $overrideRendered | Set-Content -Path $OverrideFile -Encoding utf8
+    } elseif (Test-Path $OverrideFile) {
+        Write-Info "Removing stale docker-compose.override.yml (dev-only)"
+        Remove-Item -Path $OverrideFile -Force
+    }
+
+    Write-Ok "Wrote $ComposeFile + .env"
 
     # Per-channel pull / build strategy:
     #   production / test → pull the pre-built image from Docker Hub

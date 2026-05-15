@@ -620,91 +620,102 @@ if [ "$MODE" = "docker" ]; then
     DOCKER_DIR="$OPENPA_HOME/docker"
     mkdir -p "$DOCKER_DIR"
 
-    # Idempotency: if the bundle is already running, just bring it up
-    # again (which no-ops if everything is healthy) and skip generation.
     # Sidecar services (postgres / qdrant / chroma) are no longer
     # provisioned here — the Setup Wizard activates each one on demand
     # via its own per-service deployment-mode picker.
-    if [ -f "$DOCKER_DIR/.env" ] && [ -f "$DOCKER_DIR/docker-compose.yml" ] && [ "$REINSTALL" -ne 1 ]; then
-        info "Existing Docker bundle detected at $DOCKER_DIR — reusing config."
-        # Read OPENPA_VERSION from the existing .env so the pull-stage
-        # info / error messages can reference the actual image tag.
-        OPENPA_VERSION="$(grep -E '^OPENPA_VERSION=' "$DOCKER_DIR/.env" | head -n 1 | cut -d= -f2-)"
-    else
-        VNC_PASSWORD="$(gen_secret)"
-        OPENPA_VERSION="$(resolve_version)"
+    #
+    # Bundle regeneration is unconditional. Channel-dependent fields
+    # (OPENPA_VERSION, OPENPA_UPGRADE_CHANNEL, OPENPA_PIP_INDEX_URL) all
+    # drift if the .env is reused across runs, and a previous-channel
+    # docker-compose.override.yml silently keeps a stale ``build:``
+    # context alive on dev→test/prod switches. Regenerating from
+    # templates on every run is the only way to keep state honest;
+    # VNC_PASSWORD is the only true secret here and the installer
+    # surfaces it at the end of the run, so re-rolling it is cheap.
+    if [ -f "$DOCKER_DIR/docker-compose.yml" ]; then
+        info "Regenerating $DOCKER_DIR config (templates re-render every run)"
+    fi
 
-        case "$DEPLOYMENT" in
-            local)
-                DOCKER_APP_URL="http://localhost:1112"
-                DOCKER_CORS="http://localhost:1515,http://127.0.0.1:1515"
-                DOCKER_WIZARD_ENV="local"
-                ;;
-            server)
-                DOCKER_APP_URL="http://$APP_HOST:1112"
-                DOCKER_CORS="http://$APP_HOST:1515,http://localhost:1515"
-                DOCKER_WIZARD_ENV="server"
-                ;;
-            custom)
-                DOCKER_APP_URL="$CUSTOM_public_url"
-                DOCKER_CORS="$CUSTOM_allowed_origins"
-                DOCKER_WIZARD_ENV="$CUSTOM_wizard_preset"
-                ;;
-        esac
+    VNC_PASSWORD="$(gen_secret)"
+    OPENPA_VERSION="$(resolve_version)"
 
-        # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
-        # and other ad-hoc dev origins can hit the API without preflight
-        # failures. Production and test installs keep the locked-down list.
-        if [ "$CHANNEL" = "dev" ]; then
-            DOCKER_CORS="*"
-        fi
+    case "$DEPLOYMENT" in
+        local)
+            DOCKER_APP_URL="http://localhost:1112"
+            DOCKER_CORS="http://localhost:1515,http://127.0.0.1:1515"
+            DOCKER_WIZARD_ENV="local"
+            ;;
+        server)
+            DOCKER_APP_URL="http://$APP_HOST:1112"
+            DOCKER_CORS="http://$APP_HOST:1515,http://localhost:1515"
+            DOCKER_WIZARD_ENV="server"
+            ;;
+        custom)
+            DOCKER_APP_URL="$CUSTOM_public_url"
+            DOCKER_CORS="$CUSTOM_allowed_origins"
+            DOCKER_WIZARD_ENV="$CUSTOM_wizard_preset"
+            ;;
+    esac
 
-        info "Fetching docker-compose template"
-        fetch_template "docker-compose.yml.tmpl" > "$DOCKER_DIR/docker-compose.yml"
+    # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
+    # and other ad-hoc dev origins can hit the API without preflight
+    # failures. Production and test installs keep the locked-down list.
+    if [ "$CHANNEL" = "dev" ]; then
+        DOCKER_CORS="*"
+    fi
 
-        info "Writing $DOCKER_DIR/.env (secrets, do not commit)"
-        fetch_template "docker.env.tmpl" \
-            | sed \
-                -e "s|__OPENPA_VERSION__|$OPENPA_VERSION|g" \
-                -e "s|__APP_URL__|$DOCKER_APP_URL|g" \
-                -e "s|__CORS_ALLOWED_ORIGINS__|$DOCKER_CORS|g" \
-                -e "s|__SETUP_WIZARD_ENV__|$DOCKER_WIZARD_ENV|g" \
-                -e "s|__INSTALL_MODE__|$MODE|g" \
-                -e "s|__VNC_PASSWORD__|$VNC_PASSWORD|g" \
-            > "$DOCKER_DIR/.env"
+    info "Fetching docker-compose template"
+    fetch_template "docker-compose.yml.tmpl" > "$DOCKER_DIR/docker-compose.yml"
 
-        # Test channel: forward Test PyPI indices into the Dockerfile build
-        # via the compose .env. Prod leaves both unset (Dockerfile treats
-        # empty as default PyPI). Dev installs use ``-e /src`` via the
-        # override file below, so they don't need pip index overrides.
-        if [ "$CHANNEL" = "test" ]; then
-            cat >>"$DOCKER_DIR/.env" <<EOF
+    info "Writing $DOCKER_DIR/.env (secrets, do not commit)"
+    fetch_template "docker.env.tmpl" \
+        | sed \
+            -e "s|__OPENPA_VERSION__|$OPENPA_VERSION|g" \
+            -e "s|__APP_URL__|$DOCKER_APP_URL|g" \
+            -e "s|__CORS_ALLOWED_ORIGINS__|$DOCKER_CORS|g" \
+            -e "s|__SETUP_WIZARD_ENV__|$DOCKER_WIZARD_ENV|g" \
+            -e "s|__INSTALL_MODE__|$MODE|g" \
+            -e "s|__VNC_PASSWORD__|$VNC_PASSWORD|g" \
+        > "$DOCKER_DIR/.env"
+
+    # Test channel: forward Test PyPI indices into the Dockerfile build
+    # via the compose .env. Prod leaves both unset (Dockerfile treats
+    # empty as default PyPI). Dev installs use ``-e /src`` via the
+    # override file below, so they don't need pip index overrides.
+    if [ "$CHANNEL" = "test" ]; then
+        cat >>"$DOCKER_DIR/.env" <<EOF
 OPENPA_PIP_INDEX_URL=https://test.pypi.org/simple/
 OPENPA_PIP_EXTRA_INDEX_URL=https://pypi.org/simple/
 EOF
-        fi
-
-        # Stamp the channel into docker.env so the running container's
-        # upgrader and feature installer see it. Without this, dev images
-        # fall back to ``production`` semantics at runtime — which makes
-        # ``pip_spec()`` pin to ``openpa==<version>`` and look up PyPI
-        # for a release that may not be published yet during release prep.
-        printf 'OPENPA_UPGRADE_CHANNEL=%s\n' "$CHANNEL" >>"$DOCKER_DIR/.env"
-        chmod 600 "$DOCKER_DIR/.env"
-
-        # Dev channel: emit a docker-compose.override.yml that points the
-        # build context at the local checkout, switches the pip install
-        # to ``-e /src``, and bind-mounts the checkout for runtime
-        # imports. Compose auto-merges this when running from $DOCKER_DIR.
-        if [ "$CHANNEL" = "dev" ]; then
-            info "Writing $DOCKER_DIR/docker-compose.override.yml (bind-mounts $REPO_ROOT at /src)"
-            fetch_template "docker-compose.override.yml.tmpl" \
-                | sed -e "s|__REPO_ROOT__|$REPO_ROOT|g" \
-                > "$DOCKER_DIR/docker-compose.override.yml"
-        fi
-
-        ok "Wrote $DOCKER_DIR/docker-compose.yml + .env"
     fi
+
+    # Stamp the channel into docker.env so the running container's
+    # upgrader and feature installer see it. Without this, dev images
+    # fall back to ``production`` semantics at runtime — which makes
+    # ``pip_spec()`` pin to ``openpa==<version>`` and look up PyPI
+    # for a release that may not be published yet during release prep.
+    printf 'OPENPA_UPGRADE_CHANNEL=%s\n' "$CHANNEL" >>"$DOCKER_DIR/.env"
+    chmod 600 "$DOCKER_DIR/.env"
+
+    # Dev channel: emit a docker-compose.override.yml that points the
+    # build context at the local checkout, switches the pip install
+    # to ``-e /src``, and bind-mounts the checkout for runtime
+    # imports. Compose auto-merges this when running from $DOCKER_DIR.
+    #
+    # Non-dev channels must remove any previously-written override:
+    # a stale dev override silently re-adds a local ``build:`` context
+    # that wins over the pulled image.
+    if [ "$CHANNEL" = "dev" ]; then
+        info "Writing $DOCKER_DIR/docker-compose.override.yml (bind-mounts $REPO_ROOT at /src)"
+        fetch_template "docker-compose.override.yml.tmpl" \
+            | sed -e "s|__REPO_ROOT__|$REPO_ROOT|g" \
+            > "$DOCKER_DIR/docker-compose.override.yml"
+    elif [ -f "$DOCKER_DIR/docker-compose.override.yml" ]; then
+        info "Removing stale docker-compose.override.yml (dev-only)"
+        rm -f "$DOCKER_DIR/docker-compose.override.yml"
+    fi
+
+    ok "Wrote $DOCKER_DIR/docker-compose.yml + .env"
 
     # Per-channel pull / build strategy:
     #   production / test → pull the pre-built image from Docker Hub
