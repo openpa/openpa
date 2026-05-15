@@ -17,11 +17,11 @@
 #   python -m app.config.setup_profiles --json
 
 # ── Local development ──────────────────────────────────────────────────────
-# SQLite + ChromaDB persistent. No external services required.
+# Embedded storage on this machine. No external services required.
 
 [local]
 label = "Local Development"
-description = "SQLite + ChromaDB persistent. No external services required."
+description = "Embedded storage on this machine. No external services required."
 
 [local.server_config]
 db_provider = "sqlite"
@@ -54,12 +54,12 @@ api_key = ""
 persist_path = ""
 
 # ── Docker Compose ─────────────────────────────────────────────────────────
-# Postgres + Chroma running as docker-compose services on the same network.
-# Hostnames assume the conventional service names ("postgres", "chroma").
+# Storage services running as docker-compose siblings on the same network.
+# Hostnames assume the conventional service names.
 
 [docker]
 label = "Docker Compose"
-description = "Postgres + Chroma running as docker-compose services. Connects via service hostnames."
+description = "Storage services running as docker-compose siblings. Connects via service hostnames."
 
 [docker.server_config]
 db_provider = "postgres"
@@ -100,12 +100,12 @@ api_key = ""
 persist_path = ""
 
 # ── Production server ──────────────────────────────────────────────────────
-# Postgres + Qdrant. Hosts are blank — the operator fills them in with
-# real endpoints. SSL is on by default for both.
+# External database and vector store. Hosts are blank — the operator
+# fills them in with real endpoints. SSL is on by default for both.
 
 [server]
 label = "Production Server"
-description = "Postgres + Qdrant. Provide your own endpoints."
+description = "External database and vector store. Provide your own endpoints."
 
 [server.server_config]
 db_provider = "postgres"

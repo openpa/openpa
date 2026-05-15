@@ -128,8 +128,7 @@ async function handleLogin() {
             <Icon icon="mdi:chevron-right" class="profile-chevron" />
           </div>
         </div>
-
-        <ElDivider>or log in to another profile</ElDivider>
+        <ElDivider content-position="left">or log in to another profile</ElDivider>
       </div>
 
       <!-- Login form -->

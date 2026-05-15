@@ -54,6 +54,12 @@ const allCards: SettingsCard[] = [
     icon: 'mdi:account-group',
     route: 'profiles',
   },
+  {
+    title: 'Updates',
+    description: 'Check for new versions and manage how OpenPA updates itself',
+    icon: 'mdi:download',
+    route: 'updates',
+  },
 ];
 
 // Vector Embedding is a server-wide configuration owned by the admin

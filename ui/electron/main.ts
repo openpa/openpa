@@ -664,7 +664,7 @@ function createWindow() {
       symbolColor: '#ffffff',
       height: 32
     },
-    icon: path.join(process.env.VITE_PUBLIC, 'logo.svg'),
+    icon: path.join(process.env.VITE_PUBLIC, 'logo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       devTools: !app.isPackaged,

@@ -61,7 +61,7 @@
   "modes": {
     "docker": {
       "label": "Docker",
-      "description": "sandboxed VNC desktop with bundled Postgres + Qdrant",
+      "description": "sandboxed VNC desktop with a bundled storage stack",
       "hint": "The agent runs inside a container with its own GUI. Observe at http://<host>:6080/vnc.html.",
       "badge": "recommended",
       "requires": [
@@ -71,7 +71,7 @@
     },
     "native": {
       "label": "Native",
-      "description": "Python venv at ~/.openpa/venv with SQLite",
+      "description": "Python venv at ~/.openpa/venv with embedded storage",
       "hint": "Simpler, but the agent shares your desktop and home directory.",
       "requires": [],
       "order": 20
@@ -116,7 +116,7 @@
     }
   },
   "_meta": {
-    "sha256": "c7ba26534922d4719fd3304e6ee1e6899f6e62179c30d6e6c652200601c36fa5",
+    "sha256": "bf1145412b8dce065cdad8d04736167f265a97e79691be0ac14ca3c3ee1372ea",
     "schema_version": 1
   }
 }

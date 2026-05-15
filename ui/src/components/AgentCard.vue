@@ -49,7 +49,7 @@ const toggleExpand = () => {
       <div class="agent-header" @click="toggleExpand">
         <div class="agent-header-top">
           <div class="agent-avatar">
-            <Icon icon="tabler:alien" />
+            <img src="/agent-avatar.png" alt="Agent" class="agent-avatar-img" />
             <span v-if="compact" class="avatar-status-dot" :class="{ 'connected': isConnected }"></span>
           </div>
           <div class="agent-brief" v-if="!compact">
@@ -157,6 +157,14 @@ const toggleExpand = () => {
   font-size: 16px;
   flex-shrink: 0;
   position: relative;
+  overflow: hidden;
+}
+
+.agent-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .avatar-status-dot {

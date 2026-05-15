@@ -1031,10 +1031,10 @@ async function copyToken() {
                      backend exists. -->
                 <template v-else>
                   <ElRadio value="docker" :disabled="installDockerDisabled">
-                    <strong>Docker</strong> — sandboxed VNC desktop with bundled Postgres + Qdrant
+                    <strong>Docker</strong> — sandboxed VNC desktop with a bundled storage stack
                   </ElRadio>
                   <ElRadio value="native">
-                    <strong>Native</strong> — Python venv at <code>~/.openpa/venv</code> with SQLite
+                    <strong>Native</strong> — Python venv at <code>~/.openpa/venv</code> with embedded storage
                   </ElRadio>
                 </template>
               </ElRadioGroup>

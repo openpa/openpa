@@ -109,7 +109,7 @@ _DEFAULT_CATALOG: dict[str, Any] = {
     "modes": {
         "docker": {
             "label": "Docker",
-            "description": "sandboxed VNC desktop with bundled Postgres + Qdrant",
+            "description": "sandboxed VNC desktop with a bundled storage stack",
             "hint": "The agent runs inside a container with its own GUI.",
             "badge": "recommended",
             "requires": ["docker"],
@@ -117,7 +117,7 @@ _DEFAULT_CATALOG: dict[str, Any] = {
         },
         "native": {
             "label": "Native",
-            "description": "Python venv at ~/.openpa/venv with SQLite",
+            "description": "Python venv at ~/.openpa/venv with embedded storage",
             "hint": "Simpler, but the agent shares your desktop and home directory.",
             "order": 20,
         },

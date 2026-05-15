@@ -84,6 +84,23 @@ export const useSettingsStore = defineStore('settings', () => {
     return typeof __IS_ELECTRON__ !== 'undefined' && __IS_ELECTRON__;
   });
 
+  // ── Desktop-app update preferences ──
+  //
+  // The release channel is fixed at install time (see app/upgrade/channel.py)
+  // and is intentionally not exposed for runtime mutation — switching
+  // channels is a deliberate reinstall. We only expose the ``autoUpdate``
+  // toggle here. Source of truth is the Electron config (openpa-config.json),
+  // read via the preload bridge.
+  const bridgeConfig = (typeof window !== 'undefined' ? window.openpa?.config : undefined) ?? null;
+  const autoUpdate = ref<boolean>(bridgeConfig?.autoUpdate ?? true);
+
+  async function setAutoUpdate(value: boolean) {
+    autoUpdate.value = value;
+    if (typeof window !== 'undefined' && window.openpa) {
+      await window.openpa.setConfig({ autoUpdate: value });
+    }
+  }
+
   // ── Per-profile token management ──
 
   function getTokenForProfile(profileName: string): string {
@@ -210,5 +227,8 @@ export const useSettingsStore = defineStore('settings', () => {
     reasoningEnabled,
     getReasoningEnabled,
     setReasoningEnabled,
+    // Desktop-app update preferences
+    autoUpdate,
+    setAutoUpdate,
   };
 });

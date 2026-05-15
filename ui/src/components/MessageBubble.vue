@@ -393,7 +393,7 @@ const handleThinkingClick = (event: MouseEvent) => {
   <div class="message-row" :class="{ 'user-row': isUser, 'agent-row': !isUser }">
     <!-- Agent Avatar (left side) -->
     <div v-if="!isUser" class="message-avatar agent-avatar">
-      <Icon icon="tabler:alien" />
+      <img src="/agent-avatar.png" alt="Agent" class="agent-avatar-img" />
     </div>
 
     <div class="message-bubble" :class="{ 'user-message': isUser, 'agent-message': !isUser }">
@@ -595,6 +595,14 @@ const handleThinkingClick = (event: MouseEvent) => {
 .agent-avatar {
   background: var(--primary-color);
   color: white;
+  overflow: hidden;
+}
+
+.agent-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .user-avatar {

@@ -8,6 +8,7 @@ export const PROFILE_ROUTES = new Set([
   'embedding-settings',
   'profile-settings',
   'channels-settings',
+  'updates-settings',
   'channels-page',
   'process-list',
   'process-terminal',

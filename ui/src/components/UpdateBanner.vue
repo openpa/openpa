@@ -20,18 +20,15 @@
  */
 
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '../stores/settings'
+import type { BackendStatus, UpdaterStatus } from '../types/updates'
 
 const settingsStore = useSettingsStore()
+const route = useRoute()
+const router = useRouter()
 
 // ── Backend update state ─────────────────────────────────────────────────
-
-type BackendStatus =
-  | { status: 'unknown' }
-  | { status: 'up_to_date'; current: string }
-  | { status: 'available'; current: string; latest: string; release_url: string; release_notes: string; apply_command: string; min_compatible_ui?: string }
-  | { status: 'too_old'; current: string; latest: string; release_url: string; min_supported_upgrade_from: string }
-  | { status: 'error'; reason: string }
 
 const backend = ref<BackendStatus>({ status: 'unknown' })
 const dismissedBackend = ref(false)
@@ -61,13 +58,6 @@ let backendTimer: ReturnType<typeof setInterval> | null = null
 
 // ── Electron updater state ───────────────────────────────────────────────
 
-type UpdaterStatus = {
-  status: 'unavailable' | 'checking' | 'available' | 'up_to_date' | 'downloading' | 'ready' | 'error'
-  info?: { version?: string; releaseName?: string; releaseNotes?: string }
-  progress?: { percent?: number }
-  error?: string
-}
-
 const updater = ref<UpdaterStatus>({ status: 'unavailable' })
 const installing = ref(false)
 
@@ -92,8 +82,9 @@ async function installUiUpdate() {
 onMounted(() => {
   checkBackend()
   // Six-hour cadence is enough — releases don't ship that often, and
-  // the user can always click "Check now" once that surface lands. The
-  // poll is cheap (one HTTP GET) so we don't gate on visibility.
+  // the user can always click "Check for updates" in Settings → Updates
+  // to force a recheck. The poll is cheap (one HTTP GET) so we don't
+  // gate on visibility.
   backendTimer = setInterval(checkBackend, 6 * 60 * 60 * 1000)
 
   if (window.openpa?.updater) {
@@ -131,6 +122,19 @@ function copyCommand() {
   navigator.clipboard?.writeText(applyCommand()).catch(() => {})
 }
 
+// "Manage in Settings → Updates" link. Routes are profile-scoped, so we
+// can only offer it when the current route has a ``:profile`` param — on
+// /setup, /login, and the profile selector there's nothing to link to.
+const settingsHref = computed(() => {
+  const profile = route.params.profile
+  if (typeof profile !== 'string' || !profile) return ''
+  return `/${profile}/settings/updates`
+})
+
+function openSettings() {
+  if (settingsHref.value) router.push(settingsHref.value)
+}
+
 // Reference APP_VERSION so the linter keeps the import; future work
 // will use it for the min_compatible_ui banner.
 void APP_VERSION
@@ -153,6 +157,7 @@ void APP_VERSION
       </div>
       <button class="link" @click="copyCommand">Copy</button>
       <a class="link" :href="backend.release_url" target="_blank" rel="noopener">Notes</a>
+      <button v-if="settingsHref" class="link" @click="openSettings">Manage</button>
       <button class="dismiss" @click="dismissedBackend = true" title="Dismiss">×</button>
     </div>
 
@@ -170,6 +175,7 @@ void APP_VERSION
         path.
       </div>
       <a class="link" :href="backend.release_url" target="_blank" rel="noopener">Notes</a>
+      <button v-if="settingsHref" class="link" @click="openSettings">Manage</button>
       <button class="dismiss" @click="dismissedBackend = true" title="Dismiss">×</button>
     </div>
 

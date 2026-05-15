@@ -1,6 +1,6 @@
 # AUTO-GENERATED from install/catalog.toml. Do not edit by hand.
 # Regenerate with: python install/scripts/build_catalog.py
-# Source SHA-256:  c7ba26534922d4719fd3304e6ee1e6899f6e62179c30d6e6c652200601c36fa5
+# Source SHA-256:  bf1145412b8dce065cdad8d04736167f265a97e79691be0ac14ca3c3ee1372ea
 
 $script:CatalogSchema = 1
 
@@ -74,7 +74,7 @@ $script:ModeIds = @('docker', 'native')
 $script:Modes = [ordered]@{
     'docker' = [ordered]@{
         Label       = 'Docker'
-        Description = 'sandboxed VNC desktop with bundled Postgres + Qdrant'
+        Description = 'sandboxed VNC desktop with a bundled storage stack'
         Hint        = 'The agent runs inside a container with its own GUI. Observe at http://<host>:6080/vnc.html.'
         Badge       = 'recommended'
         Requires    = @('docker')
@@ -82,7 +82,7 @@ $script:Modes = [ordered]@{
     }
     'native' = [ordered]@{
         Label       = 'Native'
-        Description = 'Python venv at ~/.openpa/venv with SQLite'
+        Description = 'Python venv at ~/.openpa/venv with embedded storage'
         Hint        = 'Simpler, but the agent shares your desktop and home directory.'
         Badge       = ''
         Requires    = @()

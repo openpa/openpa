@@ -1,7 +1,7 @@
 # AUTO-GENERATED copy of install/catalog.toml shipped with the
 # backend. Do not edit by hand — re-run
 # `python install/scripts/build_catalog.py`.
-# Source SHA-256: c7ba26534922d4719fd3304e6ee1e6899f6e62179c30d6e6c652200601c36fa5
+# Source SHA-256: bf1145412b8dce065cdad8d04736167f265a97e79691be0ac14ca3c3ee1372ea
 
 # OpenPA install/setup catalog — single source of truth.
 #
@@ -107,7 +107,7 @@ default    = "local"
 
 [modes.docker]
 label       = "Docker"
-description = "sandboxed VNC desktop with bundled Postgres + Qdrant"
+description = "sandboxed VNC desktop with a bundled storage stack"
 hint        = "The agent runs inside a container with its own GUI. Observe at http://<host>:6080/vnc.html."
 badge       = "recommended"
 requires    = ["docker"]
@@ -115,7 +115,7 @@ order       = 10
 
 [modes.native]
 label       = "Native"
-description = "Python venv at ~/.openpa/venv with SQLite"
+description = "Python venv at ~/.openpa/venv with embedded storage"
 hint        = "Simpler, but the agent shares your desktop and home directory."
 requires    = []
 order       = 20

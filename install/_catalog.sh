@@ -1,6 +1,6 @@
 # AUTO-GENERATED from install/catalog.toml. Do not edit by hand.
 # Regenerate with: python install/scripts/build_catalog.py
-# Source SHA-256:  c7ba26534922d4719fd3304e6ee1e6899f6e62179c30d6e6c652200601c36fa5
+# Source SHA-256:  bf1145412b8dce065cdad8d04736167f265a97e79691be0ac14ca3c3ee1372ea
 
 CATALOG_SCHEMA=1
 
@@ -47,12 +47,12 @@ CUSTOM_FIELD_CHOICES_wizard_preset="local docker server"
 # ── Install modes ──
 MODE_IDS="docker native"
 MODE_LABEL_docker="Docker"
-MODE_DESC_docker="sandboxed VNC desktop with bundled Postgres + Qdrant"
+MODE_DESC_docker="sandboxed VNC desktop with a bundled storage stack"
 MODE_HINT_docker="The agent runs inside a container with its own GUI. Observe at http://<host>:6080/vnc.html."
 MODE_BADGE_docker="recommended"
 MODE_REQUIRES_docker="docker"
 MODE_LABEL_native="Native"
-MODE_DESC_native="Python venv at ~/.openpa/venv with SQLite"
+MODE_DESC_native="Python venv at ~/.openpa/venv with embedded storage"
 MODE_HINT_native="Simpler, but the agent shares your desktop and home directory."
 MODE_BADGE_native=""
 MODE_REQUIRES_native=""

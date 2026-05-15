@@ -96,6 +96,12 @@ const routes = [
     props: true,
   },
   {
+    path: '/:profile/settings/updates',
+    name: 'updates-settings',
+    component: () => import('../views/UpdatesSettings.vue'),
+    props: true,
+  },
+  {
     path: '/:profile/channels',
     name: 'channels-page',
     component: () => import('../views/ChannelsPage.vue'),

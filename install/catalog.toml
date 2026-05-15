@@ -102,7 +102,7 @@ default    = "local"
 
 [modes.docker]
 label       = "Docker"
-description = "sandboxed VNC desktop with bundled Postgres + Qdrant"
+description = "sandboxed VNC desktop with a bundled storage stack"
 hint        = "The agent runs inside a container with its own GUI. Observe at http://<host>:6080/vnc.html."
 badge       = "recommended"
 requires    = ["docker"]
@@ -110,7 +110,7 @@ order       = 10
 
 [modes.native]
 label       = "Native"
-description = "Python venv at ~/.openpa/venv with SQLite"
+description = "Python venv at ~/.openpa/venv with embedded storage"
 hint        = "Simpler, but the agent shares your desktop and home directory."
 requires    = []
 order       = 20
