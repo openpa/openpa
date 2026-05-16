@@ -117,7 +117,8 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
-type WindowKind = 'main' | 'settings' | 'vnc'
+type WindowKind = 'main' | 'settings' | 'vnc' | 'processes' | 'events' | 'channels'
+type PageKind = 'processes' | 'events' | 'channels'
 const windows = new Set<BrowserWindow>()
 const windowKinds = new WeakMap<BrowserWindow, WindowKind>()
 // Most recently focused non-VNC window. Used by tray "Show", the
@@ -834,6 +835,28 @@ function focusMostRecentAppWindow(): void {
   createAppWindow('main')
 }
 
+// Tray / jumplist / dock entries for Process Manager, Events, and
+// Channels use focus-or-open semantics — unlike "Open Main Page" /
+// "Open Settings" which always spawn a fresh window. We identify an
+// "already open" window by matching its current hash against
+// #/<profile>/<segment>, so an in-window navigation away from the page
+// correctly drops it out of the focus pool and a new click opens fresh.
+function openOrFocusPageWindow(kind: PageKind): void {
+  // The bare /:profile/<segment> route — not /:profile/<segment>/<deeper>.
+  const re = new RegExp(`#/[^/?#]+/${kind}(?:[?#]|$)`)
+  for (const w of windows) {
+    if (w.isDestroyed()) continue
+    if (windowKinds.get(w) === 'vnc') continue
+    if (re.test(w.webContents.getURL())) {
+      if (w.isMinimized()) w.restore()
+      if (!w.isVisible()) w.show()
+      w.focus()
+      return
+    }
+  }
+  createAppWindow(kind)
+}
+
 function vncUrlFromAgentUrl(agentUrl: string): string | null {
   if (!agentUrl) return null
   try {
@@ -935,6 +958,9 @@ function rebuildJumpList(): void {
   if (runtimeConfig.agentUrl) {
     items.push(mkTask('main', 'Open Main Page', 'Open a new OpenPA chat window'))
     items.push(mkTask('settings', 'Open Settings', 'Open the OpenPA settings window'))
+    items.push(mkTask('processes', 'Process Manager', 'Open the OpenPA process manager'))
+    items.push(mkTask('events',    'Events',          'Open the OpenPA skill events page'))
+    items.push(mkTask('channels',  'Channels',        'Open the OpenPA channels page'))
   } else {
     // Pre-install: at least give the user a way to relaunch the wizard.
     items.push(mkTask('main', 'Open OpenPA', 'Open the OpenPA application'))
@@ -952,6 +978,9 @@ function rebuildTrayMenu(): void {
   if (runtimeConfig.agentUrl) {
     items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
     items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
+    items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
+    items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
+    items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
     items.push({ type: 'separator' })
   }
   items.push({ label: 'Show', click: () => focusMostRecentAppWindow() })
@@ -970,6 +999,9 @@ function rebuildDockMenu(): void {
   if (runtimeConfig.agentUrl) {
     items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
     items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
+    items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
+    items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
+    items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
   }
   dock.setMenu(Menu.buildFromTemplate(items))
 }
@@ -1048,7 +1080,7 @@ function createAppWindow(target: WindowKind): BrowserWindow {
     }
   })
 
-  const hash = target === 'settings' ? '#/?openpa_window=settings' : '#/?openpa_window=main'
+  const hash = `#/?openpa_window=${target}`
   if (VITE_DEV_SERVER_URL) {
     void w.loadURL(VITE_DEV_SERVER_URL + hash)
   } else {
@@ -1255,6 +1287,10 @@ if (!gotSingleInstanceLock) {
       const target = openArg.slice('--open='.length)
       if (target === 'main' || target === 'settings' || target === 'vnc') {
         createAppWindow(target)
+        return
+      }
+      if (target === 'processes' || target === 'events' || target === 'channels') {
+        openOrFocusPageWindow(target)
         return
       }
     }

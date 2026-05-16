@@ -197,7 +197,13 @@ router.beforeEach((to) => {
   if (profiles.length === 0) return true
   const profile = profiles[0]
   const { openpa_window: _consumed, ...rest } = to.query
-  const dest = hint === 'settings' ? `/${profile}/settings` : `/${profile}`
+  const destByHint: Record<string, string> = {
+    settings: `/${profile}/settings`,
+    processes: `/${profile}/processes`,
+    events: `/${profile}/events`,
+    channels: `/${profile}/channels`,
+  }
+  const dest = destByHint[hint] ?? `/${profile}`
   return { path: dest, query: rest, replace: true }
 });
 

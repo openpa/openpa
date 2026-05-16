@@ -18,6 +18,9 @@ const settingsStore = useSettingsStore();
 function destinationFor(profile: string): string {
   const hint = route.query.openpa_window;
   if (hint === 'settings') return `/${profile}/settings`;
+  if (hint === 'processes') return `/${profile}/processes`;
+  if (hint === 'events') return `/${profile}/events`;
+  if (hint === 'channels') return `/${profile}/channels`;
   return `/${profile}`;
 }
 

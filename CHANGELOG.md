@@ -26,6 +26,11 @@ Move to a dated section on release.
 ## [0.1.9] — TBD
 
 ### Added
+- Tray icon menu, Windows taskbar jumplist, and macOS dock menu now
+  surface direct shortcuts to **Process Manager**, **Events**, and
+  **Channels**. Clicking an entry opens the page in a new window, or
+  focuses the existing window if one is already on that route — unlike
+  the always-new-window behavior of "Open Main Page" / "Open Settings".
 - Dev-channel forced-available upgrade: on `OPENPA_UPGRADE_CHANNEL=dev`,
   `/api/upgrade/check` synthesises a "newer" release without hitting
   GitHub, and the runner skips `pip install` so the in-app updater UI
