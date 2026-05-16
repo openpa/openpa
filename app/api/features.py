@@ -157,6 +157,27 @@ def _result_payload(result: InstallResult) -> dict:
 
 # ── service deployment-mode capabilities ──────────────────────────────────
 
+
+# Names of UI features the bundled SPA exposes — each entry corresponds
+# to a top-level Vue Router segment under ``/:profile/<name>`` in
+# ui/src/router/index.ts. The Electron app's tray / jumplist / dock
+# builders read this list so they only surface menu entries whose route
+# the backend actually has; without the gate, a newer Electron talking
+# to an older backend would surface entries that land on a 404 fallback
+# page on click.
+#
+# This list is the contract: when a new SPA page is added to the
+# router, append its segment name here in the SAME commit. Both ship
+# inside the same wheel so they move together by construction; the
+# only failure mode is forgetting to update one of them, which is what
+# this comment is here to prevent.
+UI_FEATURES: tuple[str, ...] = (
+    "processes",
+    "events",
+    "channels",
+)
+
+
 async def get_service_capabilities(request: Request) -> JSONResponse:
     """Per-service deployment-mode descriptor for the Setup Wizard.
 
@@ -192,6 +213,8 @@ async def get_service_capabilities(request: Request) -> JSONResponse:
         "services": payload,
         "docker_available": docker_avail,
         "install_mode": install_mode,
+        # Tray/jumplist/dock gating list — see UI_FEATURES docstring above.
+        "ui_features": list(UI_FEATURES),
     })
 
 
