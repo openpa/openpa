@@ -31,6 +31,13 @@ Move to a dated section on release.
   **Channels**. Clicking an entry opens the page in a new window, or
   focuses the existing window if one is already on that route — unlike
   the always-new-window behavior of "Open Main Page" / "Open Settings".
+- Capability-gating for the tray / jumplist / dock entries above. The
+  backend now advertises an ``ui_features`` list in
+  ``/api/services/capabilities``; the Electron shell only surfaces an
+  entry whose name appears in that list. When the field is absent
+  (older pinned wheel predating this protocol) the gated entries are
+  hidden, since pre-protocol backends also lack the matching SPA
+  routes — clicking would otherwise land on the fallback page.
 - Dev-channel forced-available upgrade: on `OPENPA_UPGRADE_CHANNEL=dev`,
   `/api/upgrade/check` synthesises a "newer" release without hitting
   GitHub, and the runner skips `pip install` so the in-app updater UI
@@ -60,6 +67,16 @@ Move to a dated section on release.
   `install.ps1` for selecting production vs. test release feeds.
 - Per-channel Docker image strategy: test installs pull
   `openpa/openpa-desktop:<version>.dev1`, production pulls `:latest`.
+
+### Fixed
+- Settings → Updates → "Release channel" now shows the actual install
+  channel (`production` / `test` / `dev`) baked in at build time. It
+  previously read a stale ``runtimeConfig.channel`` field that was
+  never connected to ``INSTALL_CHANNEL`` and always displayed
+  ``stable`` regardless of how the Electron app was built. The
+  config field is force-overwritten from ``INSTALL_CHANNEL`` on each
+  launch so a re-installed test app never inherits a previous build's
+  persisted value.
 
 ### Changed
 - The Settings → Updates page and UpdateBanner no longer distinguish

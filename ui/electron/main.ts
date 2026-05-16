@@ -11,6 +11,15 @@ type AutoUpdaterModule = typeof import('electron-updater')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Build-time install channel — baked in by Vite at compile time. Used as
+// the value of ``runtimeConfig.channel`` (force-applied on each launch
+// regardless of what's on disk) and also as the flag passed to the
+// install scripts. Declared here so the config defaults below can
+// reference it; the second definition site at line ~189 used to be the
+// only one and led to the renderer reading a stale ``'stable'`` default
+// for the Settings → Updates "Release channel" row.
+const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL__
+
 // ── Runtime config (openpa-config.json) ─────────────────────────────────────
 //
 // Lives in the per-user app-data directory. The installer writes to it at
@@ -25,14 +34,20 @@ type OpenPAConfig = {
   agentUrl: string
   deploymentType: 'local' | 'server' | 'custom' | ''
   autoUpdate: boolean
-  channel: 'stable' | 'beta' | 'dev'
+  // Mirror of INSTALL_CHANNEL exposed to the renderer via the preload
+  // bridge. The Settings → Updates "Release channel" row reads this.
+  // Not user-mutable — the channel is fixed at install/build time;
+  // loadConfig() force-overwrites whatever is on disk with the current
+  // build's INSTALL_CHANNEL so a re-installed test app never displays
+  // a stale production channel (or vice versa).
+  channel: 'production' | 'test' | 'dev'
 }
 
 const CONFIG_DEFAULTS: OpenPAConfig = {
   agentUrl: '',
   deploymentType: '',
   autoUpdate: true,
-  channel: 'stable',
+  channel: INSTALL_CHANNEL,
 }
 
 function configPath(): string {
@@ -40,13 +55,22 @@ function configPath(): string {
 }
 
 function loadConfig(): OpenPAConfig {
+  let merged: OpenPAConfig
   try {
     const raw = fs.readFileSync(configPath(), 'utf8')
     const parsed = JSON.parse(raw)
-    return { ...CONFIG_DEFAULTS, ...parsed }
+    merged = { ...CONFIG_DEFAULTS, ...parsed }
   } catch {
-    return { ...CONFIG_DEFAULTS }
+    merged = { ...CONFIG_DEFAULTS }
   }
+  // The channel is fixed at build time; force it back to INSTALL_CHANNEL
+  // so a re-install / channel-switch never inherits the previous build's
+  // value from disk. This is also how the Settings → Updates "Release
+  // channel" row gets the right value — before this, ``runtimeConfig``
+  // was never connected to ``INSTALL_CHANNEL`` and the row always read
+  // the static default of ``'stable'``.
+  merged.channel = INSTALL_CHANNEL
+  return merged
 }
 
 function saveConfig(cfg: OpenPAConfig): void {
@@ -129,6 +153,20 @@ let tray: Tray | null = null
 // Populated by fetchCapabilities() once the backend is reachable. Drives
 // the conditional "Open VNC Desktop" entry in the tray / jumplist / dock.
 let installMode: 'docker' | 'native' | null = null
+// Set of UI feature names the backend's bundled SPA exposes. Drives the
+// gating for Process Manager / Events / Channels (and future) tray /
+// jumplist / dock entries. ``null`` means the backend hasn't reported a
+// list — either pre-protocol (older pinned wheel; the SPA also lacks the
+// route) or the capabilities call hasn't returned yet. In both cases we
+// HIDE the gated entries; the alternative ("show all on null") is what
+// shipped briefly in test10 and is exactly the silent-desync bug this
+// gate exists to prevent.
+let uiFeatures: Set<string> | null = null
+
+function uiFeatureAvailable(feature: string): boolean {
+  if (uiFeatures === null) return false
+  return uiFeatures.has(feature)
+}
 
 // App version handler
 ipcMain.handle('get-app-version', () => {
@@ -169,10 +207,9 @@ const INSTALLER_SCRIPT_BASE =
   process.env.OPENPA_INSTALLER_BASE ??
   'https://raw.githubusercontent.com/openpa/openpa/main/install'
 
-// Build-time install channel — baked in by Vite at compile time. Tells
-// us which flag to pass the install script and (for dev) whether to use
-// the local checkout instead of downloading from GitHub.
-const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL__
+// INSTALL_CHANNEL is declared at the top of this file (alongside the
+// runtime-config defaults that reference it). The install script uses
+// the same constant — see ``runInstaller`` below.
 
 let installerProcess: ChildProcess | null = null
 // Long-running ``openpa serve`` we spawn after the user clicks Continue
@@ -1039,6 +1076,7 @@ function fetchCapabilities(): Promise<void> {
     }
     if (!runtimeConfig.agentUrl) {
       installMode = null
+      uiFeatures = null
       finish()
       return
     }
@@ -1057,9 +1095,20 @@ function fetchCapabilities(): Promise<void> {
       res.on('data', (chunk) => { body += chunk })
       res.on('end', () => {
         try {
-          const parsed = JSON.parse(body) as { install_mode?: 'docker' | 'native' | null }
+          const parsed = JSON.parse(body) as {
+            install_mode?: 'docker' | 'native' | null
+            ui_features?: string[]
+          }
           installMode = parsed.install_mode ?? null
-        } catch { /* leave installMode unchanged on parse failure */ }
+          // Distinguish "field absent" (older backend, fall back to
+          // hide-gated) from "field present but empty" (backend says
+          // it ships none of these features — also hide). Either way
+          // a missing entry hides the menu item; the only state that
+          // shows it is an explicit listing in ``ui_features``.
+          uiFeatures = Array.isArray(parsed.ui_features)
+            ? new Set(parsed.ui_features)
+            : null
+        } catch { /* leave state unchanged on parse failure */ }
         finish()
       })
     })
@@ -1111,9 +1160,19 @@ function rebuildJumpList(): void {
   if (runtimeConfig.agentUrl) {
     items.push(mkTask('main', 'Open Main Page', 'Open a new OpenPA chat window'))
     items.push(mkTask('settings', 'Open Settings', 'Open the OpenPA settings window'))
-    items.push(mkTask('processes', 'Process Manager', 'Open the OpenPA process manager'))
-    items.push(mkTask('events',    'Events',          'Open the OpenPA skill events page'))
-    items.push(mkTask('channels',  'Channels',        'Open the OpenPA channels page'))
+    // Backend-capability gating: only surface these entries when the
+    // installed openpa wheel's SPA actually has the matching route.
+    // ``uiFeatureAvailable`` returns false on null (pre-protocol or
+    // not-yet-fetched) so an older pinned backend never sees them.
+    if (uiFeatureAvailable('processes')) {
+      items.push(mkTask('processes', 'Process Manager', 'Open the OpenPA process manager'))
+    }
+    if (uiFeatureAvailable('events')) {
+      items.push(mkTask('events',    'Events',          'Open the OpenPA skill events page'))
+    }
+    if (uiFeatureAvailable('channels')) {
+      items.push(mkTask('channels',  'Channels',        'Open the OpenPA channels page'))
+    }
   } else {
     // Pre-install: at least give the user a way to relaunch the wizard.
     items.push(mkTask('main', 'Open OpenPA', 'Open the OpenPA application'))
@@ -1131,9 +1190,15 @@ function rebuildTrayMenu(): void {
   if (runtimeConfig.agentUrl) {
     items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
     items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
-    items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
-    items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
-    items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
+    if (uiFeatureAvailable('processes')) {
+      items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
+    }
+    if (uiFeatureAvailable('events')) {
+      items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
+    }
+    if (uiFeatureAvailable('channels')) {
+      items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
+    }
     items.push({ type: 'separator' })
   }
   items.push({ label: 'Show', click: () => focusMostRecentAppWindow() })
@@ -1152,9 +1217,15 @@ function rebuildDockMenu(): void {
   if (runtimeConfig.agentUrl) {
     items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
     items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
-    items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
-    items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
-    items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
+    if (uiFeatureAvailable('processes')) {
+      items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
+    }
+    if (uiFeatureAvailable('events')) {
+      items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
+    }
+    if (uiFeatureAvailable('channels')) {
+      items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
+    }
   }
   dock.setMenu(Menu.buildFromTemplate(items))
 }
