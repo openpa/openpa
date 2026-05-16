@@ -88,6 +88,7 @@ def test_channel_is_newer_handles_dev_releases() -> None:
 
 def test_pip_spec_production_pins_version() -> None:
     from app.__version__ import __version__
+
     spec = feature_manifest.pip_spec(["embedding.me5"], channel="production")
     assert spec == f"openpa[embeddings-me5]=={__version__}"
 
@@ -95,6 +96,7 @@ def test_pip_spec_production_pins_version() -> None:
 def test_pip_spec_test_pins_version() -> None:
     # Test channel still pins — Test PyPI has the matching prerelease.
     from app.__version__ import __version__
+
     spec = feature_manifest.pip_spec(["embedding.me5"], channel="test")
     assert spec == f"openpa[embeddings-me5]=={__version__}"
 
@@ -104,7 +106,8 @@ def test_pip_spec_dev_skips_version_pin() -> None:
     # pinning to ``==<version>`` would force pip to consult PyPI for a
     # release that may not be published yet.
     spec = feature_manifest.pip_spec(
-        ["embedding.me5", "vectorstore.chroma"], channel="dev",
+        ["embedding.me5", "vectorstore.chroma"],
+        channel="dev",
     )
     assert spec == "openpa[embeddings-me5,vectorstore-chroma]"
 
@@ -115,6 +118,7 @@ def test_pip_spec_dev_with_no_features() -> None:
 
 def test_pip_spec_defaults_to_production() -> None:
     from app.__version__ import __version__
+
     spec = feature_manifest.pip_spec(["embedding.me5"])
     assert spec == f"openpa[embeddings-me5]=={__version__}"
 
@@ -159,7 +163,8 @@ def test_parse_release_prod_strips_v() -> None:
 
 def test_parse_release_test_translates_to_pep440() -> None:
     info = manifest._parse_release(
-        _release_payload("v0.1.5-test3", prerelease=True), channel="test",
+        _release_payload("v0.1.5-test3", prerelease=True),
+        channel="test",
     )
     assert info.version == "0.1.5.dev3"
     assert info.tag_name == "v0.1.5-test3"
@@ -219,11 +224,210 @@ def test_fetch_latest_dispatches_on_channel(monkeypatch: pytest.MonkeyPatch) -> 
     assert calls == ["prod", "test"]
 
 
+# ── dev-channel synthesis ────────────────────────────────────────────────
+
+
+def test_fetch_latest_dev_synthesizes_release_without_github(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On dev, fetch_latest must NOT hit GitHub — both _fetch_latest_prod
+    and _fetch_latest_test should remain uncalled. The synth release is
+    enough on its own to drive the in-app updater UI for testing.
+    """
+    prod_calls: list[None] = []
+    test_calls: list[None] = []
+
+    def fake_prod(*, repo, timeout):
+        prod_calls.append(None)
+        raise AssertionError("prod fetcher must not run on dev channel")
+
+    def fake_test(*, repo, timeout):
+        test_calls.append(None)
+        raise AssertionError("test fetcher must not run on dev channel")
+
+    monkeypatch.setattr(manifest, "_fetch_latest_prod", fake_prod)
+    monkeypatch.setattr(manifest, "_fetch_latest_test", fake_test)
+
+    info = manifest.fetch_latest(channel="dev")
+    assert info.channel == "dev"
+    # The synth carries the local-version suffix exactly.
+    assert info.version.endswith("+devforced")
+    # Compatibility floors are wide-open so existing dev installs are never blocked.
+    assert info.min_compatible_ui == "0.0.0"
+    assert info.min_supported_upgrade_from == "0.0.0"
+    assert prod_calls == []
+    assert test_calls == []
+
+
+def test_synthesized_dev_release_sorts_strictly_newer() -> None:
+    """The synth version must be > CURRENT_VERSION under :func:`manifest.parse`
+    for every current-version shape we ship. If this regresses, the Update
+    button will go dark on dev and there will be nothing to click.
+    """
+    synth = manifest._synthesize_dev_release()
+    # Walk a representative set of current-version shapes (final, dev,
+    # different majors/minors). Each must parse strictly less than synth.
+    for current in ("0.1.9", "0.1.9.dev6", "0.1.10.dev1", "0.2.0", "1.0.0"):
+        # Substitute a synth derived from THIS current so we test the
+        # actual relationship the runtime uses ("current+devforced > current").
+        forged_synth_version = f"{current}+devforced"
+        assert manifest.parse(forged_synth_version) > manifest.parse(
+            current
+        ), f"synth {forged_synth_version!r} did not sort > {current!r}"
+    # And the live synth (derived from the running __version__) must
+    # itself sort newer than the running version.
+    from app.__version__ import __version__ as CURRENT
+
+    assert manifest.parse(synth.version) > manifest.parse(CURRENT)
+
+
+def test_parse_pep440_accepts_local_version_suffix() -> None:
+    """parse_pep440's regex was extended to accept ``+local``; verify
+    populated local sorts strictly above empty, and the lexical compare
+    works the way the synth relies on.
+    """
+    assert channel.parse_pep440("0.1.5") < channel.parse_pep440("0.1.5+a")
+    assert channel.parse_pep440("0.1.5+a") < channel.parse_pep440("0.1.5+b")
+    assert channel.parse_pep440("0.1.5.dev1") < channel.parse_pep440("0.1.5.dev1+x")
+    # The original rejections still hold.
+    with pytest.raises(ValueError):
+        channel.parse_pep440("0.1.5-test1+x")  # SemVer pre-release, not PEP 440
+
+
+# ── runner skip-pip-on-dev ───────────────────────────────────────────────
+
+
+# ── CLI surface — ``openpa upgrade -y`` must parse ──────────────────────
+
+
+def test_upgrade_cli_accepts_yes_flag_at_group_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for ``openpa upgrade --yes`` / ``-y``.
+
+    The flag is declared on the ``apply`` subcommand, but the documented
+    one-liner ``openpa upgrade -y`` puts the flag at the group level
+    (before any subcommand name). Typer parses group-level args against
+    the root callback; if the root doesn't declare the flag, the run
+    fails with "No such option: --yes" before ``apply`` ever runs.
+
+    This was a real regression at one point — the Electron updater's
+    ``Apply now`` button printed exactly that error to the modal log.
+    """
+    from typer.testing import CliRunner
+    from app.cli.commands.upgrade import upgrade_app
+    from app.upgrade import runner
+
+    # Stub the runner so this stays a CLI-parse test, not an
+    # end-to-end upgrade. We assert on the *captured* yes value.
+    captured: dict[str, object] = {}
+
+    def fake_apply(target_version=None, *, callback=None, confirm=None):
+        # ``confirm`` is the gate `apply` wraps the runner's confirm with.
+        # When ``yes`` is True, the wrapper short-circuits to True without
+        # prompting, so the safest way to verify ``yes`` reached us is to
+        # check whether confirm returns True against a dummy release.
+        captured["confirmed_without_prompting"] = confirm(MagicMock()) if confirm else False
+        return True
+
+    monkeypatch.setattr(runner, "apply", fake_apply)
+    monkeypatch.setattr(runner, "check", lambda *a, **kw: (MagicMock(version="x"), "available"))
+
+    runner_cli = CliRunner()
+
+    # Form 1: group-level flag (the documented one-liner).
+    result = runner_cli.invoke(upgrade_app, ["--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["confirmed_without_prompting"] is True
+
+    # Form 2: subcommand-level flag (also documented; Electron uses this now).
+    captured.clear()
+    result = runner_cli.invoke(upgrade_app, ["apply", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["confirmed_without_prompting"] is True
+
+    # Form 3: short flag.
+    captured.clear()
+    result = runner_cli.invoke(upgrade_app, ["-y"])
+    assert result.exit_code == 0, result.output
+    assert captured["confirmed_without_prompting"] is True
+
+
+def test_apply_on_dev_skips_pip_install_but_still_migrates_and_health_checks(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clicking Update on a dev install must walk backup → (skipped install)
+    → migrate → health → done. The pip install is the one step that would
+    clobber the editable install; everything else is safe to run."""
+    dev_release = _fake_release(channel_value="dev", version="0.1.5+devforced")
+
+    # Force the runner past the version-check guard by stubbing check() to
+    # report "available" with our dev release.
+    monkeypatch.setattr(runner, "check", lambda callback=None: (dev_release, "available"))
+
+    pip_calls: list[str] = []
+    run_calls: list[list[str]] = []
+    health_calls: list[None] = []
+
+    def fake_pip_install(spec, callback, *, channel, upgrade=True):
+        pip_calls.append(spec)
+
+    def fake_run(cmd, callback, **kwargs):
+        run_calls.append(list(cmd))
+
+    def fake_wait_for_health(*, timeout_s):
+        health_calls.append(None)
+        return True
+
+    def fake_check_disk(*, min_free_mb):
+        return None
+
+    monkeypatch.setattr(runner, "_pip_install", fake_pip_install)
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_wait_for_health", fake_wait_for_health)
+    monkeypatch.setattr(runner, "_check_disk_space", fake_check_disk)
+
+    # Lock dir + backup stub.
+    monkeypatch.setattr(runner, "_lock_path", lambda: tmp_path / ".upgrade.lock")
+    from app.storage import backup as backup_module
+
+    monkeypatch.setattr(backup_module, "backup", lambda: tmp_path / "fake.sqlite.gz")
+
+    # Create the fake backup file so the runner's success-path doesn't
+    # try to read a missing file in the rollback branch (it shouldn't,
+    # since this test exercises the success path).
+    (tmp_path / "fake.sqlite.gz").write_bytes(b"")
+
+    events: list[runner.UpgradeEvent] = []
+    ok = runner.apply(callback=events.append)
+    assert ok is True, [e.message for e in events if not e.ok]
+
+    # The critical assertion: pip was NOT called on dev.
+    assert pip_calls == [], f"pip_install should be skipped on dev, got: {pip_calls!r}"
+
+    # But migrate, health, and the rest of the flow DID run.
+    assert any(
+        "db" in cmd and "upgrade" in cmd for cmd in run_calls
+    ), f"migrate step (openpa db upgrade) was not invoked: {run_calls!r}"
+    assert health_calls == [None], "health probe was not invoked"
+
+    # The install event was emitted with the skip message so the modal
+    # log shows it to the user.
+    install_events = [e for e in events if e.kind == "install"]
+    assert any(
+        "skipped" in e.message.lower() for e in install_events
+    ), f"no 'skipped' install event found in: {[e.message for e in install_events]}"
+
+
 # ── runner._pip_install argv composition ──────────────────────────────────
 
 
 def _fake_release(
-    *, channel_value: str = "production", version: str = "0.1.5", tag: str | None = None,
+    *,
+    channel_value: str = "production",
+    version: str = "0.1.5",
+    tag: str | None = None,
 ) -> manifest.ReleaseInfo:
     if tag is None:
         tag = f"v{version}"
@@ -249,6 +453,7 @@ def test_pip_install_prod_argv(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(runner, "_run", fake_run)
     from app.config.settings import BaseConfig
+
     monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
 
     runner._pip_install("openpa==0.1.5", None, channel="production")
@@ -270,6 +475,7 @@ def test_pip_install_test_argv(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(runner, "_run", fake_run)
     from app.config.settings import BaseConfig
+
     monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
     monkeypatch.setenv("OPENPA_PIP_INDEX_URL", "https://test.pypi.org/simple/")
     monkeypatch.setenv("OPENPA_PIP_EXTRA_INDEX_URL", "https://pypi.org/simple/")
@@ -299,6 +505,7 @@ def test_pip_install_test_falls_back_to_default_indexes(
 
     monkeypatch.setattr(runner, "_run", fake_run)
     from app.config.settings import BaseConfig
+
     monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
     monkeypatch.delenv("OPENPA_PIP_INDEX_URL", raising=False)
     monkeypatch.delenv("OPENPA_PIP_EXTRA_INDEX_URL", raising=False)
@@ -314,7 +521,8 @@ def test_pip_install_test_falls_back_to_default_indexes(
 
 
 def test_acquire_lock_or_recover_uses_persisted_channel(
-    tmp_path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When the lock JSON carries ``channel: test``, recovery must pip-install
     against Test PyPI (otherwise the dev wheel won't be found on prod PyPI).
@@ -355,7 +563,8 @@ def test_acquire_lock_or_recover_uses_persisted_channel(
 
 
 def test_acquire_lock_or_recover_defaults_to_production_for_legacy_lock(
-    tmp_path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Lock files written before channel-aware upgrades have no ``channel`` key.
     Recovery must fall back to production rather than crashing.

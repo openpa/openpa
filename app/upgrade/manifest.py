@@ -88,11 +88,61 @@ def fetch_latest(
     highest by PEP 440 ordering. Page 1 (default 30 items) is enough in
     practice; if a test channel ever accumulates more than 30 unreleased
     entries, the cap is the right thing to hit anyway.
+
+    ``channel="dev"`` short-circuits the GitHub lookup entirely and
+    returns a synthesised "always available" release derived from the
+    current install. Dev installs run a working copy, so there is no
+    upstream release that could be newer than the running code; without
+    the synth, the Update button would never light up on dev. See
+    :func:`_synthesize_dev_release`.
     """
     ch: Channel = channel if channel is not None else get_channel()
     if ch == "test":
         return _fetch_latest_test(repo=repo, timeout=timeout)
+    if ch == "dev":
+        return _synthesize_dev_release()
     return _fetch_latest_prod(repo=repo, timeout=timeout)
+
+
+def _synthesize_dev_release() -> ReleaseInfo:
+    """Build a synthetic ReleaseInfo that always reports as newer than
+    the running version.
+
+    Used only on the ``dev`` channel to exercise the in-app updater UI
+    end-to-end against a working-copy install. The version carries a
+    PEP 440 *local-version* suffix (``+devforced``) — :func:`parse`
+    treats that as strictly newer than the same version without one, so
+    ``is_newer(synth.version, CURRENT_VERSION)`` is always True
+    regardless of whether the current install is a final (``0.1.9``) or
+    a dev (``0.1.9.dev6``).
+
+    The runner's matching dev-channel branch in
+    :func:`app.upgrade.runner._apply_locked` skips the actual pip
+    install — so clicking Update on dev exercises backup → migrate →
+    health → restart without touching the editable install. See
+    UPGRADING.md for the operator-facing note.
+    """
+    synth_version = f"{_CURRENT_VERSION}+devforced"
+    return ReleaseInfo(
+        version=synth_version,
+        tag_name=f"v{synth_version}",
+        name="Dev channel — forced available for in-app updater testing",
+        html_url="https://github.com/openpa/openpa/blob/main/UPGRADING.md",
+        body=(
+            "**Dev channel synthetic release.**\n\n"
+            "This entry is generated locally so the in-app Update button is "
+            "always testable on a working-copy install. Clicking Update Now "
+            "will run the full upgrade flow (backup → migrate → restart) but "
+            "skip the actual `pip install` step — your editable install is "
+            "not modified. See UPGRADING.md for details."
+        ),
+        asset_url=None,
+        # Never blocks: the synth must work from any install older than
+        # itself (which is every dev install by construction).
+        min_compatible_ui="0.0.0",
+        min_supported_upgrade_from="0.0.0",
+        channel="dev",
+    )
 
 
 def _fetch_latest_prod(*, repo: str, timeout: float) -> ReleaseInfo:
@@ -191,7 +241,8 @@ def _parse_release(payload: dict[str, Any], *, channel: Channel) -> ReleaseInfo:
 
 def _fetch_release_manifest(url: str, *, timeout: float = 10.0) -> dict[str, Any]:
     req = urllib.request.Request(
-        url, headers={"User-Agent": f"openpa-upgrader/{_CURRENT_VERSION}"},
+        url,
+        headers={"User-Agent": f"openpa-upgrader/{_CURRENT_VERSION}"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
@@ -210,13 +261,15 @@ def _looks_like_semver(s: str) -> bool:
     return bool(_SEMVER.match(s))
 
 
-def parse(s: str) -> tuple[int, int, int, int, int]:
+def parse(s: str) -> tuple[int, int, int, int, int, str]:
     """Parse a version string into a sortable PEP 440 tuple.
 
-    Accepts the prod form (``0.1.5``) and the test-channel PEP 440 dev
-    form (``0.1.5.dev3``). A leading ``v`` is tolerated. Returns the
-    same shape as :func:`channel.parse_pep440`, which orders dev
-    releases before the corresponding final.
+    Accepts the prod form (``0.1.5``), the test-channel PEP 440 dev
+    form (``0.1.5.dev3``), and the dev-channel synth form with a local
+    suffix (``0.1.5+devforced``). A leading ``v`` is tolerated. Returns
+    the same shape as :func:`channel.parse_pep440`, which orders dev
+    releases before the corresponding final and treats a populated local
+    segment as strictly newer than no local segment.
     """
     return parse_pep440(_strip_v(s))
 

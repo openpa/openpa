@@ -76,26 +76,32 @@ def tag_to_pep440(tag: str) -> str:
     return f"{base}.dev{int(m.group(4))}"
 
 
-_PEP440 = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?$")
+_PEP440 = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?(?:\+([\w.]+))?$")
 
 
-def parse_pep440(version: str) -> tuple[int, int, int, int, int]:
-    """Parse ``MAJOR.MINOR.PATCH[.devN]`` into a sortable tuple.
+def parse_pep440(version: str) -> tuple[int, int, int, int, int, str]:
+    """Parse ``MAJOR.MINOR.PATCH[.devN][+LOCAL]`` into a sortable tuple.
 
-    Slots: ``(major, minor, patch, is_final, dev_counter)``. ``is_final``
-    is ``0`` for ``.devN`` releases and ``1`` for finals so that
-    ``0.1.5.devN < 0.1.5`` regardless of N (PEP 440 dev releases come
-    before the corresponding final). ``dev_counter`` orders multiple
-    devs against each other; it's ``0`` for finals where it never
-    matters.
+    Slots: ``(major, minor, patch, is_final, dev_counter, local)``.
+    ``is_final`` is ``0`` for ``.devN`` releases and ``1`` for finals so
+    that ``0.1.5.devN < 0.1.5`` regardless of N. ``dev_counter`` orders
+    multiple devs against each other.
+
+    ``local`` is the optional PEP 440 *local version* suffix (the part
+    after ``+``). It's compared lexically as a string — empty sorts
+    lowest, so a version with a local segment is always considered
+    strictly newer than the same version without one. We use this for
+    the dev-channel forced-available synth: ``X.Y.Z[.devN]+devforced``
+    is reliably newer than the working-copy install at ``X.Y.Z[.devN]``.
     """
     m = _PEP440.match(version or "")
     if not m:
         raise ValueError(f"Not a PEP 440 version we recognize: {version!r}")
-    major, minor, patch, dev = m.groups()
+    major, minor, patch, dev, local = m.groups()
+    local_str = local or ""
     if dev is None:
-        return (int(major), int(minor), int(patch), 1, 0)
-    return (int(major), int(minor), int(patch), 0, int(dev))
+        return (int(major), int(minor), int(patch), 1, 0, local_str)
+    return (int(major), int(minor), int(patch), 0, int(dev), local_str)
 
 
 def is_newer(latest: str, current: str) -> bool:

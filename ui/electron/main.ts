@@ -679,13 +679,18 @@ async function runBackendUpgrade(
   send('openpa:backend-upgrade:status', { phase: 'starting' })
   send('openpa:backend-upgrade:log', {
     stream: 'info',
-    line: `$ ${exe} upgrade --yes`,
+    line: `$ ${exe} upgrade apply --yes`,
   })
 
   return new Promise((resolve) => {
     let child: ChildProcess
     try {
-      child = spawn(exe, ['upgrade', '--yes'], {
+      // ``upgrade apply --yes`` is the explicit subcommand form. The
+      // older ``upgrade --yes`` form works too (the CLI's root callback
+      // forwards flags down to apply), but spelling out the subcommand
+      // avoids the "No such option" failure mode seen on shells / Typer
+      // versions where the root callback didn't accept ``--yes``.
+      child = spawn(exe, ['upgrade', 'apply', '--yes'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       })

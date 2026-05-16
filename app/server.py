@@ -21,7 +21,6 @@ from starlette.applications import Starlette
 from starlette.authentication import (
     AuthCredentials,
     AuthenticationBackend,
-    BaseUser,
     SimpleUser,
 )
 from starlette.middleware import Middleware
@@ -175,7 +174,10 @@ async def _connect_a2a_tool(row: dict):
     except Exception as e:  # noqa: BLE001
         logger.warning(f"A2A tool '{url}' unreachable: {e}")
         return build_a2a_stub(
-            url=url, name=row["name"], owner_profile=owner, error=str(e),
+            url=url,
+            name=row["name"],
+            owner_profile=owner,
+            error=str(e),
         )
 
 
@@ -226,14 +228,19 @@ async def _connect_mcp_tool(
         try:
             if extra.get("transport_type") == "stdio":
                 tool = await build_stdio_mcp_tool(
-                    command=extra["command"], args=extra.get("args", []),
-                    env=extra.get("env"), llm=llm, owner_profile=owner,
+                    command=extra["command"],
+                    args=extra.get("args", []),
+                    env=extra.get("env"),
+                    llm=llm,
+                    owner_profile=owner,
                     full_reasoning=bool(llm_params.get("full_reasoning", False)),
                     llm_factory=_mcp_llm_factory,
                 )
             else:
                 tool = await build_http_mcp_tool(
-                    url=url, llm=llm, owner_profile=owner,
+                    url=url,
+                    llm=llm,
+                    owner_profile=owner,
                     full_reasoning=bool(llm_params.get("full_reasoning", False)),
                     llm_factory=_mcp_llm_factory,
                 )
@@ -241,7 +248,9 @@ async def _connect_mcp_tool(
             logger.warning(f"MCP tool '{url}' unreachable: {e}")
     if tool is None:
         tool = build_mcp_stub(
-            url=url, name=row["name"], owner_profile=owner,
+            url=url,
+            name=row["name"],
+            owner_profile=owner,
             error="LLM not available" if llm is None else "Connection failed",
             transport_type=extra.get("transport_type", "http"),
             extra=extra,
@@ -251,16 +260,20 @@ async def _connect_mcp_tool(
 
 def _lazy_a2a_stub_from_row(row: dict):
     return build_a2a_stub(
-        url=row["source"], name=row["name"],
-        owner_profile=row["owner_profile"], error=_STUB_ERR_LAZY,
+        url=row["source"],
+        name=row["name"],
+        owner_profile=row["owner_profile"],
+        error=_STUB_ERR_LAZY,
     )
 
 
 def _lazy_mcp_stub_from_row(row: dict):
     extra = row.get("extra") or {}
     return build_mcp_stub(
-        url=row["source"], name=row["name"],
-        owner_profile=row["owner_profile"], error=_STUB_ERR_LAZY,
+        url=row["source"],
+        name=row["name"],
+        owner_profile=row["owner_profile"],
+        error=_STUB_ERR_LAZY,
         transport_type=extra.get("transport_type", "http"),
         extra=extra,
     )
@@ -397,6 +410,19 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # 0. Purge stale exec_shell stdout directories from previous runs.
     cleanup_stdout_on_startup()
 
+    # 0a. Clear the in-app upgrade status file if the previous run
+    #     terminated (done/failed). Leaves an in-flight upgrade alone
+    #     so a crashed detached runner can still be observed.
+    try:
+        from app.upgrade.status import clear_if_terminal as _clear_upgrade_status
+
+        _clear_upgrade_status()
+    except Exception:  # noqa: BLE001
+        # Best-effort; a missing module or unreadable file mustn't
+        # block startup. The /api/upgrade/status endpoint handles a
+        # corrupt file gracefully on its own.
+        pass
+
     # 0b. Verify channel sidecars' node_modules; reinstall if missing or
     #     stale. Blocks startup so adapters never see a half-installed tree.
     ensure_all_sidecars_installed()
@@ -431,8 +457,11 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         description=INTRODUCE_ASSISTANT,
         tags=["assistant"],
         examples=[
-            "Help me with my tasks", "What can you do?", "Tell me a joke",
-            "What's the weather like today?", "Set a reminder for me",
+            "Help me with my tasks",
+            "What can you do?",
+            "Tell me a joke",
+            "What's the weather like today?",
+            "Set a reminder for me",
             "Control my smart home devices",
         ],
     )
@@ -451,7 +480,9 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         agent_card_kwargs["security_schemes"] = {
             "bearerAuth": SecurityScheme(
                 root=HTTPAuthSecurityScheme(
-                    scheme="bearer", bearer_format="JWT", type="http",
+                    scheme="bearer",
+                    bearer_format="JWT",
+                    type="http",
                     description="JWT Bearer token authentication",
                 )
             ),
@@ -460,17 +491,20 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     agent_card = AgentCard(**agent_card_kwargs)
 
     request_handler = DefaultRequestHandler(
-        agent_executor=deferred_executor, task_store=InMemoryTaskStore(),
+        agent_executor=deferred_executor,
+        task_store=InMemoryTaskStore(),
     )
     context_builder = JWTCallContextBuilder(secret_provider=BaseConfig.get_jwt_secret)
     a2a_app = A2AStarletteApplication(
-        agent_card=agent_card, http_handler=request_handler,
+        agent_card=agent_card,
+        http_handler=request_handler,
         context_builder=context_builder,
     )
     routes = a2a_app.routes()
 
     async def test_endpoint(request: Request) -> PlainTextResponse:
         return PlainTextResponse("OK")
+
     routes.append(Route(path="/test", methods=["GET"], endpoint=test_endpoint))
 
     # Always-available pre-storage routes. The wizard endpoints in
@@ -502,6 +536,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         ),
     ]
     from app.middleware import A2AAuthGuard
+
     middleware_stack.append(Middleware(A2AAuthGuard))
 
     async def _on_shutdown() -> None:
@@ -511,6 +546,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             logger.exception("Error stopping skill watchers during shutdown")
         try:
             from app.channels import get_channel_registry
+
             await get_channel_registry().stop_all()
         except Exception:  # noqa: BLE001
             logger.exception("Error stopping channel adapters during shutdown")
@@ -608,23 +644,17 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                             llm = _builtin_llm_factory(tool.config_name, "admin")
                             tool.update_runtime_config(llm=llm)
                         except Exception as e:  # noqa: BLE001
-                            logger.warning(
-                                f"Could not bind LLM to built-in tool '{tool.name}' "
-                                f"at startup: {e}"
-                            )
+                            logger.warning(f"Could not bind LLM to built-in tool '{tool.name}' " f"at startup: {e}")
 
             # 5. Hydrate persisted A2A / MCP tools
             await _hydrate_persisted_tools(registry=registry, model_group_mgr=model_group_mgr)
 
             # 6. Skills -- per-profile sync
             known_profiles = [
-                row["name"] for row in await conversation_storage.list_profiles()
-                if not row["name"].startswith("__")
+                row["name"] for row in await conversation_storage.list_profiles() if not row["name"].startswith("__")
             ]
             try:
-                removed = registry.purge_legacy_skill_rows(
-                    str(profile_skills_dir(p)) for p in known_profiles
-                )
+                removed = registry.purge_legacy_skill_rows(str(profile_skills_dir(p)) for p in known_profiles)
                 if removed:
                     logger.info(f"Purged {removed} legacy skill row(s)")
             except Exception:  # noqa: BLE001
@@ -635,9 +665,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                 try:
                     await initialize_profile_skills(profile_name, registry, loop=loop)
                 except Exception:  # noqa: BLE001
-                    logger.exception(
-                        f"Skill init failed for profile '{profile_name}'"
-                    )
+                    logger.exception(f"Skill init failed for profile '{profile_name}'")
 
             # 6b. Documentation Search
             #
@@ -667,9 +695,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                     try:
                         document_service.full_reconcile(profile_name)
                     except Exception:  # noqa: BLE001
-                        logger.exception(
-                            f"Document reconcile failed for profile '{profile_name}'"
-                        )
+                        logger.exception(f"Document reconcile failed for profile '{profile_name}'")
                     try:
                         DocumentWatcher(
                             scope=profile_name,
@@ -677,9 +703,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                             sync_service=document_service,
                         ).start()
                     except Exception:  # noqa: BLE001
-                        logger.exception(
-                            f"Document watcher failed for profile '{profile_name}'"
-                        )
+                        logger.exception(f"Document watcher failed for profile '{profile_name}'")
             except Exception:  # noqa: BLE001
                 logger.exception("Documentation Search subsystem failed to initialize")
 
@@ -706,9 +730,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                 try:
                     openpa_agent.update_embeddings(profile_name)
                 except Exception:  # noqa: BLE001
-                    logger.exception(
-                        f"Eager embedding sync failed for profile '{profile_name}'"
-                    )
+                    logger.exception(f"Eager embedding sync failed for profile '{profile_name}'")
 
             # 7c. Autostart long-running processes
             try:
@@ -732,13 +754,15 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             # 7e. File watcher manager
             try:
                 from app.events import get_file_watcher_manager
+
                 get_file_watcher_manager().start(loop)
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to start file watcher manager")
 
             # 8. Build the real agent executor and the post-setup callback.
             agent_executor = OpenPAAgentExecutor(
-                openpa_agent, conversation_storage=conversation_storage,
+                openpa_agent,
+                conversation_storage=conversation_storage,
             )
 
             async def on_first_setup(profile: str) -> None:
@@ -751,36 +775,32 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                     try:
                         llm = _builtin_llm_factory(tool.config_name, profile)
                     except Exception as e:  # noqa: BLE001
-                        logger.warning(
-                            f"Could not bind LLM to built-in tool '{tool.name}' "
-                            f"after setup: {e}"
-                        )
+                        logger.warning(f"Could not bind LLM to built-in tool '{tool.name}' " f"after setup: {e}")
                         continue
                     tool.update_runtime_config(llm=llm)
                     try:
                         refresh_builtin_tool_oauth(
-                            registry, config_manager, tool.tool_id, profile=profile,
+                            registry,
+                            config_manager,
+                            tool.tool_id,
+                            profile=profile,
                         )
                     except Exception:  # noqa: BLE001
-                        logger.exception(
-                            f"OAuth refresh failed for built-in tool '{tool.name}'"
-                        )
+                        logger.exception(f"OAuth refresh failed for built-in tool '{tool.name}'")
                 try:
                     await initialize_profile_skills(
-                        profile, registry, loop=asyncio.get_running_loop(),
+                        profile,
+                        registry,
+                        loop=asyncio.get_running_loop(),
                     )
                 except Exception:  # noqa: BLE001
-                    logger.exception(
-                        f"Post-setup skill init failed for profile '{profile}'"
-                    )
+                    logger.exception(f"Post-setup skill init failed for profile '{profile}'")
 
                 if document_service is not None:
                     try:
                         document_service.full_reconcile(profile)
                     except Exception:  # noqa: BLE001
-                        logger.exception(
-                            f"Post-setup document reconcile failed for profile '{profile}'"
-                        )
+                        logger.exception(f"Post-setup document reconcile failed for profile '{profile}'")
                     try:
                         DocumentWatcher(
                             scope=profile,
@@ -788,9 +808,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
                             sync_service=document_service,
                         ).start()
                     except Exception:  # noqa: BLE001
-                        logger.exception(
-                            f"Post-setup document watcher failed for profile '{profile}'"
-                        )
+                        logger.exception(f"Post-setup document watcher failed for profile '{profile}'")
 
                 openpa_agent.update_embeddings()
                 logger.info("Post-setup: built-in tools rebound and skills synced")
@@ -856,6 +874,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             #     is in place after ``conversation_storage.initialize``.
             try:
                 from app.channels import get_channel_registry
+
                 await get_channel_registry(conversation_storage).start_all_enabled()
             except Exception:  # noqa: BLE001
                 logger.exception("Error starting channel adapters during boot")
@@ -940,6 +959,7 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
     # Resolution order:
     #   OPENPA_UI_DIR (explicit)  →  app/static/ui/ (wheel-bundled)
     from pathlib import Path
+
     override = os.environ.get("OPENPA_UI_DIR")
     if override:
         ui_dir = Path(override)
@@ -956,9 +976,11 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
     # ``html=True`` makes StaticFiles fall back to index.html for any
     # missing path — required for client-side routing under hash mode
     # to keep working when the user reloads on a deep link.
-    spa_app = Starlette(routes=[
-        Mount("/", app=StaticFiles(directory=str(ui_dir), html=True), name="ui"),
-    ])
+    spa_app = Starlette(
+        routes=[
+            Mount("/", app=StaticFiles(directory=str(ui_dir), html=True), name="ui"),
+        ]
+    )
     cfg = uvicorn.Config(spa_app, host=host, port=ui_port, log_level="warning")
     logger.info(f"SPA listener: http://{host}:{ui_port} (serving {ui_dir})")
     return uvicorn.Server(cfg)

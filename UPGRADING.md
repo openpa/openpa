@@ -34,58 +34,103 @@ The Docker desktop image runs `openpa db upgrade` from its entrypoint
 on every container start, so `docker pull openpa/openpa-desktop:latest`
 followed by `docker compose up` is sufficient for Docker installs.
 
-## Upgrading the Electron desktop app
+## Upgrading via the in-app Update button
 
-An Electron install is **two artifacts on different upgrade tracks**:
+Both the Electron desktop app and the Web UI now ship a one-click
+**Update now** button — on the top banner when a new version is
+detected, and in **Settings → Updates** at any time. Clicking it
+opens a progress modal that:
 
-- The **Electron shell** (window, tray, auto-launch, bundled web UI)
-  updates itself through `electron-updater`. At app launch it checks
-  the `latest*.yml` manifests attached to the GitHub Release; if a
-  newer version is available, it downloads in the background and
-  installs on the next app restart. No user action.
-- The **Python backend** (`openpa serve`, spawned as a subprocess by
-  the shell — see [`ui/electron/main.ts`](ui/electron/main.ts)) is the
-  same `~/.openpa/venv` install any non-Electron user has. It is
-  **not** updated by `electron-updater`. It updates only when the user
-  runs `openpa upgrade` in a terminal.
+1. Backs up your database (SQLite copy or `pg_dump`).
+2. Installs the new wheel and runs Alembic migrations.
+3. Streams live progress to the modal so you can see what's happening.
+4. Restarts the backend on the new version (via Docker's restart
+   policy, the Electron shell's supervisor, or systemd).
+5. Reports "Update complete" — or rolls back to the previous version
+   automatically on any failure.
 
-The in-app banner from `/api/upgrade/check` surfaces both: it tells the
-user when a newer backend is available and prints the exact command to
-run. Until that command runs, the new UI is talking to the old backend.
+No terminal needed. No commands to copy. **Don't close OpenPA while
+the upgrade is running** — quitting mid-flight leaves the lock file
+behind and the next launch will roll back from the captured backup.
 
-### What to do on each release
+### Architecture: one version, two delivery channels
 
-The Electron shell ships an in-app **Apply now** button on the
-"backend update available" banner. Clicking it opens a modal that
-runs `openpa upgrade --yes` under the shell, streams the output, and
-restarts the backend on success — no terminal needed.
+A single release tag (`v0.1.9`) ships:
 
-1. **After Electron auto-updates the shell, restart the app once.**
-   electron-updater applies the update at quit; until you quit and
-   relaunch, you're still running the old shell — and on a brand-new
-   shell version, the *previous* shell does not yet carry the in-app
-   apply button. The first upgrade after adopting this build still
-   needs the manual `openpa upgrade -y` step; every subsequent one is
-   one click.
-2. **Click "Apply now" in the banner.** Leave the modal open until it
-   reports "Upgrade complete." Do not close OpenPA while the upgrade
-   is in progress — quitting mid-flight leaves a lock file behind and
-   the next launch will roll back from the captured backup.
-3. **Manual fallback.** If the modal reports an error, or you prefer
-   the CLI, open a terminal and run `openpa upgrade -y` followed by
-   restarting the Electron app.
+- A **Python wheel** (PyPI / `~/.openpa/venv`) — the backend.
+- An **Electron installer** (GitHub Releases) — the desktop shell,
+  with the SPA bundled inside.
+
+The two arrive on independent triggers:
+
+| Channel | Delivers | Trigger |
+|---|---|---|
+| `electron-updater` | Electron shell + bundled SPA | App launch; downloads in background; installs on next quit |
+| `openpa upgrade` / `POST /api/upgrade/apply` | Python wheel + DB migrations | User clicks Update Now, or runs the CLI |
+
+When you click **Update now**, both tracks run in parallel: the
+Electron shell starts downloading, the backend upgrade runs in a
+detached subprocess, and the modal reconciles them. If the shell
+update finished but the backend hadn't yet, the modal prompts you to
+restart once both are settled.
+
+### Shell-only vs backend-only updates
+
+The unified UI hides which component changed: you see "OpenPA vX → vY
+available — Update now." Whether the diff is shell, backend, or
+both, you take the same action.
+
+### Testing the in-app updater on the `dev` channel
+
+For a working-copy / `uv sync` dev install, the channel is set in the
+repo-root [`.env`](.env) (`OPENPA_UPGRADE_CHANNEL=dev`) — the file
+[`app/config/settings.py`](app/config/settings.py) loads it at startup
+via `load_dotenv("app/../.env")`. That `.env` is the dev-environment
+config; `~/.openpa/.env` is only relevant for installed (non-dev)
+hosts and should not be edited to switch channels.
+
+On the `dev` channel, the `/api/upgrade/check` endpoint always reports
+an update available, and clicking **Update now** exercises the full
+flow (backup → migrate → restart) **without running `pip install`**.
+The synthetic target version is the running version plus a `+devforced`
+PEP 440 local suffix.
+
+This exists so a contributor can test the in-app updater UI against a
+working-copy install — there is no real "newer wheel" to publish for a
+dev install, so without the synthesis the Update button would never
+appear. The banner reappears after every restart on dev; that is the
+expected behaviour, not a bug.
+
+Production and test installs are unaffected: only `dev` channel
+short-circuits the GitHub lookup.
+
+### Manual CLI fallback (headless / SSH-only)
+
+Operators running OpenPA on a remote host without a graphical
+session can still upgrade from the command line:
+
+```powershell
+openpa upgrade            # interactive: confirms, then runs the flow
+openpa upgrade --yes      # non-interactive
+openpa upgrade check      # what's available, no changes
+```
+
+The CLI runs the same backup → install → migrate → health flow the
+in-app button uses. After it completes, restart the backend manually
+(`systemctl restart openpa`, `docker compose restart`, etc.) so the
+new wheel is loaded.
 
 ### When shell and backend versions disagree
 
-The two artifacts can drift because their upgrade triggers are
-independent. The combinations:
+Even with the unified UI, the two artifacts can drift in time because
+their upgrade triggers are independent. The combinations:
 
 | Shell | Backend | Behaviour |
 |---|---|---|
 | new | new | Normal. |
 | old | old | Normal — no upgrade attempted yet. |
 | old | new | Usually fine. The backend's `MIN_COMPATIBLE_UI` floor (see below) will reject genuinely stale shells. |
-| new | old | The risky case. New UI may call endpoints the old backend doesn't have. If the release bumped `MIN_COMPATIBLE_UI`, the banner blocks the UI with "upgrade backend"; otherwise individual features can silently 404 until the user runs `openpa upgrade`. |
+| new | old | The risky case. New UI may call endpoints the old backend doesn't have. If the release bumped `MIN_COMPATIBLE_UI`, the banner blocks the UI with "upgrade backend"; otherwise individual features can silently 404 until the user clicks Update Now. |
 
 The per-version notes below call out releases where this drift matters.
 
@@ -131,6 +176,15 @@ schema work. Full release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 - **No manual steps required.** No schema changes; no breaking config
   changes; data layout under `~/.openpa/` is unchanged.
+- **Unified update UI.** The Settings → Updates page and the top
+  banner now show one "OpenPA update available" card with a single
+  **Update now** button, instead of separate "Backend update" / "Desktop
+  app update" sections. The button does the right thing regardless of
+  whether the change is the shell, the backend, or both. Web UI users
+  also get the button — they used to see only a copy-the-command block.
+- **No more manual `openpa upgrade -y`.** The command still exists for
+  headless / SSH-only operators (see the section above), but it's no
+  longer surfaced in the UI.
 - **Install catalog refresh.** The Setup Wizard reads a new catalog
   format on next launch; existing installs do not need to re-run setup.
 - **Docker users.** Image pulls now follow a per-channel naming scheme

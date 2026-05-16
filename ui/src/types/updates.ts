@@ -1,5 +1,6 @@
 /**
- * Shared types for the update surfaces (UpdateBanner + UpdatesSettings).
+ * Shared types for the unified update surface (UpdateBanner +
+ * UpdatesSettings) driven by the ``useUpdate`` composable.
  *
  * ``BackendStatus`` is the response shape returned by
  * ``GET /api/upgrade/check`` — see ``app/api/upgrade.py``. The Python
@@ -7,9 +8,14 @@
  * union captures the payload fields that come with each.
  *
  * ``UpdaterStatus`` is the desktop-app side, sourced from electron-updater
- * via the ``window.openpa.updater.onStatus`` bridge. We just re-export the
- * global type declared in ``vite-env.d.ts`` so consumers can import both
- * types from one place.
+ * via the ``window.openpa.updater.onStatus`` bridge.
+ *
+ * ``UpgradeStatusFile`` mirrors ``GET /api/upgrade/status`` — the shape
+ * the detached runner writes to ``~/.openpa/.upgrade.status.json``.
+ *
+ * ``UnifiedUpdateState`` is what the composable exposes to consumers.
+ * It hides which component (shell/backend) has the change so the UI
+ * can render one card instead of two.
  */
 
 export type BackendStatus =
@@ -22,7 +28,6 @@ export type BackendStatus =
       channel?: string
       release_url: string
       release_notes: string
-      apply_command: string
       min_compatible_ui?: string
     }
   | {
@@ -39,10 +44,72 @@ export type BackendStatus =
 
 export type UpdaterStatus = OpenPAUpdaterStatus
 
-// Re-exports for the in-app backend-upgrade flow so consumers can
-// import all upgrade-related types from one module instead of dipping
-// into the global vite-env declarations directly.
+// Re-exports for the in-app Electron backend-upgrade flow.
 export type BackendUpgradePhase = OpenPABackendUpgradePhase
 export type BackendUpgradeStatus = OpenPABackendUpgradeStatus
 export type BackendUpgradeLog = OpenPABackendUpgradeLog
 export type BackendUpgradeDone = OpenPABackendUpgradeDone
+
+// ── Web-UI POST /api/upgrade/apply contract ───────────────────────────────
+
+export type UpgradeStatusPhase =
+  | 'idle'
+  | 'queued'
+  | 'check'
+  | 'backup'
+  | 'install'
+  | 'migrate'
+  | 'health'
+  | 'restart'
+  | 'rollback'
+  | 'done'
+  | 'failed'
+
+export type UpgradeStatusFile = {
+  upgrade_id: string | null
+  phase: UpgradeStatusPhase
+  ok: boolean
+  current_version: string | null
+  target_version: string | null
+  started_at: number | null
+  finished_at: number | null
+  exit_code: number | null
+  error: string | null
+  log_tail: string[]
+}
+
+export type UpgradeApplyResponse = {
+  ok: true
+  pid: number
+  status_url: string
+  stream_url: string
+}
+
+// ── Unified state exposed by useUpdate() ──────────────────────────────────
+
+/** Top-level state the renderer reacts to. */
+export type UnifiedUpdatePhase =
+  | 'idle'              // up to date or never checked — card hidden
+  | 'available'         // at least one component has a newer version
+  | 'applying'          // an upgrade is in flight; modal open
+  | 'restart_required'  // shell update downloaded; needs `Restart now`
+  | 'done'              // upgrade complete; modal can close
+  | 'failed'            // upgrade rolled back
+  | 'blocked'           // backend too old to upgrade in place
+
+export type UnifiedUpdateState = {
+  phase: UnifiedUpdatePhase
+  /** Version string to show in headers, e.g. "0.1.10". */
+  latestVersion: string | null
+  currentVersion: string | null
+  /** Truthy when the user can press the Update Now button. */
+  canApply: boolean
+  /** Live log lines from the in-flight upgrade, capped at LOG_TAIL_MAX. */
+  log: string[]
+  /** Human-readable phase label, e.g. "Installing wheel..." */
+  phaseLabel: string
+  /** Error string when phase === 'failed' or blocked. */
+  error: string | null
+  /** Release-notes URL (when available). */
+  releaseUrl: string | null
+}

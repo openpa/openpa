@@ -43,22 +43,39 @@ def _print_channel_banner() -> None:
 
 
 @upgrade_app.callback()
-def _root(ctx: typer.Context) -> None:
+def _root(
+    ctx: typer.Context,
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt (used by `openpa upgrade -y`).",
+    ),
+    target: str | None = typer.Option(
+        None,
+        "--target",
+        help="Target version (must equal the latest release; for safety).",
+    ),
+) -> None:
     """Default action: ``openpa upgrade`` with no subcommand runs ``apply``.
 
     Mirrors what most package-manager-style CLIs do (``brew upgrade``,
     ``cargo install --upgrade``) so users don't have to remember the
-    explicit subcommand for the common case.
+    explicit subcommand for the common case. The ``--yes`` / ``-y`` and
+    ``--target`` flags are accepted at this level too so the documented
+    one-liner ``openpa upgrade -y`` works without users having to know
+    they're really invoking the ``apply`` subcommand under the hood.
     """
     if ctx.invoked_subcommand is not None:
         return
-    ctx.invoke(upgrade_apply)
+    ctx.invoke(upgrade_apply, yes=yes, target=target)
 
 
 @upgrade_app.command("check")
 def upgrade_check() -> None:
     """Check whether a newer version is available without changing anything."""
     from app.upgrade import runner
+
     _print_channel_banner()
     release, status = runner.check(callback=_print_event)
     if status == "available" and release is not None:
@@ -69,11 +86,14 @@ def upgrade_check() -> None:
 @upgrade_app.command("apply")
 def upgrade_apply(
     yes: bool = typer.Option(
-        False, "--yes", "-y",
+        False,
+        "--yes",
+        "-y",
         help="Skip the confirmation prompt.",
     ),
     target: str | None = typer.Option(
-        None, "--target",
+        None,
+        "--target",
         help="Target version (must equal the latest release; for safety).",
     ),
 ) -> None:

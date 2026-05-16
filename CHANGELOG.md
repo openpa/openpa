@@ -26,6 +26,22 @@ Move to a dated section on release.
 ## [0.1.9] — TBD
 
 ### Added
+- Dev-channel forced-available upgrade: on `OPENPA_UPGRADE_CHANNEL=dev`,
+  `/api/upgrade/check` synthesises a "newer" release without hitting
+  GitHub, and the runner skips `pip install` so the in-app updater UI
+  can be tested end-to-end against a working-copy install without
+  modifying the editable install. See [UPGRADING.md](UPGRADING.md).
+- Unified in-app upgrade UX: one "Update available" card on the banner
+  and in Settings → Updates, one Update button, with a live-streaming
+  progress modal. Works in both the Electron desktop app and the web
+  UI. No more manual `openpa upgrade -y` step.
+- `POST /api/upgrade/apply`, `GET /api/upgrade/status`, and
+  `GET /api/upgrade/stream` for web-UI users: the server spawns a
+  detached upgrade runner that writes progress to
+  `~/.openpa/.upgrade.status.json`, kills the parent process on
+  success, and relies on the supervisor (Docker / Electron / systemd)
+  to relaunch the new wheel. Endpoints are auth-gated; `/check`
+  remains public.
 - Install catalog: structured registry of deployment/install/service modes
   consumed by the Setup Wizard. Source: [`install/catalog.toml`](install/catalog.toml),
   generated copies in [`install/_catalog.{json,ps1,sh}`](install/),
@@ -41,6 +57,12 @@ Move to a dated section on release.
   `openpa/openpa-desktop:<version>.dev1`, production pulls `:latest`.
 
 ### Changed
+- The Settings → Updates page and UpdateBanner no longer distinguish
+  "backend" from "desktop app" updates; both surface as a single
+  "OpenPA vX → vY available" with one Update button. The
+  copy-the-command UX (`openpa upgrade -y`) is removed from the UI;
+  the CLI remains documented in [UPGRADING.md](UPGRADING.md) as a
+  fallback for headless / SSH-only operators.
 - Docker bundle is always regenerated on install (previously reused
   stale config in some paths).
 - `release-test.yml` polls the PyPI simple index rather than the JSON

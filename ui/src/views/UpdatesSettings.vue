@@ -1,32 +1,23 @@
 <script setup lang="ts">
 /**
- * Updates settings page — manual "Check for updates", auto-update toggle,
- * release channel picker, and a status panel showing both the backend
- * (Python server) and the desktop app (Electron / electron-updater).
+ * Updates settings page — single unified status + Update button. Shell
+ * and backend updates are coordinated through the ``useUpdate``
+ * composable so this view shows exactly the same state as the global
+ * UpdateBanner.
  *
- * Both update tracks are independent:
- *   - Backend updates come via the ``/api/upgrade/check`` endpoint which
- *     polls GitHub Releases. Applying the upgrade is intentionally still a
- *     CLI operation (``openpa upgrade -y``) — we surface the exact command
- *     and a Copy button rather than running it from a long-lived HTTP
- *     server. See ``app/api/upgrade.py``.
- *   - Desktop-app updates come via ``electron-updater`` and are driven by
- *     the ``window.openpa.updater`` IPC bridge. Auto-check on startup is
- *     gated by ``runtimeConfig.autoUpdate``; the channel (stable/beta/dev)
- *     is read once at boot, so changing it requires an app restart.
- *
- * Under the web build (``window.openpa`` is undefined) only the backend
- * panel is interactive; the desktop-app preferences are grayed out.
+ * Preferences (auto-update toggle, channel display) remain Electron-
+ * only; under the web build they're grayed out.
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  ElButton, ElCard, ElMessage, ElSwitch, ElTag,
+  ElButton, ElCard, ElSwitch, ElTag,
 } from 'element-plus';
 import { Icon } from '@iconify/vue';
 
 import { useSettingsStore } from '../stores/settings';
-import type { BackendStatus, UpdaterStatus } from '../types/updates';
+import { useUpdate } from '../composables/useUpdate';
 
 const props = defineProps<{ profile: string }>();
 const router = useRouter();
@@ -34,90 +25,18 @@ const settingsStore = useSettingsStore();
 
 const APP_VERSION =
   typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
-const isElectron = computed(() => typeof window !== 'undefined' && !!window.openpa);
 
-// ── Backend update state ─────────────────────────────────────────────────
-
-const backend = ref<BackendStatus>({ status: 'unknown' });
-
-async function checkBackend(): Promise<void> {
-  if (!settingsStore.agentUrl) {
-    backend.value = { status: 'error', reason: 'No agent URL configured' };
-    return;
-  }
-  try {
-    const r = await fetch(`${settingsStore.agentUrl}/api/upgrade/check`);
-    if (!r.ok) {
-      backend.value = { status: 'error', reason: `HTTP ${r.status}` };
-      return;
-    }
-    backend.value = await r.json();
-  } catch (err) {
-    backend.value = {
-      status: 'error',
-      reason: err instanceof Error ? err.message : 'Network error',
-    };
-  }
-}
-
-// ── Desktop-app updater state ────────────────────────────────────────────
-
-const updater = ref<UpdaterStatus>({ status: 'unavailable' });
-const installing = ref(false);
-
-function onUpdaterStatus(payload: UpdaterStatus) {
-  updater.value = payload;
-}
-
-async function checkUpdater(): Promise<void> {
-  if (!window.openpa) return;
-  try {
-    const result = await window.openpa.updater.check();
-    // The main process emits status events on its own; ``check`` returns
-    // the immediate result, which is mostly useful for unit tests. Trust
-    // the event stream for the live status.
-    if (result) onUpdaterStatus(result);
-  } catch (err) {
-    onUpdaterStatus({
-      status: 'error',
-      error: err instanceof Error ? err.message : 'Updater error',
-    });
-  }
-}
-
-async function downloadUpdater() {
-  if (!window.openpa) return;
-  try {
-    await window.openpa.updater.download();
-  } catch (err) {
-    ElMessage.error(
-      `Couldn't start download: ${err instanceof Error ? err.message : 'unknown'}`,
-    );
-  }
-}
-
-async function installUpdater() {
-  if (!window.openpa) return;
-  installing.value = true;
-  try {
-    await window.openpa.updater.install();
-  } catch (err) {
-    installing.value = false;
-    ElMessage.error(
-      `Install failed: ${err instanceof Error ? err.message : 'unknown'}`,
-    );
-  }
-}
+const { state, isElectron, checkNow, applyUpdate, applyShellRestart } = useUpdate();
 
 // ── Manual "Check for updates" ───────────────────────────────────────────
 
 const checking = ref(false);
 const lastCheckedAt = ref<Date | null>(null);
 
-async function checkAll() {
+async function doCheck() {
   checking.value = true;
   try {
-    await Promise.all([checkBackend(), isElectron.value ? checkUpdater() : Promise.resolve()]);
+    await checkNow();
     lastCheckedAt.value = new Date();
   } finally {
     checking.value = false;
@@ -128,7 +47,6 @@ async function checkAll() {
 // every 10 seconds so the label stays roughly fresh without a re-render
 // per second.
 const now = ref(Date.now());
-let nowTimer: ReturnType<typeof setInterval> | null = null;
 
 const lastCheckedLabel = computed(() => {
   if (!lastCheckedAt.value) return 'Not checked yet';
@@ -149,79 +67,61 @@ const autoUpdate = computed({
   },
 });
 
-// The release channel is fixed at install time and is not user-switchable.
-// We display it read-only so support can identify which feed the install is
-// polling, but offer no UI to change it — that requires re-running the
-// installer. See ``app/upgrade/channel.py`` for the env-var contract.
-const backendChannelLabel = computed(() => {
-  const b = backend.value;
-  if ('channel' in b && b.channel) return b.channel;
+// Release channel is fixed at install time. We display it read-only.
+const installChannel = computed<string>(() => {
+  if (isElectron() && window.openpa?.config?.channel) {
+    return window.openpa.config.channel;
+  }
   return 'unknown';
 });
 
-// ── Status labels / colors ───────────────────────────────────────────────
+// ── Status panel ─────────────────────────────────────────────────────────
 
 type BadgeTone = 'success' | 'info' | 'warning' | 'danger';
 
-const backendBadge = computed<{ label: string; tone: BadgeTone }>(() => {
-  switch (backend.value.status) {
-    case 'up_to_date': return { label: 'Up to date', tone: 'success' };
-    case 'available':  return { label: `Update available: v${backend.value.latest}`, tone: 'warning' };
-    case 'too_old':    return { label: 'Too old to upgrade in place', tone: 'danger' };
-    case 'unreachable': return { label: "Couldn't reach release server", tone: 'info' };
-    case 'unavailable': return { label: 'Upgrade module unavailable', tone: 'info' };
-    case 'error':      return { label: `Error: ${backend.value.reason}`, tone: 'danger' };
-    default:           return { label: 'Not checked yet', tone: 'info' };
+const statusBadge = computed<{ label: string; tone: BadgeTone }>(() => {
+  switch (state.value.phase) {
+    case 'idle': return { label: 'Up to date', tone: 'success' };
+    case 'available':
+      return {
+        label: state.value.latestVersion
+          ? `Update available: v${state.value.latestVersion}`
+          : 'Update available',
+        tone: 'warning',
+      };
+    case 'applying': return { label: 'Updating…', tone: 'info' };
+    case 'restart_required': return { label: 'Restart to finish', tone: 'warning' };
+    case 'done': return { label: 'Updated', tone: 'success' };
+    case 'failed': return { label: 'Update failed', tone: 'danger' };
+    case 'blocked': return { label: 'Too old to upgrade', tone: 'danger' };
   }
 });
 
-const updaterBadge = computed<{ label: string; tone: BadgeTone }>(() => {
-  if (!isElectron.value) {
-    return { label: 'Desktop app only', tone: 'info' };
-  }
-  switch (updater.value.status) {
-    case 'up_to_date':  return { label: 'Up to date', tone: 'success' };
-    case 'available':   return { label: 'Update available', tone: 'warning' };
-    case 'checking':    return { label: 'Checking…', tone: 'info' };
-    case 'downloading': {
-      const pct = updater.value.progress?.percent;
-      return { label: pct != null ? `Downloading ${Math.round(pct)}%` : 'Downloading…', tone: 'info' };
-    }
-    case 'ready':       return { label: 'Ready to install', tone: 'warning' };
-    case 'error':       return { label: `Error: ${updater.value.error ?? 'unknown'}`, tone: 'danger' };
-    case 'unavailable': return { label: 'Not checked yet', tone: 'info' };
-    default:            return { label: 'Not checked yet', tone: 'info' };
-  }
-});
-
-// ── Backend detail helpers ───────────────────────────────────────────────
-
-const applyCommand = computed(() =>
-  backend.value.status === 'available' ? backend.value.apply_command : 'openpa upgrade -y',
+const installedVersion = computed(() =>
+  state.value.currentVersion ?? APP_VERSION ?? 'unknown',
 );
 
-function copyApplyCommand() {
-  navigator.clipboard
-    ?.writeText(applyCommand.value)
-    .then(() => ElMessage.success('Command copied'))
-    .catch(() => ElMessage.warning('Copy failed — select and copy manually'));
+function onPrimaryButton() {
+  if (state.value.phase === 'restart_required') {
+    void applyShellRestart();
+  } else {
+    void applyUpdate();
+  }
 }
+
+const primaryButtonLabel = computed(() => {
+  switch (state.value.phase) {
+    case 'restart_required': return 'Restart now';
+    case 'failed': return 'Retry';
+    default: return 'Update now';
+  }
+});
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
 
 onMounted(() => {
-  void checkAll();
-  if (window.openpa?.updater) {
-    window.openpa.updater.onStatus(onUpdaterStatus);
-  }
-  nowTimer = setInterval(() => { now.value = Date.now(); }, 10_000);
-});
-
-onUnmounted(() => {
-  if (window.openpa?.updater) {
-    window.openpa.updater.offStatus(onUpdaterStatus);
-  }
-  if (nowTimer) clearInterval(nowTimer);
+  void doCheck();
+  setInterval(() => { now.value = Date.now(); }, 10_000);
 });
 
 function goBack() {
@@ -239,39 +139,23 @@ function goBack() {
         </button>
         <h1 class="updates-title">Updates</h1>
         <p class="updates-subtitle">
-          Check for new versions of OpenPA and choose how the desktop app updates itself.
+          Check for new versions of OpenPA and install them with one click.
         </p>
       </div>
 
       <!-- ── Status panel ───────────────────────────────────────────── -->
       <ElCard class="section-card" shadow="never">
-        <div class="status-row">
-          <div class="status-line">
-            <Icon icon="mdi:server" class="status-icon" />
-            <div class="status-text">
-              <div class="status-title">OpenPA backend</div>
-              <div class="status-meta" v-if="'current' in backend && backend.current">
-                v{{ backend.current }}
-              </div>
+        <div class="status-line">
+          <Icon icon="mdi:package-variant-closed" class="status-icon" />
+          <div class="status-text">
+            <div class="status-title">OpenPA</div>
+            <div class="status-meta">
+              v{{ installedVersion }}
             </div>
-            <ElTag :type="backendBadge.tone" effect="light" round>
-              {{ backendBadge.label }}
-            </ElTag>
           </div>
-
-          <div class="status-line">
-            <Icon icon="mdi:monitor" class="status-icon" />
-            <div class="status-text">
-              <div class="status-title">Desktop app</div>
-              <div class="status-meta">
-                <span v-if="APP_VERSION">v{{ APP_VERSION }}</span>
-                <span v-else>version unknown</span>
-              </div>
-            </div>
-            <ElTag :type="updaterBadge.tone" effect="light" round>
-              {{ updaterBadge.label }}
-            </ElTag>
-          </div>
+          <ElTag :type="statusBadge.tone" effect="light" round>
+            {{ statusBadge.label }}
+          </ElTag>
         </div>
 
         <div class="check-row">
@@ -279,7 +163,7 @@ function goBack() {
           <ElButton
             type="primary"
             :loading="checking"
-            @click="checkAll"
+            @click="doCheck"
           >
             <Icon icon="mdi:refresh" />
             <span style="margin-left: 6px">Check for updates</span>
@@ -287,96 +171,80 @@ function goBack() {
         </div>
       </ElCard>
 
-      <!-- ── Backend update detail ──────────────────────────────────── -->
+      <!-- ── Update available / action card ─────────────────────────── -->
       <ElCard
-        v-if="backend.status === 'available'"
+        v-if="state.phase === 'available' || state.phase === 'failed' || state.phase === 'restart_required'"
         class="section-card detail-card"
         shadow="never"
       >
-        <h3 class="section-title">Backend update available</h3>
+        <h3 class="section-title">
+          <template v-if="state.phase === 'available'">Update to v{{ state.latestVersion }}</template>
+          <template v-else-if="state.phase === 'restart_required'">Restart to finish update</template>
+          <template v-else>Update failed</template>
+        </h3>
         <p class="section-body">
-          v{{ backend.current }} → <strong>v{{ backend.latest }}</strong>.
-          Run the command below on the machine that's hosting OpenPA to apply it.
+          <template v-if="state.phase === 'available' && state.currentVersion && state.latestVersion">
+            Move OpenPA from v{{ state.currentVersion }} to v{{ state.latestVersion }}.
+            Click <strong>Update now</strong> and OpenPA will install the new version,
+            run migrations, and restart automatically. No commands needed.
+          </template>
+          <template v-else-if="state.phase === 'restart_required'">
+            The downloaded update is staged. Click <strong>Restart now</strong>
+            to apply it.
+          </template>
+          <template v-else>
+            {{ state.error }}
+          </template>
         </p>
-        <div class="cmd-row">
-          <code class="cmd">{{ applyCommand }}</code>
-          <ElButton size="small" @click="copyApplyCommand">
-            <Icon icon="mdi:content-copy" />
-            <span style="margin-left: 4px">Copy</span>
+        <div class="action-row">
+          <ElButton type="primary" @click="onPrimaryButton">
+            <Icon
+              :icon="state.phase === 'restart_required' ? 'mdi:restart' : 'mdi:download'"
+            />
+            <span style="margin-left: 6px">{{ primaryButtonLabel }}</span>
           </ElButton>
+          <a
+            v-if="state.releaseUrl"
+            :href="state.releaseUrl"
+            target="_blank"
+            rel="noopener"
+            class="notes-link"
+          >
+            View release notes
+          </a>
         </div>
-        <p class="section-hint">
-          <a :href="backend.release_url" target="_blank" rel="noopener">View release notes</a>
-        </p>
       </ElCard>
 
+      <!-- ── Blocked card (backend too old) ──────────────────────────── -->
       <ElCard
-        v-else-if="backend.status === 'too_old'"
+        v-else-if="state.phase === 'blocked'"
         class="section-card detail-card blocked"
         shadow="never"
       >
-        <h3 class="section-title">Backend is too old to upgrade in place</h3>
+        <h3 class="section-title">Too old to upgrade in place</h3>
         <p class="section-body">
-          The latest release (v{{ backend.latest }}) requires at least
-          v{{ backend.min_supported_upgrade_from }}; this install is v{{ backend.current }}.
-          See the release notes for the legacy export path.
+          {{ state.error }} See the release notes for the legacy export path.
         </p>
-        <p class="section-hint">
-          <a :href="backend.release_url" target="_blank" rel="noopener">View release notes</a>
+        <p class="section-hint" v-if="state.releaseUrl">
+          <a :href="state.releaseUrl" target="_blank" rel="noopener">View release notes</a>
         </p>
-      </ElCard>
-
-      <!-- ── Desktop app actions (only when there's something to do) ── -->
-      <ElCard
-        v-if="isElectron && (updater.status === 'available' || updater.status === 'ready')"
-        class="section-card detail-card"
-        shadow="never"
-      >
-        <h3 class="section-title">Desktop app update</h3>
-        <p class="section-body" v-if="updater.status === 'available'">
-          A new version of the OpenPA desktop app is available
-          <span v-if="updater.info?.version">(v{{ updater.info.version }})</span>.
-          Download it now to install on next restart.
-        </p>
-        <p class="section-body" v-if="updater.status === 'ready'">
-          The OpenPA desktop app update
-          <span v-if="updater.info?.version">(v{{ updater.info.version }})</span>
-          is ready. Restart to install.
-        </p>
-        <div class="action-row">
-          <ElButton
-            v-if="updater.status === 'available'"
-            type="primary"
-            @click="downloadUpdater"
-          >
-            Download
-          </ElButton>
-          <ElButton
-            v-if="updater.status === 'ready'"
-            type="primary"
-            :loading="installing"
-            @click="installUpdater"
-          >
-            Restart and install
-          </ElButton>
-        </div>
       </ElCard>
 
       <!-- ── Preferences ───────────────────────────────────────────── -->
       <ElCard class="section-card" shadow="never">
         <h3 class="section-title">Preferences</h3>
 
-        <div class="pref-row" :class="{ disabled: !isElectron }">
+        <div class="pref-row" :class="{ disabled: !isElectron() }">
           <div class="pref-info">
-            <div class="pref-label">Automatically check for desktop-app updates</div>
+            <div class="pref-label">Automatically check for updates</div>
             <div class="pref-hint">
-              When on, the app checks for desktop-app updates each time it starts.
+              When on, the desktop app checks for updates each time it starts.
               When off, use "Check for updates" above to check manually.
             </div>
           </div>
           <ElSwitch
             v-model="autoUpdate"
-            :disabled="!isElectron"
+            :disabled="!isElectron()"
           />
         </div>
 
@@ -390,11 +258,12 @@ function goBack() {
               installs never see <strong>production</strong> versions.
             </div>
           </div>
-          <ElTag effect="plain">{{ backendChannelLabel }}</ElTag>
+          <ElTag effect="plain">{{ installChannel }}</ElTag>
         </div>
 
-        <p v-if="!isElectron" class="pref-disabled-note">
-          Desktop-app preferences are available in the OpenPA desktop app only.
+        <p v-if="!isElectron()" class="pref-disabled-note">
+          The auto-update toggle only applies to the desktop app. Web UI
+          users still get the one-click Update button above.
         </p>
       </ElCard>
     </div>
@@ -426,7 +295,6 @@ function goBack() {
 .detail-card { border-left: 3px solid var(--el-color-warning); }
 .detail-card.blocked { border-left-color: var(--el-color-danger); }
 
-.status-row { display: flex; flex-direction: column; gap: 10px; }
 .status-line {
   display: flex; align-items: center; gap: 12px;
   padding: 6px 0;
@@ -445,17 +313,12 @@ function goBack() {
 }
 .last-checked { font-size: 0.8rem; color: var(--text-tertiary); }
 
-.cmd-row {
-  display: flex; align-items: center; gap: 8px;
-  background: var(--hover-bg); padding: 8px 12px; border-radius: 6px;
+.action-row {
+  display: flex; align-items: center; gap: 12px;
 }
-.cmd {
-  flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.875rem; color: var(--text-primary);
-  white-space: nowrap; overflow-x: auto;
+.notes-link {
+  font-size: 0.8rem; color: var(--primary-color);
 }
-
-.action-row { display: flex; gap: 8px; }
 
 .pref-row {
   display: flex; align-items: center; justify-content: space-between;

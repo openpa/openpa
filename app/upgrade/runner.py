@@ -39,21 +39,23 @@ from pathlib import Path
 from typing import Callable
 
 from app.__version__ import (
-    MIN_SUPPORTED_UPGRADE_FROM,
     __version__ as CURRENT_VERSION,
 )
 from app.upgrade import manifest
 from app.upgrade.channel import Channel, get_channel
+
 
 # Lock file lives alongside the working dir's other state. Its presence
 # means an upgrade is in flight (or crashed mid-flight); the JSON inside
 # captures enough state to roll back.
 def _lock_path() -> Path:
     from app.config.settings import BaseConfig
+
     return Path(BaseConfig.OPENPA_WORKING_DIR) / ".upgrade.lock"
 
 
 # ── progress events ──────────────────────────────────────────────────────
+
 
 @dataclass
 class UpgradeEvent:
@@ -98,10 +100,13 @@ def check(callback: ProgressCallback | None = None) -> tuple[manifest.ReleaseInf
       - ``unreachable``: the GitHub API call failed.
     """
     channel = get_channel()
-    _emit(callback, UpgradeEvent(
-        "check",
-        f"Looking up latest release on {channel} channel...",
-    ))
+    _emit(
+        callback,
+        UpgradeEvent(
+            "check",
+            f"Looking up latest release on {channel} channel...",
+        ),
+    )
     try:
         release = manifest.fetch_latest(channel=channel)
     except urllib.error.URLError as e:
@@ -112,10 +117,13 @@ def check(callback: ProgressCallback | None = None) -> tuple[manifest.ReleaseInf
         return None, "unreachable"
 
     if not manifest.is_newer(release.version, CURRENT_VERSION):
-        _emit(callback, UpgradeEvent(
-            "check",
-            f"Up to date (current {CURRENT_VERSION}, latest {release.version}).",
-        ))
+        _emit(
+            callback,
+            UpgradeEvent(
+                "check",
+                f"Up to date (current {CURRENT_VERSION}, latest {release.version}).",
+            ),
+        )
         return release, "up_to_date"
 
     # The new release's ``min_supported_upgrade_from`` declares whether
@@ -123,22 +131,28 @@ def check(callback: ProgressCallback | None = None) -> tuple[manifest.ReleaseInf
     # compares CURRENT >= floor. If we're below the floor, this build
     # can't take us forward and the user needs the legacy export tool.
     if not manifest.is_at_or_above(CURRENT_VERSION, release.min_supported_upgrade_from):
-        _emit(callback, UpgradeEvent(
-            "check",
-            (
-                f"Latest is {release.version} but it requires at least "
-                f"{release.min_supported_upgrade_from} to upgrade in place; "
-                f"this install is {CURRENT_VERSION}. See the release notes."
+        _emit(
+            callback,
+            UpgradeEvent(
+                "check",
+                (
+                    f"Latest is {release.version} but it requires at least "
+                    f"{release.min_supported_upgrade_from} to upgrade in place; "
+                    f"this install is {CURRENT_VERSION}. See the release notes."
+                ),
+                ok=False,
             ),
-            ok=False,
-        ))
+        )
         return release, "too_old"
 
-    _emit(callback, UpgradeEvent(
-        "check",
-        f"Update available: {CURRENT_VERSION} → {release.version}.",
-        meta={"current": CURRENT_VERSION, "target": release.version},
-    ))
+    _emit(
+        callback,
+        UpgradeEvent(
+            "check",
+            f"Update available: {CURRENT_VERSION} → {release.version}.",
+            meta={"current": CURRENT_VERSION, "target": release.version},
+        ),
+    )
     return release, "available"
 
 
@@ -164,12 +178,14 @@ def apply(
         return False
 
     if target_version and target_version != release.version:
-        _emit(callback, UpgradeEvent(
-            "check",
-            f"Requested target {target_version} differs from latest {release.version}; "
-            "skipping upgrade.",
-            ok=False,
-        ))
+        _emit(
+            callback,
+            UpgradeEvent(
+                "check",
+                f"Requested target {target_version} differs from latest {release.version}; " "skipping upgrade.",
+                ok=False,
+            ),
+        )
         return False
 
     if confirm and not confirm(release):
@@ -198,12 +214,15 @@ def acquire_lock_or_recover(callback: ProgressCallback | None = None) -> None:
         # know what state we're in. Prefer manual intervention over
         # a wrong automatic decision.
         lock.unlink(missing_ok=True)
-        _emit(callback, UpgradeEvent(
-            "rollback",
-            "Found an unreadable upgrade lock; cleared it. Inspect the install if "
-            "you didn't expect an upgrade to be in progress.",
-            ok=False,
-        ))
+        _emit(
+            callback,
+            UpgradeEvent(
+                "rollback",
+                "Found an unreadable upgrade lock; cleared it. Inspect the install if "
+                "you didn't expect an upgrade to be in progress.",
+                ok=False,
+            ),
+        )
         return
 
     backup_path = state.get("backup_path")
@@ -211,15 +230,16 @@ def acquire_lock_or_recover(callback: ProgressCallback | None = None) -> None:
     # Older lock files (from before channel-aware upgrades shipped) won't
     # carry a ``channel`` key; default to production for those, since
     # any host that ran a prior upgrade was a prod host by definition.
-    recovery_channel: Channel = (
-        "test" if state.get("channel") == "test" else "production"
+    recovery_channel: Channel = "test" if state.get("channel") == "test" else "production"
+    _emit(
+        callback,
+        UpgradeEvent(
+            "rollback",
+            f"Detected interrupted upgrade (was at {previous_version}); restoring backup.",
+            ok=False,
+            meta=state,
+        ),
     )
-    _emit(callback, UpgradeEvent(
-        "rollback",
-        f"Detected interrupted upgrade (was at {previous_version}); restoring backup.",
-        ok=False,
-        meta=state,
-    ))
     try:
         if backup_path and Path(backup_path).is_file():
             from app.storage.backup import restore as _restore
@@ -227,7 +247,9 @@ def acquire_lock_or_recover(callback: ProgressCallback | None = None) -> None:
             _restore(Path(backup_path))
         if previous_version:
             _pip_install(
-                f"openpa=={previous_version}", callback, channel=recovery_channel,
+                f"openpa=={previous_version}",
+                callback,
+                channel=recovery_channel,
             )
     finally:
         lock.unlink(missing_ok=True)
@@ -240,12 +262,14 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
     lock = _lock_path()
     lock.parent.mkdir(parents=True, exist_ok=True)
     if lock.is_file():
-        _emit(callback, UpgradeEvent(
-            "check",
-            "An upgrade lock already exists at "
-            f"{lock} — refusing to start a second upgrade.",
-            ok=False,
-        ))
+        _emit(
+            callback,
+            UpgradeEvent(
+                "check",
+                "An upgrade lock already exists at " f"{lock} — refusing to start a second upgrade.",
+                ok=False,
+            ),
+        )
         return False
 
     backup_path: Path | None = None
@@ -285,15 +309,35 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
         backup_path = _backup()
         state["backup_path"] = str(backup_path)
         _persist_state()
-        _emit(callback, UpgradeEvent(
-            "backup", f"Backup written to {backup_path}",
-            meta={"path": str(backup_path)},
-        ))
+        _emit(
+            callback,
+            UpgradeEvent(
+                "backup",
+                f"Backup written to {backup_path}",
+                meta={"path": str(backup_path)},
+            ),
+        )
 
         # 3. Install.
-        spec = _pip_spec_for(release)
-        _emit(callback, UpgradeEvent("install", f"pip install {spec}"))
-        _pip_install(spec, callback, channel=release.channel)
+        # Dev channel: skip pip entirely. The running install is a
+        # working copy / editable install, so pinning to a synthetic
+        # ``openpa==X.Y.Z+devforced`` would just fail (no such wheel on
+        # PyPI) and a no-pin ``pip install --upgrade openpa`` could
+        # clobber the editable install with whatever's published. The
+        # rest of the flow (migrate / health / restart) still runs so
+        # the in-app updater UI is fully exercisable on dev.
+        if release.channel == "dev":
+            _emit(
+                callback,
+                UpgradeEvent(
+                    "install",
+                    "Dev channel: pip install skipped (editable install is the source of truth).",
+                ),
+            )
+        else:
+            spec = _pip_spec_for(release)
+            _emit(callback, UpgradeEvent("install", f"pip install {spec}"))
+            _pip_install(spec, callback, channel=release.channel)
 
         # 4. Migrate. We shell out to a fresh ``openpa db upgrade`` rather
         # than calling the in-process migration helper because pip just
@@ -314,30 +358,49 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
         if not _wait_for_health(timeout_s=60):
             raise RuntimeError("Post-upgrade health check failed.")
 
-        _emit(callback, UpgradeEvent(
-            "done", f"Upgraded to {release.version}.",
-            meta={"version": release.version},
-        ))
+        _emit(
+            callback,
+            UpgradeEvent(
+                "done",
+                f"Upgraded to {release.version}.",
+                meta={"version": release.version},
+            ),
+        )
         return True
 
     except Exception as e:
-        _emit(callback, UpgradeEvent(
-            "rollback", f"Upgrade failed ({e}); restoring backup.",
-            ok=False,
-        ))
+        _emit(
+            callback,
+            UpgradeEvent(
+                "rollback",
+                f"Upgrade failed ({e}); restoring backup.",
+                ok=False,
+            ),
+        )
         try:
             if backup_path and Path(backup_path).is_file():
                 from app.storage.backup import restore as _restore
+
                 _restore(backup_path)
-            _pip_install(
-                f"openpa=={CURRENT_VERSION}", callback, channel=release.channel,
-            )
+            # Mirror the forward path: on dev, the previous version IS
+            # the editable install we never replaced, so there's nothing
+            # to pip-downgrade to. The backup restore (above) is the
+            # data-protection part; that we keep.
+            if release.channel != "dev":
+                _pip_install(
+                    f"openpa=={CURRENT_VERSION}",
+                    callback,
+                    channel=release.channel,
+                )
         except Exception as e2:  # noqa: BLE001
-            _emit(callback, UpgradeEvent(
-                "rollback",
-                f"Rollback ALSO failed: {e2}. Manual intervention required.",
-                ok=False,
-            ))
+            _emit(
+                callback,
+                UpgradeEvent(
+                    "rollback",
+                    f"Rollback ALSO failed: {e2}. Manual intervention required.",
+                    ok=False,
+                ),
+            )
         return False
     finally:
         # Always clear the lock — either the upgrade succeeded (no
@@ -355,8 +418,7 @@ def _check_disk_space(*, min_free_mb: int) -> None:
     free_mb = usage.free // (1024 * 1024)
     if free_mb < min_free_mb:
         raise RuntimeError(
-            f"Need at least {min_free_mb} MB free for the backup; "
-            f"only {free_mb} MB available at {target}."
+            f"Need at least {min_free_mb} MB free for the backup; " f"only {free_mb} MB available at {target}."
         )
 
 
@@ -391,7 +453,8 @@ def _have_pip() -> bool:
     try:
         rc = subprocess.run(
             [sys.executable, "-m", "pip", "--version"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         ).returncode
     except (FileNotFoundError, OSError):
         return False
@@ -454,29 +517,33 @@ def _pip_install(
     # wheel after a reinstall). ``UV_CACHE_DIR`` covers the uv fallback;
     # uv ignores ``PIP_CACHE_DIR`` so we set both to be explicit.
     from app.config.settings import BaseConfig
+
     cache_dir = str(Path(BaseConfig.OPENPA_WORKING_DIR) / "pip-cache")
     env["PIP_CACHE_DIR"] = cache_dir
     env["UV_CACHE_DIR"] = cache_dir
 
     if channel == "test":
         index_url = os.environ.get("OPENPA_PIP_INDEX_URL") or _TEST_PYPI_INDEX_URL
-        extra_index_url = (
-            os.environ.get("OPENPA_PIP_EXTRA_INDEX_URL") or _TEST_PYPI_EXTRA_INDEX_URL
-        )
+        extra_index_url = os.environ.get("OPENPA_PIP_EXTRA_INDEX_URL") or _TEST_PYPI_EXTRA_INDEX_URL
         if installer == "pip":
             cmd += [
                 "--pre",
-                "--index-url", index_url,
-                "--extra-index-url", extra_index_url,
+                "--index-url",
+                index_url,
+                "--extra-index-url",
+                extra_index_url,
             ]
         else:
             # uv pip accepts the same flags but spells some of them
             # differently (``--prerelease=allow`` for ``--pre``); use
             # the env-var form so the syntax stays uniform.
             cmd += [
-                "--prerelease", "allow",
-                "--index-url", index_url,
-                "--extra-index-url", extra_index_url,
+                "--prerelease",
+                "allow",
+                "--index-url",
+                index_url,
+                "--extra-index-url",
+                extra_index_url,
             ]
 
     cmd.append(spec)
@@ -513,8 +580,10 @@ def _run(
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
                 env=env,
             )
         except FileNotFoundError as e:
@@ -563,10 +632,11 @@ def _open_run_log(label: str):
     """
     try:
         from app.config.settings import BaseConfig
+
         log_path = Path(BaseConfig.OPENPA_WORKING_DIR) / "upgrade.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists() and log_path.stat().st_size > 5 * 1024 * 1024:
-            tail_bytes = log_path.read_bytes()[-2 * 1024 * 1024:]
+            tail_bytes = log_path.read_bytes()[-2 * 1024 * 1024 :]
             log_path.write_bytes(tail_bytes)
         log_file = log_path.open("a", encoding="utf-8", errors="replace")
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
