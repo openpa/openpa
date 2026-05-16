@@ -129,19 +129,6 @@ let tray: Tray | null = null
 // Populated by fetchCapabilities() once the backend is reachable. Drives
 // the conditional "Open VNC Desktop" entry in the tray / jumplist / dock.
 let installMode: 'docker' | 'native' | null = null
-// Set of UI feature names the backend's bundled SPA exposes. Drives the
-// gating for Process Manager / Events / Channels (and future) tray /
-// jumplist / dock entries. ``null`` means the backend hasn't reported a
-// list (older release predating this protocol, or no backend reachable
-// yet) — in that case ``uiFeatureAvailable`` falls back to "show",
-// matching the pre-gating behavior so a newer Electron with an older
-// pinned backend keeps showing what it always did.
-let uiFeatures: Set<string> | null = null
-
-function uiFeatureAvailable(feature: string): boolean {
-  if (uiFeatures === null) return true
-  return uiFeatures.has(feature)
-}
 
 // App version handler
 ipcMain.handle('get-app-version', () => {
@@ -1052,7 +1039,6 @@ function fetchCapabilities(): Promise<void> {
     }
     if (!runtimeConfig.agentUrl) {
       installMode = null
-      uiFeatures = null
       finish()
       return
     }
@@ -1071,19 +1057,9 @@ function fetchCapabilities(): Promise<void> {
       res.on('data', (chunk) => { body += chunk })
       res.on('end', () => {
         try {
-          const parsed = JSON.parse(body) as {
-            install_mode?: 'docker' | 'native' | null
-            ui_features?: string[]
-          }
+          const parsed = JSON.parse(body) as { install_mode?: 'docker' | 'native' | null }
           installMode = parsed.install_mode ?? null
-          // Distinguish "field absent" (older backend, fall back to
-          // show-all) from "field present but empty" (backend says it
-          // has none of these features). Setting ``uiFeatures`` to a
-          // Set, even an empty one, locks the gate ON.
-          uiFeatures = Array.isArray(parsed.ui_features)
-            ? new Set(parsed.ui_features)
-            : null
-        } catch { /* leave state unchanged on parse failure */ }
+        } catch { /* leave installMode unchanged on parse failure */ }
         finish()
       })
     })
@@ -1135,18 +1111,9 @@ function rebuildJumpList(): void {
   if (runtimeConfig.agentUrl) {
     items.push(mkTask('main', 'Open Main Page', 'Open a new OpenPA chat window'))
     items.push(mkTask('settings', 'Open Settings', 'Open the OpenPA settings window'))
-    // Backend-capability gating: only surface these entries when the
-    // installed openpa wheel's SPA actually has the matching route. See
-    // ``uiFeatureAvailable`` for the fallback rule (null ⇒ show all).
-    if (uiFeatureAvailable('processes')) {
-      items.push(mkTask('processes', 'Process Manager', 'Open the OpenPA process manager'))
-    }
-    if (uiFeatureAvailable('events')) {
-      items.push(mkTask('events',    'Events',          'Open the OpenPA skill events page'))
-    }
-    if (uiFeatureAvailable('channels')) {
-      items.push(mkTask('channels',  'Channels',        'Open the OpenPA channels page'))
-    }
+    items.push(mkTask('processes', 'Process Manager', 'Open the OpenPA process manager'))
+    items.push(mkTask('events',    'Events',          'Open the OpenPA skill events page'))
+    items.push(mkTask('channels',  'Channels',        'Open the OpenPA channels page'))
   } else {
     // Pre-install: at least give the user a way to relaunch the wizard.
     items.push(mkTask('main', 'Open OpenPA', 'Open the OpenPA application'))
@@ -1164,15 +1131,9 @@ function rebuildTrayMenu(): void {
   if (runtimeConfig.agentUrl) {
     items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
     items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
-    if (uiFeatureAvailable('processes')) {
-      items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
-    }
-    if (uiFeatureAvailable('events')) {
-      items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
-    }
-    if (uiFeatureAvailable('channels')) {
-      items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
-    }
+    items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
+    items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
+    items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
     items.push({ type: 'separator' })
   }
   items.push({ label: 'Show', click: () => focusMostRecentAppWindow() })
@@ -1191,15 +1152,9 @@ function rebuildDockMenu(): void {
   if (runtimeConfig.agentUrl) {
     items.push({ label: 'Open Main Page', click: () => { createAppWindow('main') } })
     items.push({ label: 'Open Settings',  click: () => { createAppWindow('settings') } })
-    if (uiFeatureAvailable('processes')) {
-      items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
-    }
-    if (uiFeatureAvailable('events')) {
-      items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
-    }
-    if (uiFeatureAvailable('channels')) {
-      items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
-    }
+    items.push({ label: 'Process Manager', click: () => openOrFocusPageWindow('processes') })
+    items.push({ label: 'Events',          click: () => openOrFocusPageWindow('events') })
+    items.push({ label: 'Channels',        click: () => openOrFocusPageWindow('channels') })
   }
   dock.setMenu(Menu.buildFromTemplate(items))
 }
