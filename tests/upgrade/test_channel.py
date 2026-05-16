@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.features import manifest as feature_manifest
-from app.upgrade import channel, manifest, runner
+from app.upgrade import channel, manifest, runner, version_filter
 
 
 # ── channel.py ────────────────────────────────────────────────────────────
@@ -292,6 +292,104 @@ def test_parse_pep440_accepts_local_version_suffix() -> None:
     # The original rejections still hold.
     with pytest.raises(ValueError):
         channel.parse_pep440("0.1.5-test1+x")  # SemVer pre-release, not PEP 440
+
+
+# ── version_filter ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "version,channel_name,expected",
+    [
+        ("0.1.9", "production", True),
+        ("0.1.10", "production", True),
+        ("0.1.9.dev3", "production", False),  # devN forbidden on prod
+        ("0.1", "production", False),  # not X.Y.Z
+        ("0.1.9.dev3", "test", True),
+        ("0.1.9", "test", False),  # missing devN
+        ("0.1.9.dev", "test", False),  # missing N
+        ("anything", "dev", True),  # dev imposes no shape
+    ],
+)
+def test_version_filter_matches_channel(
+    version: str, channel_name: str, expected: bool
+) -> None:
+    assert version_filter.matches_channel(version, channel_name) is expected  # type: ignore[arg-type]
+
+
+def test_version_filter_matches_electron_line_production_strict() -> None:
+    # Production: must equal the Electron build version exactly.
+    assert version_filter.matches_electron_line("0.1.9", "production", "0.1.9") is True
+    assert version_filter.matches_electron_line("0.1.10", "production", "0.1.9") is False
+    assert version_filter.matches_electron_line("0.1.8", "production", "0.1.9") is False
+    # ``.devN`` is not a valid production version regardless of line.
+    assert version_filter.matches_electron_line("0.1.9.dev1", "production", "0.1.9") is False
+
+
+def test_version_filter_matches_electron_line_test_same_line() -> None:
+    # Test: only ``<electron>.devN`` is allowed; other lines are rejected.
+    assert version_filter.matches_electron_line("0.1.9.dev1", "test", "0.1.9") is True
+    assert version_filter.matches_electron_line("0.1.9.dev99", "test", "0.1.9") is True
+    assert version_filter.matches_electron_line("0.1.10.dev1", "test", "0.1.9") is False
+    assert version_filter.matches_electron_line("0.1.8.dev3", "test", "0.1.9") is False
+    # Final releases (no .devN) are not test releases.
+    assert version_filter.matches_electron_line("0.1.9", "test", "0.1.9") is False
+
+
+def test_version_filter_matches_electron_line_no_prefix_overrun() -> None:
+    # Regression: ``0.1.9`` must not accidentally allow ``0.1.91.devN``
+    # under a naive ``startswith`` check. The regex anchors on the literal
+    # dot via the shape rule, so ``0.1.91.dev1`` fails the shape too —
+    # but verify both layers explicitly.
+    assert version_filter.matches_channel("0.1.91.dev1", "test") is True  # shape OK
+    assert version_filter.matches_electron_line("0.1.91.dev1", "test", "0.1.9") is False
+
+
+def test_version_filter_validate_production_rejects_mismatch() -> None:
+    ok, err = version_filter.validate("0.1.10", "production", electron_version="0.1.9")
+    assert ok is False
+    assert "Invalid version" in err
+    assert "0.1.10" in err
+    assert "0.1.9" in err  # mentions the Electron build
+
+
+def test_version_filter_validate_test_rejects_cross_line() -> None:
+    ok, err = version_filter.validate("0.1.10.dev1", "test", electron_version="0.1.9")
+    assert ok is False
+    assert "Invalid version" in err
+    assert "0.1.9.devN" in err
+
+
+def test_version_filter_validate_test_accepts_same_line() -> None:
+    ok, err = version_filter.validate("0.1.9.dev3", "test", electron_version="0.1.9")
+    assert ok is True
+    assert err == ""
+
+
+def test_version_filter_validate_without_electron_falls_back_to_shape() -> None:
+    # Standalone install.sh invocation (no Electron context): only the
+    # channel-shape rule applies — line constraint is skipped.
+    ok, _ = version_filter.validate("0.1.10", "production")
+    assert ok is True
+    ok, _ = version_filter.validate("0.1.10.dev1", "test")
+    assert ok is True
+    ok, err = version_filter.validate("0.1.10.dev1", "production")
+    assert ok is False
+    assert "X.Y.Z" in err
+
+
+def test_version_filter_filter_same_line_preserves_input_order() -> None:
+    # Mixed list across two minor lines; only the 0.1.9.devN entries
+    # survive the filter, and their input order is preserved (callers
+    # are expected to sort by PEP 440 before / after filtering).
+    versions = [
+        "0.1.9.dev2",
+        "0.1.10.dev1",
+        "0.1.9.dev3",
+        "0.1.8.dev5",
+        "0.1.9.dev1",
+    ]
+    out = version_filter.filter_same_line(versions, "test", "0.1.9")
+    assert out == ["0.1.9.dev2", "0.1.9.dev3", "0.1.9.dev1"]
 
 
 # ── runner skip-pip-on-dev ───────────────────────────────────────────────

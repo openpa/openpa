@@ -37,6 +37,18 @@
 #                               when piped via curl. 'dev' works with both
 #                               --mode native and --mode docker (the compose
 #                               override bind-mounts the checkout at /src).
+#   --version SPEC              Explicit openpa version to install (e.g.
+#                               ``0.1.9`` for production, ``0.1.9.dev3`` for
+#                               test). Validated against the channel's shape
+#                               (production = X.Y.Z, test = X.Y.Z.devN). When
+#                               --electron-version is also given, the
+#                               version must additionally match that line
+#                               (production = exact, test = same X.Y.Z).
+#   --electron-version VER      Build version of the Electron app driving
+#                               this install (e.g. ``0.1.9``). Forwarded by
+#                               the OpenPA desktop app so we pin the openpa
+#                               package to the Electron build's line; CLI
+#                               users typically don't set this.
 #   --help                      Show this message.
 #
 # Service selection (database, vector store, …) is no longer made here —
@@ -96,6 +108,16 @@ UNATTENDED=0
 REINSTALL=0
 AUTO_INSTALL_PYTHON=""   # "" = ask interactively; "1" = yes; "0" = no
 MODIFY_PATH=""           # "" = auto (1 for canonical home, 0 otherwise); 0/1 explicit
+# Explicit openpa version to install. Empty = resolve channel default
+# (production → latest from PyPI / pin to ELECTRON_VERSION when set;
+# test → highest matching ``.devN``). Validated against the channel
+# shape, and against ELECTRON_VERSION when present.
+VERSION_SPEC=""
+# Build version of the Electron app driving the install (e.g. 0.1.9).
+# Set only when the script is spawned by the OpenPA desktop app — its
+# main.ts always forwards ``app.getVersion()`` so the install pins to
+# the same line. Empty for direct curl|bash invocations.
+ELECTRON_VERSION=""
 # Custom-deployment advanced fields. Empty = prompt interactively (or use
 # the catalog default in --unattended). The keys mirror the catalog's
 # deployments.custom.advanced_fields[].key entries.
@@ -131,6 +153,10 @@ while [ $# -gt 0 ]; do
         --no-modify-path)         MODIFY_PATH=0; shift ;;
         --channel)                CHANNEL="$2"; shift 2 ;;
         --channel=*)              CHANNEL="${1#*=}"; shift ;;
+        --version)                VERSION_SPEC="$2"; shift 2 ;;
+        --version=*)              VERSION_SPEC="${1#*=}"; shift ;;
+        --electron-version)       ELECTRON_VERSION="$2"; shift 2 ;;
+        --electron-version=*)     ELECTRON_VERSION="${1#*=}"; shift ;;
         --help|-h)
             sed -n '1,/^set -e/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^set -e/d'
             exit 0
@@ -167,6 +193,57 @@ if [ "$CHANNEL" = "dev" ]; then
         err "Usage: bash <repo>/install/install.sh --channel dev"
         exit 2
     fi
+fi
+
+# ── --version validation ──────────────────────────────────────────────────
+#
+# Two layers of check:
+#   1. Channel-shape — production = X.Y.Z, test = X.Y.Z.devN. Dev ignores
+#      --version entirely (editable install).
+#   2. Electron-line — only when --electron-version is also provided.
+#      Production: exact match. Test: same X.Y.Z, devN suffix.
+#
+# The error message is the one the OpenPA desktop app surfaces in its
+# install log, so it carries the user-visible context (which Electron
+# build is rejecting the spec).
+if [ -n "$VERSION_SPEC" ] && [ "$CHANNEL" = "dev" ]; then
+    warn "--version is ignored on dev channel (editable install)."
+    VERSION_SPEC=""
+fi
+if [ -n "$VERSION_SPEC" ]; then
+    case "$CHANNEL" in
+        production)
+            if ! printf '%s' "$VERSION_SPEC" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+                err "Invalid version: '$VERSION_SPEC' does not look like a production release (expected X.Y.Z)."
+                exit 2
+            fi
+            ;;
+        test)
+            if ! printf '%s' "$VERSION_SPEC" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.dev[0-9]+$'; then
+                err "Invalid version: '$VERSION_SPEC' does not look like a test prerelease (expected X.Y.Z.devN)."
+                exit 2
+            fi
+            ;;
+    esac
+fi
+if [ -n "$VERSION_SPEC" ] && [ -n "$ELECTRON_VERSION" ]; then
+    case "$CHANNEL" in
+        production)
+            if [ "$VERSION_SPEC" != "$ELECTRON_VERSION" ]; then
+                err "Invalid version: '$VERSION_SPEC' is not a valid production release for this Electron build (v$ELECTRON_VERSION). Production requires an exact version match — use the in-app update flow to install a different version."
+                exit 2
+            fi
+            ;;
+        test)
+            # Anchor the prefix with the literal dot so 0.1.9 doesn't
+            # accidentally match 0.1.91.devN. ``.devN`` is the only
+            # legal suffix; the shape check above already enforced it.
+            if [ "${VERSION_SPEC#${ELECTRON_VERSION}.dev}" = "$VERSION_SPEC" ]; then
+                err "Invalid version: '$VERSION_SPEC' is not a valid test release for this Electron build (v$ELECTRON_VERSION). Test channel accepts only ${ELECTRON_VERSION}.devN prereleases."
+                exit 2
+            fi
+            ;;
+    esac
 fi
 
 # Detect a containerized host (Docker / Podman / k8s pod). When the
@@ -602,8 +679,27 @@ gen_secret() {
 # 'main' fallback silently mis-tagged the image and masked the
 # failure behind ``docker compose up --build``.
 resolve_version() {
+    # Explicit --version short-circuits all lookups. Already validated
+    # against the channel shape (and Electron line, when applicable) by
+    # the top-level guards.
+    if [ -n "$VERSION_SPEC" ] && [ "$CHANNEL" != "dev" ]; then
+        ok "Using openpa==$VERSION_SPEC (--version)" >&2
+        echo "$VERSION_SPEC"
+        return
+    fi
+
     case "$CHANNEL" in
         production)
+            # When the Electron app drives the install, pin to its
+            # build version. The Electron + openpa wheel are released
+            # together under the same tag, and the tray-menu / taskbar
+            # code lives in the Electron main process — drifting the
+            # backend off the Electron line silently desyncs the UI.
+            if [ -n "$ELECTRON_VERSION" ]; then
+                ok "Pinning openpa==$ELECTRON_VERSION (Electron build version)" >&2
+                echo "$ELECTRON_VERSION"
+                return
+            fi
             info "Resolving latest openpa version from PyPI" >&2
             local body v py
             body="$(curl -fsSL https://pypi.org/pypi/openpa/json)" || {
@@ -628,18 +724,33 @@ resolve_version() {
             ;;
         test)
             info "Resolving latest openpa pre-release from Test PyPI" >&2
-            local v
+            local v filter
             # Same regex shape as the native test installer below — match
             # the wheel URL, then strip out the version segment from the
             # filename (``openpa-<version>-py3-none-any.whl``). ``sort -V``
             # gives a sensible ordering across .devN / rcN suffixes.
+            #
+            # When --electron-version is set, only consider wheels in
+            # that line (``<electron>.devN``); cross-line picks like
+            # 0.1.10.dev1 would silently desync UI features from the
+            # backend on an Electron v0.1.9 build.
+            if [ -n "$ELECTRON_VERSION" ]; then
+                filter="^${ELECTRON_VERSION//./\\.}\.dev[0-9]+$"
+            else
+                filter='.'  # match anything
+            fi
             v="$(curl -fsSL https://test.pypi.org/simple/openpa/ \
                 | grep -oE 'openpa-[^"/]+-py3-none-any\.whl' \
                 | sed -E 's/^openpa-(.+)-py3-none-any\.whl$/\1/' \
+                | grep -E "$filter" \
                 | sort -V -u \
                 | tail -n 1)"
             if [ -z "$v" ]; then
-                err "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                if [ -n "$ELECTRON_VERSION" ]; then
+                    err "No openpa wheel matching ${ELECTRON_VERSION}.devN found at https://test.pypi.org/simple/openpa/ — has a test prerelease been published for this Electron build?"
+                else
+                    err "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                fi
                 exit 1
             fi
             ok "Resolved openpa==$v from Test PyPI" >&2
@@ -1023,11 +1134,24 @@ else
     INSTALL_SOURCE_LABEL=""
     case "$CHANNEL" in
         production)
-            INSTALL_SPEC="openpa"
+            # Pin order (highest priority first):
+            #   --version           — explicit, already validated.
+            #   --electron-version  — the Electron build's version (the
+            #                         OpenPA desktop app always sets this).
+            #   (unset)             — bare ``openpa`` lets pip pull the
+            #                         latest from PyPI; preserved for
+            #                         CLI users running install.sh directly.
+            if [ -n "$VERSION_SPEC" ]; then
+                INSTALL_SPEC="openpa==$VERSION_SPEC"
+            elif [ -n "$ELECTRON_VERSION" ]; then
+                INSTALL_SPEC="openpa==$ELECTRON_VERSION"
+            else
+                INSTALL_SPEC="openpa"
+            fi
             INSTALL_SOURCE_LABEL="PyPI"
             ;;
         test)
-            # Resolve the latest openpa test wheel directly from Test
+            # Resolve the openpa test wheel directly from Test
             # PyPI's simple index, then install that URL. Production
             # PyPI is the only resolver for transitive deps.
             #
@@ -1048,14 +1172,33 @@ else
             # Pinning openpa to a direct wheel URL sidesteps both: pip
             # never asks Test PyPI for transitive deps, so the pollution
             # can't reach us.
-            info "Locating latest openpa test wheel"
+            local wheel_filter
+            if [ -n "$VERSION_SPEC" ]; then
+                # Anchor on the exact version segment between
+                # ``openpa-`` and ``-py3-none-any.whl``.
+                wheel_filter="openpa-${VERSION_SPEC//./\\.}-py3-none-any\\.whl"
+                info "Locating openpa==$VERSION_SPEC wheel"
+            elif [ -n "$ELECTRON_VERSION" ]; then
+                # Same-line: ``openpa-<electron>.devN-py3-none-any.whl``.
+                wheel_filter="openpa-${ELECTRON_VERSION//./\\.}\\.dev[0-9]+-py3-none-any\\.whl"
+                info "Locating latest openpa test wheel for line ${ELECTRON_VERSION}.dev*"
+            else
+                wheel_filter='openpa-[^"]+-py3-none-any\.whl'
+                info "Locating latest openpa test wheel"
+            fi
             INSTALL_SPEC="$(curl -fsSL https://test.pypi.org/simple/openpa/ \
-                | grep -oE 'https://[^"]*openpa-[^"]*-py3-none-any\.whl' \
+                | grep -oE "https://[^\"]*$wheel_filter" \
                 | awk -F/ '{print $NF, $0}' \
                 | sort -V \
                 | awk 'END {print $2}')"
             if [ -z "$INSTALL_SPEC" ]; then
-                err "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                if [ -n "$VERSION_SPEC" ]; then
+                    err "No openpa-${VERSION_SPEC}-py3-none-any.whl found at https://test.pypi.org/simple/openpa/ — has this version been published?"
+                elif [ -n "$ELECTRON_VERSION" ]; then
+                    err "No openpa-${ELECTRON_VERSION}.dev*-py3-none-any.whl found at https://test.pypi.org/simple/openpa/ — has a test prerelease been published for this Electron build?"
+                else
+                    err "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                fi
                 exit 1
             fi
             ok "Test wheel: $(basename "$INSTALL_SPEC")"

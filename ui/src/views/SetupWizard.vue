@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import {
   ElSteps, ElStep, ElButton, ElMessage,
   ElForm, ElFormItem, ElInput, ElRadio, ElRadioGroup, ElAlert, ElTag,
+  ElSelect, ElOption,
 } from 'element-plus';
 import { useSettingsStore } from '../stores/settings';
 import { useConfigStore } from '../stores/config';
@@ -287,6 +288,11 @@ async function startInstallerRun() {
         installDeployment.value === 'server' ? installAppHost.value.trim() : undefined,
       mode: installMode.value,
       customFields,
+      // Pass the explicit spec only when the user picked "Specific";
+      // omitting it lets the install script resolve the channel default
+      // (production = Electron build version; test = highest matching
+      // ``.devN``).
+      version: resolveVersionPayload(),
     });
     // The actual success/failure transition is driven by the
     // ``openpa:installer:done`` event handler (``onInstallerDone``); the
@@ -362,12 +368,104 @@ const activeProfile = ref<SetupProfile | null>(null);
 const serviceCapabilities = ref<ServiceCapabilitiesResponse | null>(null);
 
 // First-run installer steps (Electron only, stage = 'installer').
+//
+// ``install-version`` sits between ``install-mode`` and ``install-run``
+// so the user picks the exact openpa package version (or accepts the
+// channel default) before the install kicks off. On the production
+// channel only one version is valid (== the Electron build), so the
+// step is informational; on test, it shows the dropdown of
+// ``<electron>.devN`` candidates.
 const installerSteps = [
   { key: 'install-welcome', title: 'Welcome', description: 'Get OpenPA running' },
   { key: 'install-deployment', title: 'Deployment', description: 'How OpenPA is reached' },
   { key: 'install-mode', title: 'Mode', description: 'Docker or native' },
+  { key: 'install-version', title: 'Version', description: 'Pick a release' },
   { key: 'install-run', title: 'Install', description: 'Bootstrap the backend' },
 ] as const;
+
+// ── Version-selection state (install-version step) ──────────────────────
+//
+// ``versionMode`` is the "Latest / Specific" radio. ``versionSpec`` is
+// the user-entered or list-picked version when ``specific``. On the
+// production channel the radio is read-only (only one allowed version)
+// and ``versionSpec`` always equals the Electron build version.
+const versionMode = ref<'latest' | 'specific'>('latest');
+const versionSpec = ref<string>('');
+const availableVersions = ref<OpenPAInstallVersions | null>(null);
+const versionsLoading = ref(false);
+const versionsError = ref<string>('');
+const versionInputError = ref<string>('');
+
+function validateVersionSpec(): boolean {
+  versionInputError.value = '';
+  const channel = availableVersions.value?.channel ?? 'production';
+  const electron = availableVersions.value?.electronVersion ?? '';
+  const spec = versionSpec.value.trim();
+  if (!spec) {
+    versionInputError.value = 'Enter a version.';
+    return false;
+  }
+  if (channel === 'production') {
+    if (spec !== electron) {
+      versionInputError.value =
+        `Invalid version: this Electron app supports openpa v${electron} only. ` +
+        `Use the in-app update flow to install a different version.`;
+      return false;
+    }
+    return true;
+  }
+  if (channel === 'test') {
+    const prefix = `${electron}.dev`;
+    const okShape = /^\d+\.\d+\.\d+\.dev\d+$/.test(spec);
+    if (!okShape || !spec.startsWith(prefix) || spec === prefix) {
+      versionInputError.value =
+        `Invalid version: this Electron app supports ${electron}.devN test ` +
+        `prereleases only.`;
+      return false;
+    }
+    // If a list was fetched, require membership; if the list is empty
+    // (network blip / no releases yet), accept any shape-valid value
+    // so the user isn't blocked by a transient API failure.
+    const list = availableVersions.value?.versions ?? [];
+    if (list.length > 0 && !list.includes(spec)) {
+      versionInputError.value =
+        `Invalid version: ${spec} is not a published test release. ` +
+        `Pick one from the list.`;
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
+
+// Returns the version string to forward to the installer, or undefined
+// to let the script resolve the channel default. Called from
+// ``startInstallerRun``.
+function resolveVersionPayload(): string | undefined {
+  if (versionMode.value === 'latest') return undefined;
+  return versionSpec.value.trim() || undefined;
+}
+
+async function loadInstallVersions() {
+  const bridge = installerBridge.value;
+  if (!bridge) return;
+  versionsLoading.value = true;
+  versionsError.value = '';
+  try {
+    const result = await bridge.listVersions();
+    availableVersions.value = result;
+    // Seed the input with the latest entry (or the Electron version for
+    // production, where the list is exactly one). The "Latest" radio is
+    // still the default; the seed makes "Specific" feel populated when
+    // the user toggles into it.
+    versionSpec.value = result.latest ?? result.electronVersion;
+  } catch (err) {
+    versionsError.value = String(err);
+    availableVersions.value = null;
+  } finally {
+    versionsLoading.value = false;
+  }
+}
 
 // Setup-wizard core steps. ``isFirstSetup=true`` adds the Server +
 // Embedding steps that the admin uses to wire up storage and embeddings;
@@ -625,6 +723,14 @@ const canAdvanceFromInstallerMode = computed(() => {
   if (installMode.value === 'docker' && installDockerDisabled.value) return false;
   return true;
 });
+// Block Next on the version step until either ``latest`` is selected
+// (the default — always valid) or the user-entered ``specific`` value
+// passes channel + Electron-line validation.
+const canAdvanceFromInstallerVersion = computed(() => {
+  if (versionMode.value === 'latest') return true;
+  if (!availableVersions.value) return false;
+  return validateVersionSpec();
+});
 
 function handleNext() {
   const key = currentStepKey.value;
@@ -642,6 +748,14 @@ function handleNext() {
   }
   if (key === 'install-mode') {
     if (!canAdvanceFromInstallerMode.value) return;
+    // Advance into the Version step; load the available-versions list
+    // lazily so the GitHub round-trip happens off the welcome screen.
+    currentStep.value++;
+    void loadInstallVersions();
+    return;
+  }
+  if (key === 'install-version') {
+    if (!canAdvanceFromInstallerVersion.value) return;
     // Advance into the Install step and trigger the script there.
     currentStep.value++;
     void startInstallerRun();
@@ -1042,6 +1156,91 @@ async function copyToken() {
           </ElForm>
         </div>
 
+        <div v-else-if="currentStepKey === 'install-version'" class="installer-pane">
+          <h2>Pick a release</h2>
+          <p v-if="availableVersions" class="installer-hint">
+            This Electron app is <strong>v{{ availableVersions.electronVersion }}</strong>
+            on the <strong>{{ availableVersions.channel }}</strong> channel.
+          </p>
+          <ElAlert
+            v-if="versionsError"
+            type="warning" show-icon :closable="false"
+            title="Couldn't fetch the version list from GitHub."
+            :description="versionsError + ' — you can still continue with the channel default.'"
+            style="margin-bottom: 12px;"
+          />
+          <ElForm label-position="top">
+            <ElFormItem>
+              <ElRadioGroup v-model="versionMode">
+                <ElRadio value="latest">
+                  <strong>Latest version (default)</strong>
+                  <span class="installer-hint">
+                    <template v-if="availableVersions?.channel === 'production'">
+                      Installs openpa v{{ availableVersions.electronVersion }} — the
+                      version this Electron app was built against.
+                    </template>
+                    <template v-else-if="availableVersions?.channel === 'test' && availableVersions?.latest">
+                      Installs openpa {{ availableVersions.latest }} — the highest
+                      <code>{{ availableVersions.electronVersion }}.devN</code> prerelease.
+                    </template>
+                    <template v-else-if="availableVersions?.channel === 'dev'">
+                      Editable install from the local checkout (no PyPI fetch).
+                    </template>
+                    <template v-else>
+                      The installer resolves the channel default.
+                    </template>
+                  </span>
+                </ElRadio>
+                <ElRadio
+                  value="specific"
+                  :disabled="!availableVersions || availableVersions.channel === 'dev' || availableVersions.channel === 'production'"
+                >
+                  <strong>Specific version</strong>
+                  <span class="installer-hint">
+                    <template v-if="availableVersions?.channel === 'production'">
+                      Production requires an exact match to this Electron build — use
+                      the in-app update flow to install a different version.
+                    </template>
+                    <template v-else-if="availableVersions?.channel === 'dev'">
+                      Not applicable on the dev channel.
+                    </template>
+                    <template v-else>
+                      Pick a published prerelease from the list, or type one.
+                    </template>
+                  </span>
+                </ElRadio>
+              </ElRadioGroup>
+            </ElFormItem>
+
+            <ElFormItem
+              v-if="versionMode === 'specific' && availableVersions?.channel === 'test'"
+              label="Test release"
+              :error="versionInputError"
+            >
+              <ElSelect
+                v-if="availableVersions.versions.length > 0"
+                v-model="versionSpec"
+                placeholder="Select a published prerelease"
+                style="width: 100%; margin-bottom: 8px;"
+                @change="validateVersionSpec"
+              >
+                <ElOption
+                  v-for="v in [...availableVersions.versions].reverse()"
+                  :key="v"
+                  :value="v"
+                  :label="v"
+                />
+              </ElSelect>
+              <ElInput
+                v-model="versionSpec"
+                placeholder="e.g. 0.1.9.dev3"
+                @blur="validateVersionSpec"
+                @input="validateVersionSpec"
+              />
+            </ElFormItem>
+          </ElForm>
+        </div>
+
         <div v-else-if="currentStepKey === 'install-run'" class="installer-pane">
           <h2 v-if="installing">Installing…</h2>
           <h2 v-else-if="installDone">Installed.</h2>
@@ -1247,6 +1446,16 @@ async function copyToken() {
           <ElButton
             type="primary"
             :disabled="!canAdvanceFromInstallerMode"
+            @click="handleNext"
+          >
+            Next
+          </ElButton>
+        </template>
+        <template v-else-if="currentStepKey === 'install-version'">
+          <ElButton
+            type="primary"
+            :loading="versionsLoading"
+            :disabled="!canAdvanceFromInstallerVersion"
             @click="handleNext"
           >
             Install

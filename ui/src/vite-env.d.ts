@@ -41,14 +41,26 @@ type OpenPAInstallerRunPayload = {
     allowed_origins?: string
     wizard_preset?: string
   }
+  /** Optional explicit openpa package version. Omitted ⇒ resolve the
+   *  channel default matching this Electron build's line. */
+  version?: string
 }
 
 type OpenPAInstallerLog = { stream: 'stdout' | 'stderr' | 'info'; line: string }
 
 type OpenPAInstallerDone = { exitCode: number; error?: string }
 
+type OpenPAInstallVersions = {
+  electronVersion: string
+  channel: 'production' | 'test' | 'dev'
+  versions: string[]
+  latest: string | null
+  htmlUrls: Record<string, string>
+}
+
 type OpenPAInstallerBridge = {
   detect: () => Promise<OpenPAInstallerEnvironment>
+  listVersions: () => Promise<OpenPAInstallVersions>
   run: (payload: OpenPAInstallerRunPayload) => Promise<{ exitCode: number }>
   cancel: () => Promise<boolean>
   onLog: (cb: (entry: OpenPAInstallerLog) => void) => void

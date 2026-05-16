@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('openpa', {
   // receive every line the script wrote to stdout/stderr.
   installer: {
     detect: () => ipcRenderer.invoke('openpa:installer:detect'),
+    listVersions: () => ipcRenderer.invoke('openpa:installer:list-versions'),
     run: (payload: Record<string, unknown>) =>
       ipcRenderer.invoke('openpa:installer:run', payload),
     cancel: () => ipcRenderer.invoke('openpa:installer:cancel'),

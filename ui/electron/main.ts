@@ -337,6 +337,8 @@ ipcMain.handle('openpa:backend-upgrade:apply', async (event) => {
 
 ipcMain.handle('openpa:installer:detect', async () => detectInstallEnvironment())
 
+ipcMain.handle('openpa:installer:list-versions', async () => listInstallVersions())
+
 ipcMain.handle('openpa:installer:run', async (event, payload: InstallerRunPayload) => {
   if (installerProcess) {
     throw new Error('An install is already running.')
@@ -377,6 +379,24 @@ type InstallerRunPayload = {
     allowed_origins?: string
     wizard_preset?: string
   }
+  /** Optional explicit openpa package version, e.g. ``0.1.9`` (production)
+   *  or ``0.1.9.dev3`` (test). Omitted ⇒ the script resolves a default
+   *  matching this Electron build's line. Validated against the channel
+   *  + Electron line by both the wizard and the install script. */
+  version?: string
+}
+
+type InstallVersionListing = {
+  electronVersion: string
+  channel: 'production' | 'test' | 'dev'
+  /** Allowed versions, sorted oldest → newest under PEP 440. Empty for
+   *  the ``dev`` channel (no version list applies). */
+  versions: string[]
+  /** Highest entry in ``versions`` — what "Latest" resolves to. */
+  latest: string | null
+  /** GitHub releases page for each version (for the "release notes"
+   *  link in the wizard). Keyed by version. */
+  htmlUrls: Record<string, string>
 }
 
 async function detectInstallEnvironment(): Promise<InstallerEnvironment> {
@@ -427,6 +447,126 @@ async function detectInstallEnvironment(): Promise<InstallerEnvironment> {
   // capabilities (hasDocker, hasPython); the recommendation falls out
   // from the catalog's mode order + requires.
   return detected
+}
+
+// GitHub repo the in-app version list pulls from. Mirrors
+// ``DEFAULT_REPO`` in app/upgrade/manifest.py so the install-time and
+// upgrade-time listings stay aligned. Override via env var for staging
+// / forks (same name as the Python side uses).
+const INSTALL_VERSIONS_REPO = process.env.OPENPA_UPGRADE_REPO ?? 'openpa/openpa'
+const INSTALL_VERSIONS_API = `https://api.github.com/repos/${INSTALL_VERSIONS_REPO}/releases?per_page=100`
+
+// ``vMAJOR.MINOR.PATCH-testN`` — the test-channel tag format used by
+// release-test.yml. Mirrors ``_TEST_TAG`` in app/upgrade/channel.py.
+const TEST_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)-test(\d+)$/
+// ``vMAJOR.MINOR.PATCH`` — the production tag format.
+const PROD_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/
+
+function stripV(tag: string): string {
+  return tag.startsWith('v') ? tag.slice(1) : tag
+}
+
+// PEP 440 ordering for the shapes we ship: ``X.Y.Z`` and ``X.Y.Z.devN``.
+// Mirrors ``parse_pep440`` in app/upgrade/channel.py: ``.devN`` sorts
+// strictly before the corresponding final, and N orders dev releases
+// against each other.
+function compareVersions(a: string, b: string): number {
+  const parse = (v: string): [number, number, number, number, number] => {
+    const m = /^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?$/.exec(v)
+    if (!m) return [0, 0, 0, 0, 0]
+    const isFinal = m[4] === undefined ? 1 : 0
+    const devN = m[4] === undefined ? 0 : parseInt(m[4], 10)
+    return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10), isFinal, devN]
+  }
+  const pa = parse(a)
+  const pb = parse(b)
+  for (let i = 0; i < pa.length; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i]
+  }
+  return 0
+}
+
+function httpsGetJson(url: string, timeoutMs = 10000): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          // GitHub requires a User-Agent on every request. 60 req/hr/IP
+          // unauthenticated is plenty for a one-shot install lookup.
+          'User-Agent': `openpa-installer/${app.getVersion()}`,
+        },
+      },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          res.resume()
+          return reject(new Error(`${url} returned HTTP ${res.statusCode}`))
+        }
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => { body += chunk })
+        res.on('end', () => {
+          try { resolve(JSON.parse(body)) }
+          catch (e) { reject(e) }
+        })
+      },
+    )
+    req.on('error', reject)
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`${url} timed out after ${timeoutMs}ms`))
+    })
+  })
+}
+
+async function listInstallVersions(): Promise<InstallVersionListing> {
+  const electronVersion = app.getVersion()
+  const channel = INSTALL_CHANNEL
+
+  // Dev channel: editable install, no list applies. Returning an empty
+  // listing lets the renderer skip the version sub-step entirely.
+  if (channel === 'dev') {
+    return { electronVersion, channel, versions: [], latest: null, htmlUrls: {} }
+  }
+
+  type GhRelease = { tag_name?: string; prerelease?: boolean; html_url?: string }
+  const payload = await httpsGetJson(INSTALL_VERSIONS_API) as GhRelease[]
+  if (!Array.isArray(payload)) {
+    throw new Error('GitHub /releases did not return a list payload')
+  }
+
+  const htmlUrls: Record<string, string> = {}
+  const allowed: string[] = []
+  for (const entry of payload) {
+    const tag = entry?.tag_name ?? ''
+    if (channel === 'test') {
+      // Test channel: only ``vELECTRON.devN`` prereleases. Filters out
+      // cross-line entries (``v0.1.10-test1`` when Electron is v0.1.9)
+      // and any non-prerelease tags the test fetch might pick up.
+      if (!entry.prerelease) continue
+      const m = TEST_TAG_RE.exec(tag)
+      if (!m) continue
+      const base = `${m[1]}.${m[2]}.${m[3]}`
+      if (base !== electronVersion) continue
+      const version = `${base}.dev${parseInt(m[4], 10)}`
+      allowed.push(version)
+      if (entry.html_url) htmlUrls[version] = entry.html_url
+    } else {
+      // Production channel: only ``vELECTRON`` (the exact match) shows
+      // up — the strict-match rule means everything else is invalid.
+      if (entry.prerelease) continue
+      const m = PROD_TAG_RE.exec(tag)
+      if (!m) continue
+      const version = stripV(tag)
+      if (version !== electronVersion) continue
+      allowed.push(version)
+      if (entry.html_url) htmlUrls[version] = entry.html_url
+    }
+  }
+
+  allowed.sort(compareVersions)
+  const latest = allowed.length > 0 ? allowed[allowed.length - 1] : null
+  return { electronVersion, channel, versions: allowed, latest, htmlUrls }
 }
 
 function runOnce(command: string, args: string[], timeoutMs = 5000): Promise<string> {
@@ -527,6 +667,17 @@ async function runInstaller(
     args.push('--channel', INSTALL_CHANNEL)
   }
 
+  // Version pinning. The Electron app always forwards its own build
+  // version so the install script can enforce the channel-line rule
+  // (production = exact, test = same-minor.devN). When the user picked
+  // a specific version, forward that too — the script validates it
+  // against ``--electron-version`` and exits with ``Invalid version``
+  // if it falls outside the allowed set.
+  args.push('--electron-version', app.getVersion())
+  if (payload.version) {
+    args.push('--version', payload.version)
+  }
+
   let cmd: string
   let cmdArgs: string[]
   if (isWindows) {
@@ -534,16 +685,18 @@ async function runInstaller(
     // -ExecutionPolicy Bypass sidesteps the user's machine policy without
     // mutating it; the bypass is scoped to this single invocation.
     const psArgs = args.flatMap((a) => {
-      if (a === '--deployment')      return ['-Deployment']
-      if (a === '--host')            return ['-AppHost']
-      if (a === '--mode')            return ['-Mode']
-      if (a === '--unattended')      return ['-Unattended']
-      if (a === '--no-launch')       return ['-NoLaunch']
-      if (a === '--channel')         return ['-Channel']
-      if (a === '--listen-host')     return ['-ListenHost']
-      if (a === '--public-url')      return ['-PublicUrl']
-      if (a === '--allowed-origins') return ['-AllowedOrigins']
-      if (a === '--wizard-preset')   return ['-WizardPreset']
+      if (a === '--deployment')       return ['-Deployment']
+      if (a === '--host')             return ['-AppHost']
+      if (a === '--mode')             return ['-Mode']
+      if (a === '--unattended')       return ['-Unattended']
+      if (a === '--no-launch')        return ['-NoLaunch']
+      if (a === '--channel')          return ['-Channel']
+      if (a === '--listen-host')      return ['-ListenHost']
+      if (a === '--public-url')       return ['-PublicUrl']
+      if (a === '--allowed-origins')  return ['-AllowedOrigins']
+      if (a === '--wizard-preset')    return ['-WizardPreset']
+      if (a === '--version')          return ['-Version']
+      if (a === '--electron-version') return ['-ElectronVersion']
       return [a]
     })
     cmdArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...psArgs]

@@ -63,6 +63,18 @@
     native (reuses <repo>\.venv) and -Mode docker (compose override
     bind-mounts the checkout at /src).
 
+.PARAMETER Version
+    Explicit openpa version to install (e.g. '0.1.9' for production,
+    '0.1.9.dev3' for test). Validated against the channel shape
+    (production = X.Y.Z, test = X.Y.Z.devN). When -ElectronVersion is
+    also given, must additionally match that line (production = exact,
+    test = same X.Y.Z).
+
+.PARAMETER ElectronVersion
+    Build version of the OpenPA desktop app driving this install (e.g.
+    '0.1.9'). Forwarded by the Electron main process so the openpa
+    package pins to the same line; CLI users typically don't set this.
+
 .NOTES
     Service selection (database backend, vector store backend, …) is no
     longer made at install time. The Setup Wizard now lets you pick each
@@ -86,7 +98,9 @@ param(
     [switch] $AutoInstallPython,
     [switch] $NoAutoInstallPython,
     [switch] $ModifyPath,
-    [switch] $NoModifyPath
+    [switch] $NoModifyPath,
+    [string] $Version = '',
+    [string] $ElectronVersion = ''
 )
 
 Set-StrictMode -Version Latest
@@ -107,6 +121,56 @@ if ($Channel -eq 'dev') {
         Write-Host "ERR -Channel dev requires running install.ps1 from a checkout (not via iwr|iex)." -ForegroundColor Red
         Write-Host "    Usage: .\install\install.ps1 -Channel dev" -ForegroundColor Red
         exit 2
+    }
+}
+
+# ── -Version validation ───────────────────────────────────────────────────
+#
+# Two layers of check, mirroring install.sh:
+#   1. Channel-shape — production = X.Y.Z, test = X.Y.Z.devN. Dev ignores
+#      -Version (editable install).
+#   2. Electron-line — only when -ElectronVersion is also provided.
+#      Production: exact match. Test: same X.Y.Z, .devN suffix.
+#
+# The error messages are the strings the OpenPA desktop app surfaces in
+# its install log; they name the Electron build that's rejecting the spec.
+if ($Version -and $Channel -eq 'dev') {
+    Write-Host "!!! -Version is ignored on dev channel (editable install)." -ForegroundColor Yellow
+    $Version = ''
+}
+if ($Version) {
+    switch ($Channel) {
+        'production' {
+            if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+                Write-Host "ERR Invalid version: '$Version' does not look like a production release (expected X.Y.Z)." -ForegroundColor Red
+                exit 2
+            }
+        }
+        'test' {
+            if ($Version -notmatch '^\d+\.\d+\.\d+\.dev\d+$') {
+                Write-Host "ERR Invalid version: '$Version' does not look like a test prerelease (expected X.Y.Z.devN)." -ForegroundColor Red
+                exit 2
+            }
+        }
+    }
+}
+if ($Version -and $ElectronVersion) {
+    switch ($Channel) {
+        'production' {
+            if ($Version -ne $ElectronVersion) {
+                Write-Host "ERR Invalid version: '$Version' is not a valid production release for this Electron build (v$ElectronVersion). Production requires an exact version match — use the in-app update flow to install a different version." -ForegroundColor Red
+                exit 2
+            }
+        }
+        'test' {
+            # Anchor on the literal dot — ``0.1.9`` must not accidentally
+            # match a ``0.1.91.devN`` wheel.
+            $prefix = "$ElectronVersion.dev"
+            if (-not ($Version.StartsWith($prefix)) -or $Version -eq $prefix) {
+                Write-Host "ERR Invalid version: '$Version' is not a valid test release for this Electron build (v$ElectronVersion). Test channel accepts only $ElectronVersion.devN prereleases." -ForegroundColor Red
+                exit 2
+            }
+        }
     }
 }
 # Windows PowerShell 5.1 defaults [Console]::OutputEncoding to the OEM
@@ -554,17 +618,35 @@ function New-Secret {
 function Resolve-OpenPAVersion {
     # Pick the OPENPA_VERSION tag to bake into the rendered docker .env.
     # Channel-driven:
-    #   production → latest stable from PyPI JSON
-    #   test       → latest pre-release from Test PyPI's simple index
-    #                (same regex the native test installer uses below)
+    #   production → -Version → -ElectronVersion → latest stable from PyPI JSON
+    #   test       → -Version → highest .devN matching -ElectronVersion line
+    #                from Test PyPI's simple index
     #   dev        → literal 'dev'; the docker-compose.override.yml
     #                rebuilds locally and re-tags so the value is only
     #                a cosmetic image label
     # Hard-fails on network errors for prod / test — the previous
     # 'main' fallback silently mis-tagged the image and masked the
     # failure behind ``docker compose up --build``.
+
+    # Explicit -Version short-circuits all lookups. Already validated
+    # against the channel shape (and Electron line, when applicable) by
+    # the top-level guards.
+    if ($Version -and $Channel -ne 'dev') {
+        Write-Ok "Using openpa==$Version (-Version)"
+        return $Version
+    }
+
     switch ($Channel) {
         'production' {
+            # When the Electron app drives the install, pin to its
+            # build version. Electron + openpa wheel are released
+            # together under the same tag; drifting the backend off
+            # the Electron line silently desyncs tray-menu / taskbar
+            # features (which live in the Electron main process).
+            if ($ElectronVersion) {
+                Write-Ok "Pinning openpa==$ElectronVersion (Electron build version)"
+                return $ElectronVersion
+            }
             Write-Info "Resolving latest openpa version from PyPI"
             try {
                 $body = (Invoke-WebRequest -UseBasicParsing -Uri 'https://pypi.org/pypi/openpa/json').Content
@@ -591,13 +673,25 @@ function Resolve-OpenPAVersion {
             # Same regex shape as the native test installer below — match
             # the wheel URL, then strip out the version segment from the
             # filename (``openpa-<version>-py3-none-any.whl``).
+            #
+            # When -ElectronVersion is set, only consider wheels in that
+            # dev line; cross-line picks would silently desync UI from
+            # backend on the user's Electron build.
             $wheelNames = [regex]::Matches($indexBody, 'openpa-([^"/]+)-py3-none-any\.whl') |
                 ForEach-Object { $_.Groups[1].Value } |
                 Select-Object -Unique |
                 Sort-Object
+            if ($ElectronVersion) {
+                $prefix = "$ElectronVersion.dev"
+                $wheelNames = $wheelNames | Where-Object { $_ -like "$prefix*" -and $_ -match '^\d+\.\d+\.\d+\.dev\d+$' }
+            }
             $v = $wheelNames | Select-Object -Last 1
             if (-not $v) {
-                Write-Err2 "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                if ($ElectronVersion) {
+                    Write-Err2 "No openpa wheel matching $ElectronVersion.devN found at https://test.pypi.org/simple/openpa/ — has a test prerelease been published for this Electron build?"
+                } else {
+                    Write-Err2 "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                }
                 exit 1
             }
             Write-Ok "Resolved openpa==$v from Test PyPI"
@@ -1008,20 +1102,51 @@ if ($Channel -eq 'dev') {
     $InstallSourceLabel = ''
     switch ($Channel) {
         'production' {
-            $InstallSpec = 'openpa'
+            # Pin order: -Version → -ElectronVersion → bare ``openpa``
+            # (CLI users running install.ps1 directly).
+            if ($Version) {
+                $InstallSpec = "openpa==$Version"
+            } elseif ($ElectronVersion) {
+                $InstallSpec = "openpa==$ElectronVersion"
+            } else {
+                $InstallSpec = 'openpa'
+            }
             $InstallSourceLabel = 'PyPI'
         }
         'test' {
-            Write-Info "Locating latest openpa test wheel"
             # PS 5.1 has no built-in HTML parser; regex the simple-index page.
             $indexBody = (Invoke-WebRequest -UseBasicParsing -Uri 'https://test.pypi.org/simple/openpa/').Content
-            $wheelUrls = [regex]::Matches($indexBody, 'https://[^"]*openpa-[^"]*-py3-none-any\.whl') |
-                ForEach-Object { $_.Value } |
-                Select-Object -Unique |
-                Sort-Object -Property @{ Expression = { Split-Path $_ -Leaf } }
+            if ($Version) {
+                Write-Info "Locating openpa==$Version wheel"
+                # Anchor on the exact version segment so 0.1.9 doesn't
+                # match a 0.1.91 wheel.
+                $pattern = "https://[^`"]*openpa-" + [regex]::Escape($Version) + "-py3-none-any\.whl"
+                $wheelUrls = [regex]::Matches($indexBody, $pattern) |
+                    ForEach-Object { $_.Value } |
+                    Select-Object -Unique
+            } elseif ($ElectronVersion) {
+                Write-Info "Locating latest openpa test wheel for line $ElectronVersion.dev*"
+                $pattern = "https://[^`"]*openpa-" + [regex]::Escape($ElectronVersion) + "\.dev\d+-py3-none-any\.whl"
+                $wheelUrls = [regex]::Matches($indexBody, $pattern) |
+                    ForEach-Object { $_.Value } |
+                    Select-Object -Unique |
+                    Sort-Object -Property @{ Expression = { Split-Path $_ -Leaf } }
+            } else {
+                Write-Info "Locating latest openpa test wheel"
+                $wheelUrls = [regex]::Matches($indexBody, 'https://[^"]*openpa-[^"]*-py3-none-any\.whl') |
+                    ForEach-Object { $_.Value } |
+                    Select-Object -Unique |
+                    Sort-Object -Property @{ Expression = { Split-Path $_ -Leaf } }
+            }
             $InstallSpec = $wheelUrls | Select-Object -Last 1
             if (-not $InstallSpec) {
-                Write-Err2 "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                if ($Version) {
+                    Write-Err2 "No openpa-$Version-py3-none-any.whl found at https://test.pypi.org/simple/openpa/ — has this version been published?"
+                } elseif ($ElectronVersion) {
+                    Write-Err2 "No openpa-$ElectronVersion.dev*-py3-none-any.whl found at https://test.pypi.org/simple/openpa/ — has a test prerelease been published for this Electron build?"
+                } else {
+                    Write-Err2 "No openpa wheel found at https://test.pypi.org/simple/openpa/"
+                }
                 exit 1
             }
             Write-Ok ("Test wheel: " + (Split-Path $InstallSpec -Leaf))
