@@ -1105,7 +1105,14 @@ function fetchCapabilities(): Promise<void> {
     }
     let url: URL
     try {
-      url = new URL('/api/services/capabilities', runtimeConfig.agentUrl)
+      // ``/tray-capabilities`` is the deliberately-public sibling of
+      // ``/capabilities``. The Electron main process can't share the
+      // renderer's session cookies, so the admin-gated capabilities
+      // endpoint stops being reachable as soon as setup completes —
+      // which silently disabled the tray gate on every post-setup
+      // launch (test build looked fine because setup hadn't completed
+      // yet; dev mode never worked).
+      url = new URL('/api/services/tray-capabilities', runtimeConfig.agentUrl)
     } catch {
       finish()
       return
@@ -1400,17 +1407,6 @@ function killTrackedProcessesSync(): void {
   }
 }
 
-// Closing the last window does NOT quit. The tray icon stays alive so
-// the user can reopen Main / Settings / VNC from it. Exit is reached
-// only via Tray > Exit, which calls app.quit() and triggers the
-// before-quit cleanup below. Default Electron behavior on non-macOS
-// would quit here; this handler suppresses that.
-app.on('window-all-closed', () => { /* keep app alive in tray */ })
-
-app.on('before-quit', () => {
-  killTrackedProcessesSync()
-})
-
 // ── Auto-update (electron-updater + GitHub Releases) ────────────────────────
 //
 // The updater config (``publish:`` in electron-builder.json5) tells the
@@ -1524,10 +1520,29 @@ if (process.platform === 'win32') {
 // process opens the requested window via the ``second-instance`` event.
 // This is also what guarantees a single tray icon: only the first
 // process ever runs createTray().
+//
+// Acquire the lock BEFORE registering any lifecycle handlers. A losing
+// second instance calls ``app.quit()`` below, which fires ``before-quit``;
+// if that handler were wired up at module top level it would run inside
+// the secondary process and ``killTrackedProcessesSync()`` would read
+// ``~/.openpa/install.pid`` (written by the primary) and force-kill the
+// primary's backend tree. Registering lifecycle handlers only inside the
+// primary branch closes that hole.
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
+  // Closing the last window does NOT quit. The tray icon stays alive so
+  // the user can reopen Main / Settings / VNC from it. Exit is reached
+  // only via Tray > Exit, which calls app.quit() and triggers the
+  // before-quit cleanup below. Default Electron behavior on non-macOS
+  // would quit here; this handler suppresses that.
+  app.on('window-all-closed', () => { /* keep app alive in tray */ })
+
+  app.on('before-quit', () => {
+    killTrackedProcessesSync()
+  })
+
   app.on('second-instance', (_event, argv) => {
     const openArg = argv.find((a) => a.startsWith('--open='))
     if (openArg) {
@@ -1543,29 +1558,29 @@ if (!gotSingleInstanceLock) {
     }
     focusMostRecentAppWindow()
   })
-}
 
-app.whenReady().then(() => {
-  // Load the persisted config before the window opens so the preload's
-  // sync IPC returns a populated value on the very first request.
-  runtimeConfig = loadConfig();
-  // Reconcile with ~/.openpa/.env so a deleted install dir re-triggers
-  // the first-run installer instead of falling through to a broken UI.
-  reconcileInstallStateWithDisk();
-  createTray();
-  rebuildJumpList();
-  rebuildDockMenu();
-  createAppWindow('main');
-  setupAutoUpdater();
-  // Subsequent launches: if the install has already completed, fire the
-  // backend up so the chat / profile-selector views have a server to
-  // talk to. First-run launches skip this — the backend (and the
-  // SQLite DB) only spawn after the user clicks Continue in the
-  // installer flow.
-  if (installMarkerExists()) {
-    void (async () => {
-      const r = await startBackend()
-      if (r.ok) await fetchCapabilities()
-    })()
-  }
-})
+  app.whenReady().then(() => {
+    // Load the persisted config before the window opens so the preload's
+    // sync IPC returns a populated value on the very first request.
+    runtimeConfig = loadConfig();
+    // Reconcile with ~/.openpa/.env so a deleted install dir re-triggers
+    // the first-run installer instead of falling through to a broken UI.
+    reconcileInstallStateWithDisk();
+    createTray();
+    rebuildJumpList();
+    rebuildDockMenu();
+    createAppWindow('main');
+    setupAutoUpdater();
+    // Subsequent launches: if the install has already completed, fire the
+    // backend up so the chat / profile-selector views have a server to
+    // talk to. First-run launches skip this — the backend (and the
+    // SQLite DB) only spawn after the user clicks Continue in the
+    // installer flow.
+    if (installMarkerExists()) {
+      void (async () => {
+        const r = await startBackend()
+        if (r.ok) await fetchCapabilities()
+      })()
+    }
+  })
+}

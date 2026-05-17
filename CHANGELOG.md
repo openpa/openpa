@@ -69,6 +69,32 @@ Move to a dated section on release.
   `openpa/openpa-desktop:<version>.dev1`, production pulls `:latest`.
 
 ### Fixed
+- Electron jumplist click no longer kills the backend. Clicking any
+  Windows taskbar jumplist entry ("Open Main Page", "Process Manager",
+  …) re-invokes `OpenPA App.exe` with `--open=<target>`; the second
+  instance fails the single-instance lock and calls `app.quit()`. The
+  top-level `before-quit` handler then ran inside that doomed
+  secondary process, where `killTrackedProcessesSync()` read
+  `~/.openpa/install.pid` (written by the primary) and force-killed
+  the primary's `openpa serve` tree with `taskkill /T /F`. Empty
+  `~/.openpa/server.err.log` after each kill was the external-SIGKILL
+  fingerprint. The lock is now acquired before any quit-time
+  handlers register; lifecycle wiring (`window-all-closed`,
+  `before-quit`, `second-instance`, `whenReady`) lives only inside
+  the primary-instance branch, so a losing secondary quits cleanly
+  with no kill handlers attached.
+- Tray / jumplist / dock entries for Process Manager, Events, and
+  Channels were hidden on every post-setup launch. The Electron main
+  process called the admin-gated `/api/services/capabilities` for
+  feature gating, but it can't share the renderer's session cookies,
+  so once `is_setup_complete()` flipped to true the endpoint returned
+  401 and `uiFeatures` stayed `null`. Added a deliberately-public
+  sibling, `/api/services/tray-capabilities`, that returns only
+  `install_mode` + `ui_features` (route-name metadata with no
+  security value); the richer capabilities endpoint stays
+  admin-gated for the Setup Wizard's deeper payload. Fresh installs
+  appeared to work only because setup hadn't completed yet — they
+  would have broken the gate as soon as an admin password got set.
 - Upgrade flow on Windows: `_backup_sqlite` no longer leaks SQLite
   connections, so the `*.sqlite.gz.tmp` snapshot file can be unlinked
   after gzipping. The previous code wrapped `sqlite3.connect(...)` in a

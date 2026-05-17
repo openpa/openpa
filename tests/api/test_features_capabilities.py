@@ -103,3 +103,22 @@ def test_capabilities_response_preserves_existing_fields(
     assert body["install_mode"] == "docker"
     assert body["docker_available"] is True
     assert body["services"] == {"x": 1}
+
+
+def test_tray_capabilities_returns_features_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Electron main process can't share the renderer's session
+    cookies, so the tray-gating endpoint must stay reachable after setup
+    completes. Set ``setup_complete=True`` to prove the new endpoint
+    skips the admin gate that breaks ``/api/services/capabilities``."""
+    _stub_state(monkeypatch, setup_complete=True)
+    monkeypatch.setattr(features_api, "get_active_install_mode", lambda: "native")
+
+    response = asyncio.run(features_api.get_tray_capabilities(_make_request()))
+    import json
+
+    body = json.loads(response.body)
+    assert response.status_code == 200
+    assert body["install_mode"] == "native"
+    assert sorted(body["ui_features"]) == sorted(features_api.UI_FEATURES)

@@ -226,6 +226,30 @@ async def get_service_capabilities(request: Request) -> JSONResponse:
     })
 
 
+async def get_tray_capabilities(_request: Request) -> JSONResponse:
+    """Public tray/jumplist/dock gating descriptor for the Electron main
+    process.
+
+    Returns just the two fields the Electron main process needs to gate
+    its menu entries: the active install mode (drives the "Open VNC
+    Desktop" entry, shown on Docker installs only) and the list of UI
+    feature names the bundled SPA exposes (drives Process Manager /
+    Events / Channels).
+
+    Deliberately unauthenticated. The Electron main process can't share
+    the renderer's session cookies, so the admin-gated
+    ``/api/services/capabilities`` endpoint stops being reachable as
+    soon as setup completes — that broke the gate on every post-setup
+    launch. The data returned here is route-name + install-mode
+    metadata with no security value; the richer capabilities endpoint
+    stays admin-gated for the Setup Wizard's deeper payload.
+    """
+    return JSONResponse({
+        "install_mode": get_active_install_mode(),
+        "ui_features": list(UI_FEATURES),
+    })
+
+
 # ── route registration ────────────────────────────────────────────────────
 
 def get_features_routes() -> list[Route]:
@@ -233,4 +257,5 @@ def get_features_routes() -> list[Route]:
         Route("/api/features", get_features, methods=["GET"]),
         Route("/api/features/install", post_install_features, methods=["POST"]),
         Route("/api/services/capabilities", get_service_capabilities, methods=["GET"]),
+        Route("/api/services/tray-capabilities", get_tray_capabilities, methods=["GET"]),
     ]
