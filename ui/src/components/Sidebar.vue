@@ -165,6 +165,7 @@ watch(
 onBeforeUnmount(closeNotificationsStream);
 
 const bellPopoverVisible = ref(false);
+const notificationsTriggerRef = ref<HTMLDivElement | null>(null);
 
 const totalUnread = computed(() =>
   settingsStore.profileId ? notificationsStore.totalUnread(settingsStore.profileId) : 0,
@@ -535,38 +536,46 @@ const toggleThemeFromIcon = () => {
 
     <!-- Bottom Actions -->
     <div class="sidebar-section bottom-section">
+      <ElTooltip
+        content="Notifications"
+        placement="right"
+        :show-after="300"
+        :disabled="!isCollapsed"
+      >
+        <div
+          ref="notificationsTriggerRef"
+          class="settings-row notifications-row"
+          @click="bellPopoverVisible = !bellPopoverVisible"
+        >
+          <ElBadge
+            :value="totalUnread"
+            :hidden="totalUnread === 0"
+            :max="99"
+            class="notifications-badge"
+            :class="{ 'badge-pulse-high': bellPulse === 'high' }"
+          >
+            <Icon
+              :key="bellAnimKey"
+              icon="mdi:bell-outline"
+              class="settings-icon bell-icon"
+              :class="{
+                'bell-shake-normal': bellPulse === 'normal',
+                'bell-shake-high': bellPulse === 'high',
+              }"
+            />
+          </ElBadge>
+          <span class="settings-label" v-if="!isCollapsed">Notifications</span>
+          <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
+        </div>
+      </ElTooltip>
       <ElPopover
         :visible="bellPopoverVisible"
+        :virtual-ref="notificationsTriggerRef"
+        virtual-triggering
         placement="right-end"
-        trigger="click"
         :width="320"
         @update:visible="bellPopoverVisible = $event"
       >
-        <template #reference>
-          <ElTooltip content="Notifications" placement="right" :show-after="300" :disabled="!isCollapsed">
-            <div class="settings-row notifications-row" @click="bellPopoverVisible = !bellPopoverVisible">
-              <ElBadge
-                :value="totalUnread"
-                :hidden="totalUnread === 0"
-                :max="99"
-                class="notifications-badge"
-                :class="{ 'badge-pulse-high': bellPulse === 'high' }"
-              >
-                <Icon
-                  :key="bellAnimKey"
-                  icon="mdi:bell-outline"
-                  class="settings-icon bell-icon"
-                  :class="{
-                    'bell-shake-normal': bellPulse === 'normal',
-                    'bell-shake-high': bellPulse === 'high',
-                  }"
-                />
-              </ElBadge>
-              <span class="settings-label" v-if="!isCollapsed">Notifications</span>
-              <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
-            </div>
-          </ElTooltip>
-        </template>
         <NotificationList
           @select="handleSelectNotification"
           @select-skill="handleSelectSkillNotification"

@@ -112,6 +112,14 @@ Move to a dated section on release.
   config field is force-overwritten from ``INSTALL_CHANNEL`` on each
   launch so a re-installed test app never inherits a previous build's
   persisted value.
+- Notifications popover in the sidebar no longer opens in the
+  top-left corner of the viewport. The `<ElPopover>`'s `#reference`
+  slot nested an `<ElTooltip>` around the trigger row, which broke
+  ElPopover's Popper.js reference resolution and pinned the popover
+  to the document origin (0,0). Restructured so the tooltip wraps
+  the row directly and the popover anchors to it via `:virtual-ref`
+  + `virtual-triggering`, matching the sibling-pattern already used
+  by Settings / Process Manager / Events / Channels rows.
 
 ### Changed
 - The Settings → Updates page and UpdateBanner no longer distinguish
