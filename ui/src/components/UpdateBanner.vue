@@ -17,7 +17,7 @@ import { useUpdate } from '../composables/useUpdate'
 const route = useRoute()
 const router = useRouter()
 
-const { state, applyUpdate, applyShellRestart, dismiss } = useUpdate()
+const { state, isElectron, applyUpdate, applyShellRestart, dismiss } = useUpdate()
 
 const dismissedBanner = ref(false)
 
@@ -123,7 +123,11 @@ function logLineClass(line: string): string {
 
 <template>
   <!-- Banner — single unified card. -->
-  <div v-if="bannerVisible" class="update-banner-stack">
+  <div
+    v-if="bannerVisible"
+    class="update-banner-stack"
+    :class="{ 'has-titlebar': isElectron() }"
+  >
     <div
       v-if="state.phase === 'available'"
       class="update-banner available"
@@ -271,6 +275,11 @@ function logLineClass(line: string): string {
   display: flex;
   flex-direction: column;
   pointer-events: none;
+}
+.update-banner-stack.has-titlebar {
+  /* Sit below the 32px Electron titlebar overlay so the min/max/close
+     buttons don't cover the banner. */
+  top: 32px;
 }
 .update-banner {
   display: flex;

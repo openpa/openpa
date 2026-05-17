@@ -252,10 +252,8 @@ function goBack() {
           <div class="pref-info">
             <div class="pref-label">Release channel</div>
             <div class="pref-hint">
-              Set at install time and not user-switchable. To change channels,
-              re-run the OpenPA installer on the host machine. Each channel
-              only sees its own releases — for example, <strong>test</strong>
-              installs never see <strong>production</strong> versions.
+              Set at install time. Re-run the installer to switch channels.
+              Each channel only sees its own releases.
             </div>
           </div>
           <ElTag effect="plain">{{ installChannel }}</ElTag>
