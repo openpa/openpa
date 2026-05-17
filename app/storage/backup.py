@@ -18,6 +18,7 @@ import gzip
 import shutil
 import subprocess
 import time
+from contextlib import closing
 from pathlib import Path
 
 from app.databases import get_database_provider
@@ -106,7 +107,14 @@ def _backup_sqlite(to: Path) -> Path:
 
     tmp_dest = to.with_suffix(to.suffix + ".tmp")
     try:
-        with sqlite3.connect(str(src)) as src_conn, sqlite3.connect(str(tmp_dest)) as dst_conn:
+        # ``with sqlite3.connect(...)`` only manages the transaction — it does
+        # not close the connection, so the OS file handle on ``tmp_dest`` would
+        # linger until GC and block ``unlink()`` on Windows (WinError 32).
+        # ``closing()`` forces ``.close()`` on scope exit.
+        with (
+            closing(sqlite3.connect(str(src))) as src_conn,
+            closing(sqlite3.connect(str(tmp_dest))) as dst_conn,
+        ):
             src_conn.backup(dst_conn)
         with open(tmp_dest, "rb") as raw, gzip.open(to, "wb") as gz:
             shutil.copyfileobj(raw, gz)

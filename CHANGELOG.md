@@ -69,6 +69,15 @@ Move to a dated section on release.
   `openpa/openpa-desktop:<version>.dev1`, production pulls `:latest`.
 
 ### Fixed
+- Upgrade flow on Windows: `_backup_sqlite` no longer leaks SQLite
+  connections, so the `*.sqlite.gz.tmp` snapshot file can be unlinked
+  after gzipping. The previous code wrapped `sqlite3.connect(...)` in a
+  `with` block that only manages the transaction — the connection (and
+  its OS file handle) stayed open until GC, and NTFS refused the
+  `finally`-block `unlink()` with `WinError 32`, aborting every in-app
+  upgrade at the `[backup]` step. The connections are now wrapped in
+  `contextlib.closing(...)` so `.close()` runs on scope exit. Linux and
+  macOS were unaffected (they happily unlink open files).
 - Settings → Updates → "Release channel" now shows the actual install
   channel (`production` / `test` / `dev`) baked in at build time. It
   previously read a stale ``runtimeConfig.channel`` field that was
