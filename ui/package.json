@@ -7,6 +7,7 @@
     "version:sync": "python ../scripts/sync_ui_version.py",
     "predev": "npm run version:sync",
     "prebuild": "npm run version:sync",
+    "prebuild:test": "npm run version:sync",
     "preweb:dev": "npm run version:sync",
     "preweb:build": "npm run version:sync",
     "dev": "vite",

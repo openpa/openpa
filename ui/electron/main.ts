@@ -20,6 +20,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // for the Settings → Updates "Release channel" row.
 const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL__
 
+// Env overlay for openpa subprocesses (``serve`` and ``upgrade apply``).
+// On non-production builds we hand the channel to the child explicitly —
+// the openpa CLI does not auto-load ``~/.openpa/.env``, and Electron's
+// CWD on launch is not reliably the home dir, so dotenv discovery there
+// is fragile. The installer spawn at ~line 708 already follows the same
+// pattern via ``--channel``; this keeps backend serve and upgrade apply
+// consistent with it.
+function openpaSubprocessEnv(): NodeJS.ProcessEnv {
+  if (INSTALL_CHANNEL === 'production') return process.env
+  return { ...process.env, OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL }
+}
+
 // ── Runtime config (openpa-config.json) ─────────────────────────────────────
 //
 // Lives in the per-user app-data directory. The installer writes to it at
@@ -323,6 +335,7 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
     child = spawn(exe, ['serve'], {
       stdio: ['ignore', stdoutFd, stderrFd],
       windowsHide: true,
+      env: openpaSubprocessEnv(),
     })
   } catch (err) {
     try { if (stdoutFd) fs.closeSync(stdoutFd) } catch { /* ignore */ }
@@ -557,7 +570,12 @@ function httpsGetJson(url: string, timeoutMs = 10000): Promise<unknown> {
 }
 
 async function listInstallVersions(): Promise<InstallVersionListing> {
-  const electronVersion = app.getVersion()
+  // ``app.getVersion()`` returns the SemVer form from package.json
+  // (e.g. ``0.1.9-dev.12`` on a test build). The GitHub-tag filter
+  // below, the renderer's version-spec validator, and the install
+  // scripts all compare against the *release line* (the bare
+  // ``X.Y.Z``), so strip any pre-release / build suffix here.
+  const electronVersion = app.getVersion().split(/[-+]/)[0]
   const channel = INSTALL_CHANNEL
 
   // Dev channel: editable install, no list applies. Returning an empty
@@ -710,7 +728,11 @@ async function runInstaller(
   // a specific version, forward that too — the script validates it
   // against ``--electron-version`` and exits with ``Invalid version``
   // if it falls outside the allowed set.
-  args.push('--electron-version', app.getVersion())
+  // Pass the release line (``0.1.9``), not the SemVer build version
+  // (``0.1.9-dev.12``) — install.sh / install.ps1 enforce the channel
+  // rule via ``${ELECTRON_VERSION}.devN``, which only works on the
+  // bare ``X.Y.Z`` form.
+  args.push('--electron-version', app.getVersion().split(/[-+]/)[0])
   if (payload.version) {
     args.push('--version', payload.version)
   }
@@ -884,6 +906,7 @@ async function runBackendUpgrade(
       child = spawn(exe, ['upgrade', 'apply', '--yes'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        env: openpaSubprocessEnv(),
       })
     } catch (err) {
       const error = String(err)
