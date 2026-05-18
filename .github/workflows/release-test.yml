@@ -247,6 +247,9 @@ jobs:
         with:
           python-version: "3.13"
 
+      # Windows runners default Python to cp1252 stdout encoding, which
+      # crashes on the Unicode arrow this script used to print. ASCII-only
+      # is the simplest fix — the message is just diagnostic.
       - name: Rewrite app/__version__.py to ${{ needs.wheel.outputs.version }}
         working-directory: ${{ github.workspace }}
         shell: bash
@@ -268,7 +271,7 @@ jobs:
           if out == src:
               raise SystemExit(f"Failed to rewrite __version__ in {path}")
           open(path, "w").write(out)
-          print(f"Rewrote __version__ → {new}")
+          print(f"Rewrote __version__ -> {new}")
           PY
 
       - name: Install dependencies
@@ -290,15 +293,51 @@ jobs:
           esac
           npm install --no-save --no-package-lock "$pkg"
 
-      # ``--publish always`` tells electron-builder to upload to the
-      # provider configured in electron-builder.test.json5 (GitHub at
-      # the tag's prerelease). build:test passes --config to point at
-      # that file, so the channel/releaseType overrides flow naturally
-      # — no need for inline -c.publish.0.* CLI gymnastics.
-      - name: Build & publish (test channel)
+      # Build the installer locally — do not let electron-builder publish.
+      # Reason: sync_ui_version.py converts the wheel's PEP 440 ``.devN``
+      # form to semver ``-dev.N`` for ui/package.json (npm refuses dot-
+      # before-dev as a prerelease identifier). That makes electron-
+      # builder derive a publish tag of ``v0.1.9-dev.N`` — different from
+      # the wheel job's actual prerelease at ``v0.1.9-testN``. Letting
+      # electron-builder publish either creates a second orphan release
+      # at the semver tag (best case), or 422s on the second matrix runner
+      # racing to create it (what happened on test20). Decoupling the
+      # publish below means electron-builder only builds, and we put the
+      # artifacts where they belong using ``gh release upload``.
+      - name: Build (test channel, no publish)
+        run: npm run build:test -- --publish never
+
+      # Upload the installer + the channel update manifest to the same
+      # prerelease the wheel job already created. electron-updater
+      # resolves asset URLs in ``latest-test*.yml`` relative to the
+      # release the yml itself lives in, so the tag-name mismatch
+      # between ``v0.1.9-testN`` and the version baked into filenames
+      # (``0.1.9-dev.N``) is invisible to it.
+      #
+      # Globs:
+      #   - ``release/*/OpenPA*.*`` catches every installer
+      #     (.AppImage / .dmg / .exe) and the matching .blockmap files
+      #     electron-updater uses for differential downloads.
+      #   - ``release/*/latest*.yml`` catches just the update manifests
+      #     (skips ``builder-effective-config.yaml`` and the like).
+      # ``--clobber`` makes re-runs idempotent.
+      - name: Upload Electron installers to GH prerelease
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build:test -- --publish always
+          TAG: ${{ needs.wheel.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          files=( release/*/OpenPA*.* release/*/latest*.yml )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No installer artifacts found under release/*/"
+            ls -la release/ || true
+            exit 1
+          fi
+          printf 'uploading: %s\n' "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" \
+            --repo "${{ github.repository }}" \
+            --clobber
 
   # Builds openpa/openpa-desktop:X.Y.Z.devN against Test PyPI and pushes
   # it to Docker Hub. Mirrors release.yml's ``docker`` job; differences:
