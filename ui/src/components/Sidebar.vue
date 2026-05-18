@@ -44,6 +44,12 @@ const handleOpenChannels = () => {
   router.push({ name: 'channels-page', params: { profile } });
 };
 
+const handleOpenAbout = () => {
+  const profile = route.params.profile as string;
+  if (!profile) return;
+  router.push({ name: 'about', params: { profile } });
+};
+
 // New conversations are only allowed under the implicit ``main`` channel.
 // External channels (Telegram, etc.) only ever spawn conversations from
 // inbound platform messages — the UI never POSTs to /api/conversations on
@@ -632,6 +638,13 @@ const toggleThemeFromIcon = () => {
             @change="handleThemeToggle"
             size="small"
           />
+        </div>
+      </ElTooltip>
+      <ElTooltip content="About" placement="right" :show-after="300" :disabled="!isCollapsed">
+        <div class="settings-row" @click="handleOpenAbout">
+          <Icon icon="mdi:information-outline" class="settings-icon" />
+          <span class="settings-label" v-if="!isCollapsed">About</span>
+          <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
         </div>
       </ElTooltip>
       <ElTooltip content="Logout" placement="right" :show-after="300" :disabled="!isCollapsed">
