@@ -189,6 +189,117 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
 
+  # Builds the per-platform Electron installers and uploads them to the
+  # GitHub prerelease the ``wheel`` job created. Mirrors release.yml's
+  # ``electron`` job with two test-specific differences:
+  #
+  #   1. Uses ``npm run build:test`` instead of ``npm run build``. That
+  #      script invokes vite with --mode test (so __OPENPA_INSTALL_CHANNEL__
+  #      is baked in as 'test', which makes setupAutoUpdater point
+  #      electron-updater at latest-test.yml on the installed app) and
+  #      passes ``--config electron-builder.test.json5`` so the publish
+  #      block uploads to a prerelease with ``channel: test`` — keeping
+  #      test artifacts out of the production ``latest.yml`` feed.
+  #
+  #   2. The wheel job's app/__version__.py rewrite happened on a
+  #      different runner. Each matrix runner here has a fresh checkout
+  #      without that mutation, so the rewrite is reapplied locally —
+  #      same shape as the ``docker`` job below. The new version flows
+  #      through scripts/sync_ui_version.py (the ui prebuild hook) into
+  #      ui/package.json so the installer filename and the latest-test.yml
+  #      metadata both carry 0.1.9.devN.
+  #
+  # Existing prod-channel users won't auto-update onto this stream — their
+  # installer baked INSTALL_CHANNEL=production at build time. They have
+  # to download a test installer from this prerelease once to switch.
+  # After that, electron-updater on their installed app sees every
+  # subsequent test release through latest-test.yml.
+  electron:
+    needs: wheel
+    strategy:
+      # ``fail-fast: false`` keeps a Linux build from being discarded
+      # because (say) macOS notarization hit a transient hiccup. We want
+      # every successful platform's artifacts on the prerelease.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - name: Check out openpa
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.wheel.outputs.tag }}
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Set up Python 3.13 (for prebuild version sync)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Rewrite app/__version__.py to ${{ needs.wheel.outputs.version }}
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          NEW_VERSION: ${{ needs.wheel.outputs.version }}
+        run: |
+          python <<'PY'
+          import os, re
+          new = os.environ["NEW_VERSION"]
+          path = "app/__version__.py"
+          src = open(path).read()
+          out = re.sub(
+              r'^__version__\s*=\s*"[^"]*"',
+              f'__version__ = "{new}"',
+              src,
+              count=1,
+              flags=re.M,
+          )
+          if out == src:
+              raise SystemExit(f"Failed to rewrite __version__ in {path}")
+          open(path, "w").write(out)
+          print(f"Rewrote __version__ → {new}")
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Workaround for npm bug #4828: optionalDependencies (the
+      # platform-specific @rollup/rollup-* binaries) are not recorded in
+      # a package-lock.json generated on a single OS. The lockfile here
+      # was created on Windows, so Linux/macOS runners must install
+      # their binary explicitly. --no-save / --no-package-lock keep both
+      # files untouched.
+      - name: Install platform Rollup binary (workaround npm#4828)
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)  pkg="@rollup/rollup-linux-x64-gnu" ;;
+            macos-latest)   pkg="@rollup/rollup-darwin-arm64" ;;
+            windows-latest) exit 0 ;;
+          esac
+          npm install --no-save --no-package-lock "$pkg"
+
+      # ``--publish always`` tells electron-builder to upload to the
+      # provider configured in electron-builder.test.json5 (GitHub at
+      # the tag's prerelease). build:test passes --config to point at
+      # that file, so the channel/releaseType overrides flow naturally
+      # — no need for inline -c.publish.0.* CLI gymnastics.
+      - name: Build & publish (test channel)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:test -- --publish always
+
   # Builds openpa/openpa-desktop:X.Y.Z.devN against Test PyPI and pushes
   # it to Docker Hub. Mirrors release.yml's ``docker`` job; differences:
   #   - Pulls the wheel from Test PyPI (with prod PyPI as fallback index

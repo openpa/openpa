@@ -316,6 +316,43 @@ async function waitForBackendHealthy(timeoutMs = 30000): Promise<boolean> {
   return false
 }
 
+// Origin of the backend's bundled SPA — strip the ``/health`` suffix so
+// we can build URLs like ``http://127.0.0.1:1112/#/admin/settings`` and
+// load the renderer from the wheel-served SPA rather than the asar
+// snapshot. Kept in sync with backendHealthUrl() above so a future port
+// change only has to be made there.
+function backendBaseUrl(): string {
+  return backendHealthUrl().replace(/\/health$/, '')
+}
+
+// Decide where to load a window's renderer from. The asar copy of the
+// SPA is frozen at electron-builder time, so loading from it leaves
+// wheel-only upgrades stuck on stale UI (no new Settings cards, no new
+// routes, etc.). Loading from the backend's HTTP server instead means
+// every wheel install immediately delivers fresh UI to the Electron
+// renderer.
+//
+// We still fall back to the asar copy in three cases:
+//   - Dev (vite serve has its own URL via VITE_DEV_SERVER_URL).
+//   - First-run installer (no backend running yet; the Setup Wizard
+//     lives in the asar SPA and configures the backend the first time).
+//   - Backend down / degraded (the asar copy at least shows something
+//     instead of a Chromium error page).
+// The renderer's own ``maybePivotToBackend`` in ui/src/main.ts handles
+// the post-Setup-Wizard transition: once the backend comes up the asar
+// SPA navigates itself to the HTTP origin without main needing to chase.
+async function loadMainContent(w: BrowserWindow, hash: string): Promise<void> {
+  if (VITE_DEV_SERVER_URL) {
+    void w.loadURL(VITE_DEV_SERVER_URL + hash)
+    return
+  }
+  if (await isBackendHealthy()) {
+    void w.loadURL(`${backendBaseUrl()}/${hash}`)
+    return
+  }
+  void w.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: hash.slice(1) })
+}
+
 async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   // Already responding? Adopt the running instance and skip the spawn.
   if (await isBackendHealthy()) {
@@ -996,6 +1033,28 @@ async function runBackendUpgrade(
       }
       send('openpa:backend-upgrade:done', { exitCode, ok: true })
       void fetchCapabilities()
+      // Reload renderers so they pick up the upgraded SPA. Windows
+      // already on the backend HTTP origin reload to fetch the new
+      // bundle (the wheel install just refreshed app/static/ui/, so
+      // the served index.html has a new JS hash). Windows still on the
+      // file:// asar — typical on the very first upgrade after a fresh
+      // install, before maybePivotToBackend has had a chance to fire —
+      // get navigated to the HTTP origin so they leave the stale asar.
+      // Brief delay so the UpdateBanner can show its "Updated" state
+      // before the page disappears under the user.
+      setTimeout(() => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (win.isDestroyed()) continue
+          const url = win.webContents.getURL()
+          if (url.startsWith('http://') || url.startsWith('https://')) {
+            win.reload()
+          } else if (url.startsWith('file://')) {
+            const hashIdx = url.indexOf('#')
+            const winHash = hashIdx >= 0 ? url.slice(hashIdx) : '#/'
+            void win.loadURL(`${backendBaseUrl()}/${winHash}`)
+          }
+        }
+      }, 1200)
       resolve({ exitCode, ok: true })
     }
     child.on('error', (e) => { void finish(null, e) })
@@ -1356,11 +1415,7 @@ function createAppWindow(target: WindowKind): BrowserWindow {
   })
 
   const hash = `#/?openpa_window=${target}`
-  if (VITE_DEV_SERVER_URL) {
-    void w.loadURL(VITE_DEV_SERVER_URL + hash)
-  } else {
-    void w.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: hash.slice(1) })
-  }
+  void loadMainContent(w, hash)
   return w
 }
 
@@ -1458,6 +1513,16 @@ function setupAutoUpdater(): void {
   } catch (err) {
     console.warn('[main] electron-updater unavailable, skipping auto-update:', err)
     return
+  }
+
+  // electron-updater discovers releases via a channel-specific yml file
+  // (``latest.yml`` for production, ``latest-test.yml`` for test, etc.).
+  // The matching name is taken from ``updater.channel`` — without this,
+  // a test-channel build would still check ``latest.yml`` and so would
+  // auto-update to the next production release, jumping its user off
+  // the prerelease stream entirely. ``production`` keeps the default.
+  if (INSTALL_CHANNEL !== 'production') {
+    updater.channel = INSTALL_CHANNEL
   }
 
   updater.autoDownload = false           // we ask the user first

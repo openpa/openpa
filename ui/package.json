@@ -12,7 +12,7 @@
     "preweb:build": "npm run version:sync",
     "dev": "vite",
     "build": "vue-tsc && vite build && electron-builder",
-    "build:test": "vue-tsc && vite build --mode test && electron-builder",
+    "build:test": "vue-tsc && vite build --mode test && electron-builder --config electron-builder.test.json5",
     "preview": "vite preview",
     "web:dev": "vite --config vite.config.web.ts",
     "web:build": "vue-tsc && vite build --config vite.config.web.ts && tsup server/index.ts --format esm --external express --external compression --out-dir dist-server",
