@@ -273,6 +273,21 @@ function openpaExePath(): string {
   return path.join(bin, 'openpa')
 }
 
+// Resolve <venv>/Scripts/python.exe (POSIX: <venv>/bin/python). We spawn
+// the interpreter directly instead of openpa.exe so pip can replace
+// openpa.exe during ``pip install --upgrade openpa`` on Windows;
+// otherwise pip's uninstall step hits WinError 32 trying to rename the
+// live openpa.exe to openpa.exe.deleteme. python.exe is not touched by
+// the openpa wheel install, so its handle being held is harmless.
+function venvPythonPath(): string {
+  const exe = openpaExePath()
+  const scripts = path.dirname(exe)
+  if (process.platform === 'win32') {
+    return path.join(scripts, 'python.exe')
+  }
+  return path.join(path.dirname(scripts), 'bin', 'python')
+}
+
 function backendHealthUrl(): string {
   // The install script writes ``.env`` with HOST/PORT, but
   // ``http://127.0.0.1:1112`` is the documented default and matches
@@ -312,9 +327,12 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
     return ok ? { ok: true } : { ok: false, error: 'backend did not become healthy' }
   }
 
-  const exe = openpaExePath()
-  if (!fs.existsSync(exe)) {
-    return { ok: false, error: `openpa executable missing at ${exe} — installer didn't finish?` }
+  // Spawn via the venv interpreter rather than openpa.exe so that
+  // ``pip install --upgrade openpa`` can replace openpa.exe during an
+  // in-app upgrade — see venvPythonPath() comment.
+  const py = venvPythonPath()
+  if (!fs.existsSync(py)) {
+    return { ok: false, error: `venv python missing at ${py} — installer didn't finish?` }
   }
 
   const openpaHome = path.join(app.getPath('home'), '.openpa')
@@ -332,7 +350,7 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
 
   let child: ChildProcess
   try {
-    child = spawn(exe, ['serve'], {
+    child = spawn(py, ['-m', 'app.cli.main', 'serve'], {
       stdio: ['ignore', stdoutFd, stderrFd],
       windowsHide: true,
       env: openpaSubprocessEnv(),
@@ -882,9 +900,12 @@ async function runBackendUpgrade(
     if (!sender.isDestroyed()) sender.send(channel, message)
   }
 
-  const exe = openpaExePath()
-  if (!fs.existsSync(exe)) {
-    const error = `openpa executable missing at ${exe}`
+  // Spawn via the venv interpreter rather than openpa.exe so the pip
+  // step inside this subprocess can replace openpa.exe on Windows —
+  // see venvPythonPath() comment.
+  const py = venvPythonPath()
+  if (!fs.existsSync(py)) {
+    const error = `venv python missing at ${py}`
     send('openpa:backend-upgrade:done', { exitCode: -1, ok: false, error })
     return { exitCode: -1, ok: false, error }
   }
@@ -892,7 +913,7 @@ async function runBackendUpgrade(
   send('openpa:backend-upgrade:status', { phase: 'starting' })
   send('openpa:backend-upgrade:log', {
     stream: 'info',
-    line: `$ ${exe} upgrade apply --yes`,
+    line: `$ ${py} -m app.cli.main upgrade apply --yes`,
   })
 
   return new Promise((resolve) => {
@@ -903,7 +924,7 @@ async function runBackendUpgrade(
       // forwards flags down to apply), but spelling out the subcommand
       // avoids the "No such option" failure mode seen on shells / Typer
       // versions where the root callback didn't accept ``--yes``.
-      child = spawn(exe, ['upgrade', 'apply', '--yes'], {
+      child = spawn(py, ['-m', 'app.cli.main', 'upgrade', 'apply', '--yes'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         env: openpaSubprocessEnv(),

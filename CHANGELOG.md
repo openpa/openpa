@@ -120,6 +120,22 @@ Move to a dated section on release.
   the row directly and the popover anchors to it via `:virtual-ref`
   + `virtual-triggering`, matching the sibling-pattern already used
   by Settings / Process Manager / Events / Channels rows.
+- In-app upgrade on the Windows `test` channel: pip install no
+  longer fails at the `[install]` step with `WinError 32` renaming
+  `openpa.exe` → `openpa.exe.deleteme`. The Electron shell was
+  spawning both the long-running backend (`openpa.exe serve`) and
+  the upgrade subprocess itself (`openpa.exe upgrade apply --yes`)
+  through the venv's console-script wrapper, so Windows held the
+  executable open for pip's lifetime — even pip's own ``.deleteme``
+  rename fallback was refused (the handle was held without
+  ``FILE_SHARE_DELETE``). Both spawns now go through
+  ``<venv>/Scripts/python.exe -m app.cli.main <args>``;
+  ``python.exe`` is untouched by ``pip install --upgrade openpa``,
+  so the lock disappears structurally. The web-UI upgrade path
+  (`POST /api/upgrade/apply`) is unblocked as a side effect, since
+  the only running `openpa.exe` consumer (the backend) is gone.
+  Complements the ``v0.1.9-test15`` fix, which addressed a different
+  Windows file-lock (the SQLite backup) on the same upgrade flow.
 
 ### Changed
 - The Settings → Updates page and UpdateBanner no longer distinguish
