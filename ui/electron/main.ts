@@ -110,6 +110,108 @@ function updateConfig(patch: Partial<OpenPAConfig>): OpenPAConfig {
   return runtimeConfig
 }
 
+// ── Auth state (openpa-auth.json) ───────────────────────────────────────
+//
+// Per-profile auth data — tokens, the logged-in profile list, the active
+// profile, and per-profile UI preferences that need to follow the user
+// across origin changes. Without this file, all of these live in
+// renderer-side localStorage, which is partitioned by Chromium origin:
+// once the renderer pivots from ``file://`` to ``http://localhost:1515``
+// (and later, after a full app restart, potentially to a different host
+// when ``backendSpaUrl()`` was hardcoded), localStorage on the new origin
+// is empty and the user appears logged out. Storing this in the main
+// process behind an IPC bridge makes the data origin-agnostic.
+//
+// Shape: dictionaries keyed by profile name. ``tokens[profile]`` mirrors
+// the old ``agent_token_${profile}`` localStorage key; ``loggedInProfiles``
+// mirrors ``logged_in_profiles``; ``activeProfileId`` mirrors
+// ``profile_id``; ``reasoningEnabled[profile]`` mirrors
+// ``reasoning_enabled_${profile}``.
+
+type OpenPAAuth = {
+  tokens: Record<string, string>
+  loggedInProfiles: string[]
+  activeProfileId: string
+  reasoningEnabled: Record<string, boolean>
+}
+
+const AUTH_DEFAULTS: OpenPAAuth = {
+  tokens: {},
+  loggedInProfiles: [],
+  activeProfileId: '',
+  reasoningEnabled: {},
+}
+
+function authPath(): string {
+  return path.join(app.getPath('userData'), 'openpa-auth.json')
+}
+
+function loadAuth(): OpenPAAuth {
+  try {
+    const raw = fs.readFileSync(authPath(), 'utf8')
+    const parsed = JSON.parse(raw)
+    return {
+      tokens: { ...AUTH_DEFAULTS.tokens, ...(parsed.tokens ?? {}) },
+      loggedInProfiles: Array.isArray(parsed.loggedInProfiles)
+        ? parsed.loggedInProfiles.filter((x: unknown): x is string => typeof x === 'string')
+        : [],
+      activeProfileId: typeof parsed.activeProfileId === 'string' ? parsed.activeProfileId : '',
+      reasoningEnabled: { ...AUTH_DEFAULTS.reasoningEnabled, ...(parsed.reasoningEnabled ?? {}) },
+    }
+  } catch {
+    return { ...AUTH_DEFAULTS, tokens: {}, loggedInProfiles: [], reasoningEnabled: {} }
+  }
+}
+
+function saveAuth(state: OpenPAAuth): void {
+  const file = authPath()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8')
+  fs.renameSync(tmp, file)
+}
+
+let runtimeAuth: OpenPAAuth = {
+  ...AUTH_DEFAULTS,
+  tokens: {},
+  loggedInProfiles: [],
+  reasoningEnabled: {},
+}
+
+// Patch the in-memory auth state and persist. ``tokens`` and
+// ``reasoningEnabled`` are merged shallowly so callers can update a
+// single profile without having to send the full map; ``loggedInProfiles``
+// and ``activeProfileId`` are replaced wholesale when present in the
+// patch (the renderer always sends the full intended list / id).
+function updateAuth(patch: Partial<OpenPAAuth>): OpenPAAuth {
+  runtimeAuth = {
+    tokens: patch.tokens ? { ...runtimeAuth.tokens, ...patch.tokens } : runtimeAuth.tokens,
+    loggedInProfiles: patch.loggedInProfiles ?? runtimeAuth.loggedInProfiles,
+    activeProfileId: patch.activeProfileId ?? runtimeAuth.activeProfileId,
+    reasoningEnabled: patch.reasoningEnabled
+      ? { ...runtimeAuth.reasoningEnabled, ...patch.reasoningEnabled }
+      : runtimeAuth.reasoningEnabled,
+  }
+  saveAuth(runtimeAuth)
+  return runtimeAuth
+}
+
+// Specific helper for the logout / remove-token path. Drops the token
+// and the loggedInProfiles entry atomically so the two never disagree
+// (which would let the profile selector show a profile with no usable
+// token after a logout race).
+function removeAuthToken(profile: string): OpenPAAuth {
+  const remainingTokens = { ...runtimeAuth.tokens }
+  delete remainingTokens[profile]
+  runtimeAuth = {
+    ...runtimeAuth,
+    tokens: remainingTokens,
+    loggedInProfiles: runtimeAuth.loggedInProfiles.filter((p) => p !== profile),
+  }
+  saveAuth(runtimeAuth)
+  return runtimeAuth
+}
+
 // The install script's ``.env`` is the canonical "OpenPA is installed
 // on this machine" marker. We reconcile runtimeConfig.agentUrl against
 // it on each launch so the user can re-trigger the first-run installer
@@ -205,6 +307,25 @@ ipcMain.handle('openpa:set-config', (_event, patch: Partial<OpenPAConfig>) => {
     void fetchCapabilities()
   }
   return next
+})
+
+// ── Auth IPC ────────────────────────────────────────────────────────────
+//
+// ``openpa:auth:snapshot-sync`` mirrors ``openpa:get-config-sync``: it's a
+// one-shot sync IPC consumed by the preload script so the renderer can
+// read tokens at module-init time (the settings store reads
+// ``activeProfileId`` synchronously in its setup). The async handlers
+// support live updates as the user logs in / out / switches profiles.
+ipcMain.on('openpa:auth:snapshot-sync', (event) => {
+  event.returnValue = runtimeAuth
+})
+ipcMain.handle('openpa:auth:get', () => runtimeAuth)
+ipcMain.handle('openpa:auth:set', (_event, patch: Partial<OpenPAAuth>) => {
+  return updateAuth(patch)
+})
+ipcMain.handle('openpa:auth:remove-token', (_event, profile: string) => {
+  if (typeof profile !== 'string' || !profile) return runtimeAuth
+  return removeAuthToken(profile)
 })
 
 // ── First-run installer bridge ──────────────────────────────────────────────
@@ -338,8 +459,26 @@ async function waitForBackendHealthy(timeoutMs = 30000): Promise<boolean> {
 // (1112 → 1515). When OPENPA_UI_PORT is overridden on the backend, the
 // Electron shell would need a matching override here; today we just
 // hardcode the default, same as backendHealthUrl().
+//
+// Host derivation: we mirror the renderer's maybePivotToBackend logic so
+// that the main-process loader and the renderer pivot agree on the
+// origin. Before this, the loader was hardcoded to ``127.0.0.1`` while
+// the renderer pivoted to ``localhost`` (whatever ``agentUrl`` parses to),
+// producing two distinct Chromium origins with independent localStorage
+// across launches. A quit-and-relaunch would silently log the user out.
+// Fall back to the loopback literal when ``agentUrl`` is empty or
+// unparseable.
 function backendSpaUrl(): string {
-  return 'http://127.0.0.1:1515'
+  const fallback = 'http://127.0.0.1:1515'
+  const agentUrl = runtimeConfig.agentUrl
+  if (!agentUrl) return fallback
+  try {
+    const u = new URL(agentUrl)
+    u.port = '1515'
+    return u.origin
+  } catch {
+    return fallback
+  }
 }
 
 // Decide where to load a window's renderer from. The asar copy of the
@@ -1720,6 +1859,11 @@ if (!gotSingleInstanceLock) {
     // Load the persisted config before the window opens so the preload's
     // sync IPC returns a populated value on the very first request.
     runtimeConfig = loadConfig();
+    // Same for auth state — the renderer's settings store reads the
+    // active profile + per-profile tokens synchronously from the preload
+    // bridge, so the snapshot has to be populated before any window
+    // opens.
+    runtimeAuth = loadAuth();
     // Reconcile with ~/.openpa/.env so a deleted install dir re-triggers
     // the first-run installer instead of falling through to a broken UI.
     reconcileInstallStateWithDisk();
@@ -1739,6 +1883,19 @@ if (!gotSingleInstanceLock) {
       } catch (err) {
         console.warn('[openpa] failed to clear renderer storage', err);
       }
+      // Auth state moved out of renderer localStorage and into
+      // openpa-auth.json (main-process JSON, origin-agnostic). The
+      // clearStorageData call above doesn't touch userData files, so we
+      // reset the auth file by hand for the same first-run reason:
+      // stale tokens from a prior install must not survive into the
+      // SetupWizard.
+      runtimeAuth = {
+        ...AUTH_DEFAULTS,
+        tokens: {},
+        loggedInProfiles: [],
+        reasoningEnabled: {},
+      };
+      try { saveAuth(runtimeAuth); } catch { /* file may not exist yet */ }
     }
     createTray();
     rebuildJumpList();

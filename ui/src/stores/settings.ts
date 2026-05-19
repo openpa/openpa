@@ -2,37 +2,22 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { fetchMe } from '../services/agentApi';
 import { getAgentUrl, setAgentUrl as persistAgentUrl } from '../services/runtimeConfig';
+import * as authStorage from '../services/authStorage';
 
 export type ProfileValue = string | boolean | number | Record<string, unknown>;
 
-// ── Per-profile token helpers ──
-
-function _getLoggedInProfiles(): string[] {
-  try {
-    const raw = localStorage.getItem('logged_in_profiles');
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function _saveLoggedInProfiles(profiles: string[]) {
-  localStorage.setItem('logged_in_profiles', JSON.stringify(profiles));
-}
-
-function _migrateOldToken() {
-  // Migrate from old single-token format to per-profile format
+function _migrateStorage() {
+  // Legacy single-token format → per-profile format. Predates the
+  // ``logged_in_profiles`` list, so the old keys lived directly in
+  // localStorage as ``agent_auth_token`` + ``profile_id``. Promote to
+  // the per-profile shape, but use the storage facade so the result
+  // lands in the right place (main-process bridge in Electron;
+  // localStorage in the web build).
   const oldToken = localStorage.getItem('agent_auth_token');
   const oldProfileId = localStorage.getItem('profile_id');
   if (oldToken && oldProfileId) {
-    const key = `agent_token_${oldProfileId}`;
-    if (!localStorage.getItem(key)) {
-      localStorage.setItem(key, oldToken);
-      const profiles = _getLoggedInProfiles();
-      if (!profiles.includes(oldProfileId)) {
-        profiles.push(oldProfileId);
-        _saveLoggedInProfiles(profiles);
-      }
+    if (!authStorage.getToken(oldProfileId)) {
+      void authStorage.setToken(oldProfileId, oldToken);
     }
     localStorage.removeItem('agent_auth_token');
   }
@@ -40,10 +25,18 @@ function _migrateOldToken() {
   // (window.openpa.config) is now authoritative, so drop any stale value
   // here on first load to avoid confusion.
   localStorage.removeItem('agent_url');
+
+  // Electron only: copy any tokens / loggedInProfiles / activeProfileId
+  // / reasoning toggles that still live in renderer localStorage onto
+  // the main-process bridge. Idempotent — only copies keys the bridge
+  // doesn't already have, so re-running across upgrades is safe.
+  // Without this, a user upgrading from a pre-bridge build would
+  // appear logged out on the very first launch with new code.
+  authStorage.migrateLocalStorageToBridge();
 }
 
 // Run migration on module load
-_migrateOldToken();
+_migrateStorage();
 
 export const useSettingsStore = defineStore('settings', () => {
   // Auto-connect to agent on app load
@@ -67,8 +60,11 @@ export const useSettingsStore = defineStore('settings', () => {
   // Sidebar collapsed state
   const sidebarCollapsed = ref(localStorage.getItem('sidebar_collapsed') === 'true');
 
-  // Active profile ID (the currently-used profile for this tab session)
-  const profileId = ref(localStorage.getItem('profile_id') || '');
+  // Active profile ID (the currently-used profile for this tab session).
+  // Source is the cross-origin storage facade so a renderer that just
+  // pivoted from file:// to http://localhost:1515 still knows which
+  // profile the user was on.
+  const profileId = ref(authStorage.getActiveProfileId());
 
   // Active authentication token (for the current profile session)
   const authToken = ref('');
@@ -102,38 +98,36 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   // ── Per-profile token management ──
+  //
+  // All persistence routes through ``authStorage`` so the values survive
+  // Chromium origin changes in Electron (file:// → http://localhost:1515).
+  // The facade does an optimistic sync update of its snapshot before the
+  // bridge IPC resolves, so callers can safely read back immediately
+  // after writing — no need to await here.
 
   function getTokenForProfile(profileName: string): string {
-    return localStorage.getItem(`agent_token_${profileName}`) || '';
+    return authStorage.getToken(profileName);
   }
 
   function setTokenForProfile(profileName: string, token: string) {
-    localStorage.setItem(`agent_token_${profileName}`, token);
-    const profiles = _getLoggedInProfiles();
-    if (!profiles.includes(profileName)) {
-      profiles.push(profileName);
-      _saveLoggedInProfiles(profiles);
-    }
+    void authStorage.setToken(profileName, token);
   }
 
   function getReasoningEnabled(profileName: string): boolean {
-    const val = localStorage.getItem(`reasoning_enabled_${profileName}`);
-    return val !== 'false'; // default: true
+    return authStorage.getReasoningEnabled(profileName);
   }
 
   function setReasoningEnabled(profileName: string, enabled: boolean) {
     reasoningEnabled.value = enabled;
-    localStorage.setItem(`reasoning_enabled_${profileName}`, String(enabled));
+    void authStorage.setReasoningEnabled(profileName, enabled);
   }
 
   function removeTokenForProfile(profileName: string) {
-    localStorage.removeItem(`agent_token_${profileName}`);
-    const profiles = _getLoggedInProfiles().filter(p => p !== profileName);
-    _saveLoggedInProfiles(profiles);
+    void authStorage.removeToken(profileName);
   }
 
   function getLoggedInProfiles(): string[] {
-    return _getLoggedInProfiles();
+    return authStorage.getLoggedInProfiles();
   }
 
   /**
@@ -178,6 +172,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   function setProfileId(id: string) {
     profileId.value = id;
+    // Persist through the storage facade so the next launch / reload —
+    // potentially on a different Chromium origin in Electron — knows
+    // which profile to re-activate. Fire-and-forget: the local ref is
+    // the source of truth for the current session.
+    void authStorage.setActiveProfileId(id);
   }
 
   function setAuthToken(token: string) {
