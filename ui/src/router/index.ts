@@ -218,6 +218,34 @@ router.beforeEach((to) => {
 // Without this, child views' onMounted fires API calls before App.vue's
 // onMounted has a chance to load the token (parent onMounted runs after
 // children in Vue 3), producing 401s on hard reloads of profile-scoped pages.
+//
+// Just-updated grace window: the Electron main process and the Web-UI
+// version poll both stamp ``sessionStorage('openpa:just_updated')``
+// with the time of an automatic post-upgrade reload. For
+// JUST_UPDATED_GRACE_MS afterwards we allow profile-scoped navigations
+// even if ``getTokenForProfile`` momentarily returns empty — the
+// downstream views will refetch their state and the token will be
+// back in localStorage by the time they make API calls. Without this,
+// any rare race that empties localStorage during the reload sequence
+// would dump the user onto the Login screen they explicitly didn't
+// want to see after an upgrade.
+const JUST_UPDATED_GRACE_MS = 30000;
+
+function withinJustUpdatedGrace(): boolean {
+  try {
+    const raw = sessionStorage.getItem('openpa:just_updated');
+    if (!raw) return false;
+    const ts = Number.parseInt(raw, 10);
+    if (!Number.isFinite(ts)) return false;
+    if (Date.now() - ts < JUST_UPDATED_GRACE_MS) return true;
+    // Expired — clear so the redirect rule re-arms next time.
+    sessionStorage.removeItem('openpa:just_updated');
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 router.beforeEach((to) => {
   const routeName = typeof to.name === 'string' ? to.name : '';
   const profile = (to.params.profile as string | undefined) || '';
@@ -226,6 +254,9 @@ router.beforeEach((to) => {
   const settingsStore = useSettingsStore();
   const token = settingsStore.getTokenForProfile(profile);
   if (!token) {
+    if (withinJustUpdatedGrace()) {
+      return true;
+    }
     return { path: `/login/${profile}`, replace: true };
   }
   settingsStore.activateProfile(profile);

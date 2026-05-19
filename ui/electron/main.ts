@@ -1069,24 +1069,57 @@ async function runBackendUpgrade(
       // file:// asar — typical on the very first upgrade after a fresh
       // install, before maybePivotToBackend has had a chance to fire —
       // get navigated to the HTTP origin so they leave the stale asar.
-      // Brief delay so the UpdateBanner can show its "Updated" state
-      // before the page disappears under the user.
-      setTimeout(() => {
+      //
+      // We wait for /health to come back before reloading. A fixed
+      // delay caused renderers to reload against a partially-ready
+      // backend; ProfileSelector then saw setup-status responses with
+      // ``has_profiles=false`` and wiped every stored token, dumping
+      // users on the login screen post-upgrade. Health-polling instead
+      // means the renderer reloads against a fully-ready backend, and
+      // ``getTokenForProfile`` finds the original token still in
+      // localStorage. The 30 s ceiling matches startBackend's own
+      // readiness budget — if we don't see /health by then, surface a
+      // failure rather than reload onto a broken backend.
+      void (async () => {
+        const healthy = await waitForBackendHealthy(30000)
+        if (!healthy) {
+          send('openpa:backend-upgrade:done', {
+            exitCode,
+            ok: false,
+            error: 'backend did not become healthy after upgrade',
+          })
+          return
+        }
+        // Stamp a one-shot grace flag on each renderer before reloading.
+        // The Vue router consults sessionStorage('openpa:just_updated')
+        // and, for the next ~30 s, suppresses redirect-to-login when a
+        // localStorage token momentarily races with the new backend.
+        const stamp = String(Date.now())
         for (const win of BrowserWindow.getAllWindows()) {
           if (win.isDestroyed()) continue
           const url = win.webContents.getURL()
-          if (url.startsWith('http://') || url.startsWith('https://')) {
-            // Already on the backend HTTP origin: a plain reload refetches
-            // the new bundle (the wheel install just refreshed index.html
-            // and bumped the JS hash). Don't go through
-            // pivotFileWindowsToBackend here — that would skip these.
-            win.reload()
+          if (!url.startsWith('http://') && !url.startsWith('https://')) continue
+          try {
+            await win.webContents.executeJavaScript(
+              `try { sessionStorage.setItem('openpa:just_updated', '${stamp}') } catch {}`,
+              true,
+            )
+          } catch {
+            // Renderer torn down between checks; reload() below will still try.
           }
+          // Already on the backend HTTP origin: a plain reload refetches
+          // the new bundle (the wheel install just refreshed index.html
+          // and bumped the JS hash). Don't go through
+          // pivotFileWindowsToBackend here — that would skip these.
+          win.reload()
         }
         // Cover file:// windows in the same pass — typical on the very
         // first upgrade after a fresh install, before any pivot has run.
+        // pivotFileWindowsToBackend navigates these to the SPA origin;
+        // the grace flag is set by the renderer-side version poll on
+        // first load instead.
         pivotFileWindowsToBackend()
-      }, 1200)
+      })()
       resolve({ exitCode, ok: true })
     }
     child.on('error', (e) => { void finish(null, e) })

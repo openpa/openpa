@@ -47,6 +47,7 @@ import type {
 const LOG_TAIL_MAX = 500
 const BACKEND_POLL_MS = 6 * 60 * 60 * 1000  // 6h — same cadence as the old banner
 const STATUS_POLL_MS = 1500                  // web-UI poll cadence during applying
+const VERSION_POLL_MS = 30000                // /version poll cadence for auto-reload
 
 // ── module-level singletons ──────────────────────────────────────────────
 //
@@ -67,6 +68,8 @@ let initialised = false
 let backendTimer: ReturnType<typeof setInterval> | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let statusController: AbortController | null = null
+let versionTimer: ReturnType<typeof setInterval> | null = null
+let bootBackendVersion: string | null = null
 
 function isElectron(): boolean {
   return typeof window !== 'undefined' && !!window.openpa
@@ -283,6 +286,50 @@ function reconcileTerminalPhase(args: ReconcileArgs): void {
   void checkBackend()
 }
 
+// ── Version polling for auto-reload ──────────────────────────────────────
+//
+// Every tab — Web UI or Electron renderer — polls ``/version`` and
+// reloads itself if the ``backend`` field changes vs. the value seen
+// at boot. This is what gives a browser tab the "auto-pick-up the new
+// UI after an upgrade" behaviour the Electron main process already
+// provides via ``win.reload()``. In Electron the two paths race
+// harmlessly: whichever fires first reloads the window, the other
+// becomes a no-op once the version matches again.
+
+async function fetchBackendVersion(): Promise<string | null> {
+  const settings = useSettingsStore()
+  if (!settings.agentUrl) return null
+  try {
+    const r = await fetch(`${settings.agentUrl}/version`)
+    if (!r.ok) return null
+    const body = (await r.json()) as { backend?: string }
+    return typeof body.backend === 'string' ? body.backend : null
+  } catch {
+    return null
+  }
+}
+
+function triggerPostUpdateReload(): void {
+  try {
+    sessionStorage.setItem('openpa:just_updated', String(Date.now()))
+  } catch {
+    // sessionStorage unavailable (private mode etc.) — reload anyway.
+  }
+  window.location.reload()
+}
+
+async function pollVersion(): Promise<void> {
+  const current = await fetchBackendVersion()
+  if (!current) return
+  if (bootBackendVersion === null) {
+    bootBackendVersion = current
+    return
+  }
+  if (current !== bootBackendVersion) {
+    triggerPostUpdateReload()
+  }
+}
+
 // ── Initialisation (idempotent) ──────────────────────────────────────────
 
 function init(): void {
@@ -291,6 +338,10 @@ function init(): void {
 
   void checkBackend()
   backendTimer = setInterval(() => { void checkBackend() }, BACKEND_POLL_MS)
+
+  // Seed the boot version, then poll on a fixed cadence.
+  void pollVersion()
+  versionTimer = setInterval(() => { void pollVersion() }, VERSION_POLL_MS)
 
   if (window.openpa?.updater) {
     window.openpa.updater.onStatus(onUpdaterStatus)
@@ -310,6 +361,11 @@ function teardown(): void {
     clearInterval(backendTimer)
     backendTimer = null
   }
+  if (versionTimer) {
+    clearInterval(versionTimer)
+    versionTimer = null
+  }
+  bootBackendVersion = null
   stopStatusPolling()
   if (window.openpa?.updater) {
     window.openpa.updater.offStatus(onUpdaterStatus)

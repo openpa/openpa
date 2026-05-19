@@ -4,8 +4,22 @@ import { useRouter, useRoute } from 'vue-router';
 import { ElButton, ElInput, ElDivider } from 'element-plus';
 import { Icon } from '@iconify/vue';
 import { useSettingsStore } from '../stores/settings';
-import { checkSetupStatus, resetOrphanedSetup, listProfiles } from '../services/configApi';
+import { checkSetupStatus, resetOrphanedSetup } from '../services/configApi';
 import { fetchMe } from '../services/agentApi';
+
+// During a backend restart (typical immediately post-upgrade) the
+// /api/config/setup-status endpoint can briefly return
+// has_profiles=false before storage fully reloads. Acting on that
+// reading wipes every stored token. Retry until we get a stable
+// answer.
+const SETUP_STATUS_MAX_WAIT_MS = 10000;
+
+function resolveBaseUrl(agentUrl: string): string {
+  if (agentUrl.startsWith('http://') || agentUrl.startsWith('https://')) {
+    return agentUrl;
+  }
+  return `${window.location.origin}${agentUrl}`;
+}
 
 const router = useRouter();
 const route = useRoute();
@@ -34,50 +48,93 @@ const loginLoading = ref(false);
 const loginError = ref('');
 
 onMounted(async () => {
-  try {
-    const status = await checkSetupStatus(settingsStore.agentUrl);
+  const status = await readStableSetupStatus();
 
-    if (!status.setup_complete) {
-      router.replace('/setup');
-      return;
-    }
-
-    // Detect orphaned setup: setup_complete=true but no profiles in DB
-    if (status.has_profiles === false) {
-      try {
-        await resetOrphanedSetup(settingsStore.agentUrl);
-      } catch {
-        // If reset fails, still redirect — SetupWizard will re-check
-      }
-      // Clear all stale localStorage profile data
-      for (const p of settingsStore.getLoggedInProfiles()) {
-        settingsStore.removeTokenForProfile(p);
-      }
-      router.replace('/setup');
-      return;
-    }
-
-    // Validate locally-stored profiles against server and prune stale entries
-    const localProfiles = settingsStore.getLoggedInProfiles();
-    if (localProfiles.length > 0) {
-      try {
-        const { profiles: serverProfiles } = await listProfiles(settingsStore.agentUrl, '');
-        for (const lp of localProfiles) {
-          if (!serverProfiles.includes(lp)) {
-            settingsStore.removeTokenForProfile(lp);
-          }
-        }
-      } catch {
-        // Server unreachable for profile list — show what we have
-      }
-    }
-  } catch {
-    // Server unreachable — show whatever we have locally
+  if (!status) {
+    // Backend never gave a stable reading within the budget — fall back
+    // to whatever we have locally rather than destroying state.
+    loggedInProfiles.value = settingsStore.getLoggedInProfiles();
+    checking.value = false;
+    return;
   }
+
+  if (!status.setup_complete) {
+    router.replace('/setup');
+    return;
+  }
+
+  // Detect orphaned setup: setup_complete=true but no profiles in DB.
+  // Only acted on after readStableSetupStatus confirmed two consecutive
+  // readings — a single transient post-restart reading no longer wipes
+  // tokens.
+  if (status.has_profiles === false) {
+    try {
+      await resetOrphanedSetup(settingsStore.agentUrl);
+    } catch {
+      // If reset fails, still redirect — SetupWizard will re-check
+    }
+    for (const p of settingsStore.getLoggedInProfiles()) {
+      settingsStore.removeTokenForProfile(p);
+    }
+    router.replace('/setup');
+    return;
+  }
+
+  // Authenticated per-profile probe. Only prune on a definitive 401/403
+  // — never on network errors, 5xx, or timeouts, which can happen
+  // briefly during a backend restart.
+  const base = resolveBaseUrl(settingsStore.agentUrl);
+  const localProfiles = settingsStore.getLoggedInProfiles();
+  await Promise.all(localProfiles.map(async (lp) => {
+    const token = settingsStore.getTokenForProfile(lp);
+    if (!token) return;
+    try {
+      const res = await fetch(`${base}/api/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 401 || res.status === 403) {
+        settingsStore.removeTokenForProfile(lp);
+      }
+    } catch {
+      // Network failure — keep the token.
+    }
+  }));
 
   loggedInProfiles.value = settingsStore.getLoggedInProfiles();
   checking.value = false;
 });
+
+async function readStableSetupStatus() {
+  const start = Date.now();
+  let delay = 200;
+  while (Date.now() - start < SETUP_STATUS_MAX_WAIT_MS) {
+    let candidate: Awaited<ReturnType<typeof checkSetupStatus>> | null = null;
+    try {
+      candidate = await checkSetupStatus(settingsStore.agentUrl);
+    } catch {
+      // transient — retry
+    }
+    if (candidate) {
+      const looksOrphaned = candidate.setup_complete && candidate.has_profiles === false;
+      if (!looksOrphaned) return candidate;
+      // Plausibly partial backend state — confirm with one more read
+      // before believing it.
+      let confirm: typeof candidate | null = null;
+      try {
+        await new Promise((r) => setTimeout(r, 250));
+        confirm = await checkSetupStatus(settingsStore.agentUrl);
+      } catch {
+        // transient — retry the outer loop
+      }
+      if (confirm) {
+        return confirm;
+      }
+    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(Math.floor(delay * 1.5), 1500);
+  }
+  return null;
+}
 
 function selectProfile(profile: string) {
   router.push(destinationFor(profile));
