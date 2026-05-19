@@ -680,7 +680,16 @@ function Resolve-OpenPAVersion {
             $wheelNames = [regex]::Matches($indexBody, 'openpa-([^"/]+)-py3-none-any\.whl') |
                 ForEach-Object { $_.Groups[1].Value } |
                 Select-Object -Unique |
-                Sort-Object
+                Sort-Object -Property @{ Expression = {
+                    # Mirror `sort -V` for X.Y.Z[.devN]: numeric on each
+                    # segment, with stable releases ordered after their
+                    # .devN prereleases. Plain Sort-Object is lexical, so
+                    # "0.1.9.dev9" wrongly outranks "0.1.9.dev30".
+                    if ($_ -match '^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?$') {
+                        $dev = if ($matches[4]) { [int]$matches[4] } else { [int]::MaxValue }
+                        [version]::new([int]$matches[1], [int]$matches[2], [int]$matches[3], $dev)
+                    } else { [version]::new(0,0,0,0) }
+                } }
             if ($ElectronVersion) {
                 $prefix = "$ElectronVersion.dev"
                 $wheelNames = $wheelNames | Where-Object { $_ -like "$prefix*" -and $_ -match '^\d+\.\d+\.\d+\.dev\d+$' }
@@ -1130,13 +1139,24 @@ if ($Channel -eq 'dev') {
                 $wheelUrls = [regex]::Matches($indexBody, $pattern) |
                     ForEach-Object { $_.Value } |
                     Select-Object -Unique |
-                    Sort-Object -Property @{ Expression = { Split-Path $_ -Leaf } }
+                    Sort-Object -Property @{ Expression = {
+                        # Mirror `sort -V`; sorting the leaf as a plain
+                        if ((Split-Path $_ -Leaf) -match 'openpa-(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?-py3-none-any\.whl$') {
+                            $dev = if ($matches[4]) { [int]$matches[4] } else { [int]::MaxValue }
+                            [version]::new([int]$matches[1], [int]$matches[2], [int]$matches[3], $dev)
+                        } else { [version]::new(0,0,0,0) }
+                    } }
             } else {
                 Write-Info "Locating latest openpa test wheel"
                 $wheelUrls = [regex]::Matches($indexBody, 'https://[^"]*openpa-[^"]*-py3-none-any\.whl') |
                     ForEach-Object { $_.Value } |
                     Select-Object -Unique |
-                    Sort-Object -Property @{ Expression = { Split-Path $_ -Leaf } }
+                    Sort-Object -Property @{ Expression = {
+                        if ((Split-Path $_ -Leaf) -match 'openpa-(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?-py3-none-any\.whl$') {
+                            $dev = if ($matches[4]) { [int]$matches[4] } else { [int]::MaxValue }
+                            [version]::new([int]$matches[1], [int]$matches[2], [int]$matches[3], $dev)
+                        } else { [version]::new(0,0,0,0) }
+                    } }
             }
             $InstallSpec = $wheelUrls | Select-Object -Last 1
             if (-not $InstallSpec) {
