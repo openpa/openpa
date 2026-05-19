@@ -243,10 +243,30 @@ async function continueToSetupWizard() {
       }
     }
     // Sync the agentUrl now that the backend is up. ``setAgentUrl``
-    // persists through to runtimeConfig so future launches skip the
-    // installer stage.
+    // persists through to runtimeConfig (main-process JSON file via
+    // the preload bridge), so the value survives the cross-origin
+    // pivot below.
     if (!settingsStore.agentUrl) {
       await settingsStore.setAgentUrl('http://localhost:1112');
+    }
+    // Pivot off ``file://`` onto the wheel-served SPA origin before
+    // the user touches any setup form. The auth token created in
+    // ``handleFinish`` lands in ``localStorage`` on this origin — the
+    // same origin every subsequent launch's pivot
+    // (``pivotFileWindowsToBackend`` in electron/main.ts) loads — so
+    // the user never has to re-enter their token after restart.
+    //
+    // Path B in ``onMounted`` re-runs ``runPostInstallSetupChecks``
+    // against the now-healthy backend on the new origin, so we don't
+    // need to call it here. ``embeddingStatusStore.connect`` likewise
+    // re-fires from the module-load belt-and-suspenders below (and
+    // from App.vue's onMounted) once the SPA boots on the new origin.
+    //
+    // Install stage stays on the asar — only the *setup* stage moves
+    // to http. The user has not entered any wizard data at this seam.
+    if (window.location.protocol === 'file:') {
+      window.location.replace('http://127.0.0.1:1515/#/setup');
+      return;
     }
     embeddingStatusStore.connect(settingsStore.agentUrl);
     await runPostInstallSetupChecks();

@@ -69,6 +69,22 @@ Move to a dated section on release.
   `openpa/openpa-desktop:<version>.dev1`, production pulls `:latest`.
 
 ### Fixed
+- Setup Wizard token no longer evaporates between first-run and restart.
+  The wizard renders from the asar (``file://``) on first launch, so
+  ``settingsStore.setTokenForProfile`` wrote ``agent_token_<profile>``
+  into the asar origin's ``localStorage``. On every subsequent launch
+  the Electron shell pivots the renderer onto the wheel-served SPA at
+  ``http://127.0.0.1:1515`` (see ``pivotFileWindowsToBackend`` in
+  ``ui/electron/main.ts``) — a different Chromium origin with its own
+  empty ``localStorage`` — so the token wasn't found and the user
+  landed on ``LoginPage`` and had to paste the token by hand. The
+  wizard now pivots once at the install → setup seam (after
+  ``bridge.start()`` confirms backend health and ``setAgentUrl``
+  persists the URL through to the main-process ``runtimeConfig`` file)
+  so the setup steps run on the same origin every relaunch loads on.
+  The install stage itself still renders from the asar (script
+  download, install run, log streaming, transition card) so the
+  Native-mode install flow is unaffected.
 - Electron jumplist click no longer kills the backend. Clicking any
   Windows taskbar jumplist entry ("Open Main Page", "Process Manager",
   …) re-invokes `OpenPA App.exe` with `--open=<target>`; the second
