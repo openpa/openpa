@@ -116,25 +116,6 @@ type OpenPABackendUpgradeBridge = {
   offDone: (cb: (result: OpenPABackendUpgradeDone) => void) => void
 }
 
-// Auth state shape — keyed by profile name. Mirrors the
-// ``runtimeAuth`` shape in electron/main.ts. The snapshot is populated
-// synchronously at preload time so the renderer can read tokens during
-// module init; ``set`` / ``removeToken`` round-trip to the main process
-// and return the updated state.
-type OpenPAAuthSnapshot = {
-  tokens: Record<string, string>
-  loggedInProfiles: string[]
-  activeProfileId: string
-  reasoningEnabled: Record<string, boolean>
-}
-
-type OpenPAAuthBridge = {
-  snapshot: OpenPAAuthSnapshot
-  get: () => Promise<OpenPAAuthSnapshot>
-  set: (patch: Partial<OpenPAAuthSnapshot>) => Promise<OpenPAAuthSnapshot>
-  removeToken: (profile: string) => Promise<OpenPAAuthSnapshot>
-}
-
 type OpenPABridge = {
   config: {
     agentUrl: string
@@ -146,7 +127,6 @@ type OpenPABridge = {
   setConfig: (
     patch: Partial<OpenPABridge['config']>,
   ) => Promise<OpenPABridge['config']>
-  auth: OpenPAAuthBridge
   installer: OpenPAInstallerBridge
   server: OpenPAServerBridge
   updater: OpenPAUpdaterBridge

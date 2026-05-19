@@ -14,17 +14,6 @@ try {
   initialConfig = {}
 }
 
-// Auth snapshot — same one-shot sync pattern as initialConfig. The
-// renderer's settings store needs ``activeProfileId`` and the token map
-// at module-init time (no chance to await), so the preload reads the
-// main-process auth state synchronously here.
-let initialAuth: any = {}
-try {
-  initialAuth = ipcRenderer.sendSync('openpa:auth:snapshot-sync') ?? {}
-} catch {
-  initialAuth = {}
-}
-
 // Per-IPC log/done listener bookkeeping. We keep a parallel WeakMap so
 // callers can pass plain functions to ``onLog`` / ``onDone`` and we wrap
 // them with the (event, payload) → payload signature electron expects.
@@ -37,21 +26,6 @@ contextBridge.exposeInMainWorld('openpa', {
   getConfig: () => ipcRenderer.invoke('openpa:get-config'),
   setConfig: (patch: Record<string, unknown>) =>
     ipcRenderer.invoke('openpa:set-config', patch),
-
-  // Auth state bridge — main-process-backed key/value store that
-  // survives Chromium origin changes (file:// → http://localhost:1515
-  // → quit/relaunch). ``snapshot`` is the value at preload time; callers
-  // who write should call ``set`` (or ``removeToken``) and then mirror
-  // the returned state back onto this snapshot if they want to read
-  // synchronously later, mirroring the config bridge's idiom.
-  auth: {
-    snapshot: initialAuth,
-    get: () => ipcRenderer.invoke('openpa:auth:get'),
-    set: (patch: Record<string, unknown>) =>
-      ipcRenderer.invoke('openpa:auth:set', patch),
-    removeToken: (profile: string) =>
-      ipcRenderer.invoke('openpa:auth:remove-token', profile),
-  },
 
   // First-run installer bridge — fronts the IPC handlers in
   // electron/main.ts. ``run`` returns a promise that resolves with the
