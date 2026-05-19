@@ -123,13 +123,6 @@ const routes = [
     meta: { title: 'Updates' },
   },
   {
-    path: '/:profile/settings/about',
-    name: 'about-settings',
-    component: () => import('../views/AboutPage.vue'),
-    props: true,
-    meta: { title: 'About' },
-  },
-  {
     path: '/:profile/channels',
     name: 'channels-page',
     component: () => import('../views/ChannelsPage.vue'),

@@ -10,7 +10,6 @@ export const PROFILE_ROUTES = new Set([
   'channels-settings',
   'updates-settings',
   'about',
-  'about-settings',
   'channels-page',
   'process-list',
   'process-terminal',

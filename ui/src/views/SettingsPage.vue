@@ -60,12 +60,6 @@ const allCards: SettingsCard[] = [
     icon: 'mdi:download',
     route: 'updates',
   },
-  {
-    title: 'About',
-    description: 'Project info, license, version, and links to GitHub',
-    icon: 'mdi:information-outline',
-    route: 'about',
-  },
 ];
 
 // Vector Embedding is a server-wide configuration owned by the admin

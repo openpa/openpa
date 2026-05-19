@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElCard } from 'element-plus';
 import { Icon } from '@iconify/vue';
 
@@ -8,16 +8,7 @@ import { useSettingsStore } from '../stores/settings';
 
 const props = defineProps<{ profile: string }>();
 const router = useRouter();
-const route = useRoute();
 const settingsStore = useSettingsStore();
-
-// Two entry points share this view: the sidebar (route name 'about')
-// and the Settings hub (route name 'about-settings'). Tailor the Back
-// button to whichever one brought the user here.
-const cameFromSettings = computed(() => route.name === 'about-settings');
-const backLabel = computed(() =>
-  cameFromSettings.value ? 'Back to Settings' : 'Back to Chat',
-);
 
 const APP_NAME = __IS_ELECTRON__ ? 'OpenPA App' : 'OpenPA Web UI';
 const UI_VERSION =
@@ -60,11 +51,7 @@ onMounted(() => {
 });
 
 function goBack() {
-  if (cameFromSettings.value) {
-    router.push(`/${props.profile}/settings`);
-  } else {
-    router.push(`/${props.profile}`);
-  }
+  router.push(`/${props.profile}`);
 }
 </script>
 
@@ -74,7 +61,7 @@ function goBack() {
       <div class="about-header">
         <button class="back-btn" @click="goBack">
           <Icon icon="mdi:arrow-left" />
-          {{ backLabel }}
+          Back to Chat
         </button>
         <h1 class="about-title">About</h1>
         <p class="about-subtitle">
