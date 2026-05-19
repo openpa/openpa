@@ -14,6 +14,10 @@ Compatibility contract — see ``app/__version__.py``:
 - ``min_supported_upgrade_from``
                             : oldest backend SemVer this build can migrate
                               from. Older installs must export-and-import.
+- ``channel``               : release channel this build was installed from
+                              (``production`` / ``test`` / ``dev``). Lets a
+                              web client display the PyPI source without
+                              having to go through the Electron preload.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from app.__version__ import (
     MIN_SUPPORTED_UPGRADE_FROM,
     __version__,
 )
+from app.upgrade.channel import get_channel
 
 
 async def get_version(_request: Request) -> JSONResponse:
@@ -36,6 +41,7 @@ async def get_version(_request: Request) -> JSONResponse:
         "schema": schema,
         "min_compatible_ui": MIN_COMPATIBLE_UI,
         "min_supported_upgrade_from": MIN_SUPPORTED_UPGRADE_FROM,
+        "channel": get_channel(),
     })
 
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElCard } from 'element-plus';
+import { ElCard, ElTag } from 'element-plus';
 import { Icon } from '@iconify/vue';
 
 import { useSettingsStore } from '../stores/settings';
@@ -18,15 +18,63 @@ const GITHUB_URL = 'https://github.com/openpa/openpa';
 const ISSUES_URL = 'https://github.com/openpa/openpa/issues';
 const LICENSE_URL = 'https://github.com/openpa/openpa/blob/main/LICENSE';
 
+const PACKAGE_NAME = 'openpa';
+
+type Channel = 'production' | 'test' | 'dev';
+
 interface BackendVersion {
   backend: string;
   schema: string;
   min_compatible_ui: string;
   min_supported_upgrade_from: string;
+  channel?: Channel;
 }
 
 const backendInfo = ref<BackendVersion | null>(null);
 const backendError = ref(false);
+
+const channel = computed<Channel | null>(() => backendInfo.value?.channel ?? null);
+
+const channelLabel = computed(() => {
+  switch (channel.value) {
+    case 'production': return 'Production';
+    case 'test': return 'Test';
+    case 'dev': return 'Development';
+    default: return 'Unknown';
+  }
+});
+
+const channelTone = computed<'success' | 'warning' | 'info'>(() => {
+  switch (channel.value) {
+    case 'production': return 'success';
+    case 'test': return 'warning';
+    default: return 'info';
+  }
+});
+
+// PyPI page for this specific version. Test builds live on test.pypi.org;
+// production builds on pypi.org. Dev installs come from a local source
+// checkout, so there is no upstream page to link to.
+const pypiUrl = computed<string | null>(() => {
+  const version = backendInfo.value?.backend;
+  if (!version) return null;
+  if (channel.value === 'production') {
+    return `https://pypi.org/project/${PACKAGE_NAME}/${version}/`;
+  }
+  if (channel.value === 'test') {
+    return `https://test.pypi.org/project/${PACKAGE_NAME}/${version}/`;
+  }
+  return null;
+});
+
+const pypiIndexLabel = computed(() => {
+  switch (channel.value) {
+    case 'production': return 'pypi.org';
+    case 'test': return 'test.pypi.org';
+    case 'dev': return 'Editable install (local source)';
+    default: return 'Unknown';
+  }
+});
 
 async function loadBackendVersion() {
   const base = settingsStore.agentUrl;
@@ -101,6 +149,49 @@ function goBack() {
           <span class="info-label">Database schema</span>
           <span class="info-value mono">
             <template v-if="backendInfo">{{ backendInfo.schema }}</template>
+            <span v-else-if="backendError" class="info-muted">Unavailable</span>
+            <span v-else class="info-muted">Loading…</span>
+          </span>
+        </div>
+      </ElCard>
+
+      <!-- Distribution / PyPI -->
+      <ElCard class="section-card" shadow="never">
+        <h3 class="section-title">Distribution</h3>
+        <div class="info-row">
+          <span class="info-label">Release channel</span>
+          <span class="info-value">
+            <template v-if="backendInfo">
+              <ElTag :type="channelTone" effect="light" round size="small">
+                {{ channelLabel }}
+              </ElTag>
+            </template>
+            <span v-else-if="backendError" class="info-muted">Unavailable</span>
+            <span v-else class="info-muted">Loading…</span>
+          </span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Package</span>
+          <span class="info-value mono">
+            <template v-if="backendInfo">
+              {{ PACKAGE_NAME }}=={{ backendInfo.backend }}
+            </template>
+            <span v-else-if="backendError" class="info-muted">Unavailable</span>
+            <span v-else class="info-muted">Loading…</span>
+          </span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">PyPI</span>
+          <span class="info-value">
+            <template v-if="pypiUrl">
+              <a :href="pypiUrl" target="_blank" rel="noopener" class="link">
+                {{ pypiIndexLabel }}
+                <Icon icon="mdi:open-in-new" class="link-icon" />
+              </a>
+            </template>
+            <template v-else-if="backendInfo">
+              <span class="info-muted">{{ pypiIndexLabel }}</span>
+            </template>
             <span v-else-if="backendError" class="info-muted">Unavailable</span>
             <span v-else class="info-muted">Loading…</span>
           </span>
