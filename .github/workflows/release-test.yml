@@ -178,11 +178,18 @@ jobs:
       # the app's upgrader can find it via ``/releases``. The wheel/sdist
       # are attached for inspection. ``prerelease: true`` keeps these
       # entries out of the default Releases listing seen by prod hosts.
-      - name: Create GitHub prerelease
+      #
+      # ``draft: true`` hides the release from the unauthenticated GitHub
+      # ``/releases`` endpoint the upgrader polls, so the Update button
+      # does not light up while ``electron`` and ``docker`` are still
+      # building. The final ``publish`` job flips this to false once all
+      # required artifacts exist.
+      - name: Create GitHub prerelease (draft until publish)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
           name: ${{ steps.tag.outputs.name }}
+          draft: true
           prerelease: true
           generate_release_notes: true
           files: |
@@ -466,3 +473,25 @@ jobs:
             OPENPA_PIP_SPEC=${{ steps.wheel_url.outputs.url }}
           cache-from: type=gha,scope=desktop
           cache-to: type=gha,scope=desktop,mode=max
+
+  # Flips the draft prerelease created by ``wheel`` to a published
+  # prerelease only after every required artifact exists: the wheel on
+  # Test PyPI, the Electron installers + ``latest-test*.yml`` attached to
+  # the release, and the openpa/openpa-desktop:X.Y.Z.devN image on Docker
+  # Hub. Until this step runs, the unauthenticated GitHub ``/releases``
+  # endpoint the upgrader polls returns nothing for this tag — so the
+  # in-app Update button stays dark and half-finished releases never reach
+  # users. Mirrors the ``publish`` job in release.yml.
+  publish:
+    needs: [wheel, electron, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Promote draft prerelease to published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ needs.wheel.outputs.tag }}" \
+            --draft=false \
+            --repo "${{ github.repository }}"

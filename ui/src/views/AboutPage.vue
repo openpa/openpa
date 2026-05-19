@@ -10,7 +10,10 @@ const props = defineProps<{ profile: string }>();
 const router = useRouter();
 const settingsStore = useSettingsStore();
 
-const APP_NAME = __IS_ELECTRON__ ? 'OpenPA App' : 'OpenPA Web UI';
+const APP_NAME =
+  typeof window !== 'undefined' && !!window.openpa
+    ? 'OpenPA App'
+    : 'OpenPA Web UI';
 const UI_VERSION =
   typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
 
