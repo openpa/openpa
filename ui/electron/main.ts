@@ -17,7 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // install scripts. Declared here so the config defaults below can
 // reference it; the second definition site at line ~189 used to be the
 // only one and led to the renderer reading a stale ``'stable'`` default
-// for the Settings → Updates "Release channel" row.
+// for the Updates page "Release channel" row.
 const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL__
 
 // Env overlay for openpa subprocesses (``serve`` and ``upgrade apply``).
@@ -47,7 +47,7 @@ type OpenPAConfig = {
   deploymentType: 'local' | 'server' | 'custom' | ''
   autoUpdate: boolean
   // Mirror of INSTALL_CHANNEL exposed to the renderer via the preload
-  // bridge. The Settings → Updates "Release channel" row reads this.
+  // bridge. The Updates page "Release channel" row reads this.
   // Not user-mutable — the channel is fixed at install/build time;
   // loadConfig() force-overwrites whatever is on disk with the current
   // build's INSTALL_CHANNEL so a re-installed test app never displays
@@ -77,7 +77,7 @@ function loadConfig(): OpenPAConfig {
   }
   // The channel is fixed at build time; force it back to INSTALL_CHANNEL
   // so a re-install / channel-switch never inherits the previous build's
-  // value from disk. This is also how the Settings → Updates "Release
+  // value from disk. This is also how the Updates page "Release
   // channel" row gets the right value — before this, ``runtimeConfig``
   // was never connected to ``INSTALL_CHANNEL`` and the row always read
   // the static default of ``'stable'``.

@@ -3,8 +3,8 @@
  * Unified update banner — one card for "a new version of OpenPA is
  * available," regardless of whether the change is the Electron shell,
  * the Python backend, or both. All state and actions live in the
- * shared ``useUpdate`` composable so the Settings → Updates page
- * renders the same status.
+ * shared ``useUpdate`` composable so the Updates page renders the
+ * same status.
  *
  * Mounted globally from App.vue so it appears on every route except
  * the installer (which has its own progress UI).
@@ -71,16 +71,16 @@ watch(
   },
 )
 
-// ── "Manage in Settings → Updates" link ─────────────────────────────────
+// ── "Manage in Updates" link ────────────────────────────────────────────
 
-const settingsHref = computed(() => {
+const updatesHref = computed(() => {
   const profile = route.params.profile
   if (typeof profile !== 'string' || !profile) return ''
-  return `/${profile}/settings/updates`
+  return `/${profile}/updates`
 })
 
-function openSettings() {
-  if (settingsHref.value) router.push(settingsHref.value)
+function openUpdates() {
+  if (updatesHref.value) router.push(updatesHref.value)
 }
 
 function closeModalIfTerminal() {
@@ -155,9 +155,9 @@ function logLineClass(line: string): string {
         Notes
       </a>
       <button
-        v-if="settingsHref"
+        v-if="updatesHref"
         class="link"
-        @click="openSettings"
+        @click="openUpdates"
       >
         Manage
       </button>
@@ -184,9 +184,9 @@ function logLineClass(line: string): string {
         Notes
       </a>
       <button
-        v-if="settingsHref"
+        v-if="updatesHref"
         class="link"
-        @click="openSettings"
+        @click="openUpdates"
       >
         Manage
       </button>

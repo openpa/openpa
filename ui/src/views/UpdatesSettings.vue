@@ -125,7 +125,7 @@ onMounted(() => {
 });
 
 function goBack() {
-  router.push(`/${props.profile}/settings`);
+  router.push(`/${props.profile}`);
 }
 </script>
 
@@ -135,7 +135,7 @@ function goBack() {
       <div class="updates-header">
         <button class="back-btn" @click="goBack">
           <Icon icon="mdi:arrow-left" />
-          Back to Settings
+          Back to Chat
         </button>
         <h1 class="updates-title">Updates</h1>
         <p class="updates-subtitle">

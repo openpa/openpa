@@ -116,8 +116,8 @@ const routes = [
     meta: { title: 'Channels' },
   },
   {
-    path: '/:profile/settings/updates',
-    name: 'updates-settings',
+    path: '/:profile/updates',
+    name: 'updates',
     component: () => import('../views/UpdatesSettings.vue'),
     props: true,
     meta: { title: 'Updates' },

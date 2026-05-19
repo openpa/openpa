@@ -2,7 +2,7 @@
  * Unified update composable.
  *
  * One source of truth for both the global UpdateBanner and the
- * Settings → Updates page. Consumers get a single ``state`` ref plus
+ * Updates page. Consumers get a single ``state`` ref plus
  * an ``applyUpdate()`` action; they don't have to know whether the
  * pending change is a backend wheel, an Electron shell, or both.
  *
@@ -52,10 +52,10 @@ const VERSION_POLL_MS = 30000                // /version poll cadence for auto-r
 // ── module-level singletons ──────────────────────────────────────────────
 //
 // The composable returns refs that survive component remounts because
-// both UpdateBanner (mounted at App.vue) and UpdatesSettings (mounted on
-// route change) need to observe the same upgrade. Without sharing
-// state, opening Settings during an upgrade would reset the modal log
-// to empty.
+// both UpdateBanner (mounted at App.vue) and the Updates page (mounted
+// on route change) need to observe the same upgrade. Without sharing
+// state, opening the Updates page during an upgrade would reset the
+// modal log to empty.
 
 const backend = ref<BackendStatus>({ status: 'unknown' })
 const updater = ref<UpdaterStatus>({ status: 'unavailable' })
