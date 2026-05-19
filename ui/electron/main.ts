@@ -365,6 +365,23 @@ async function loadMainContent(w: BrowserWindow, hash: string): Promise<void> {
   void w.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: hash.slice(1) })
 }
 
+// Navigate any windows still on the asar (``file://``) to the backend's
+// SPA listener. Used at boot once startBackend() has succeeded and the
+// wheel-served SPA is reachable, and as part of the post-upgrade reload.
+// Idempotent — windows already on http(s):// are left alone so a
+// successful renderer-side ``maybePivotToBackend`` is not clobbered by a
+// redundant navigation that would wipe SPA state.
+function pivotFileWindowsToBackend(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    const url = win.webContents.getURL()
+    if (!url.startsWith('file://')) continue
+    const hashIdx = url.indexOf('#')
+    const winHash = hashIdx >= 0 ? url.slice(hashIdx) : '#/'
+    void win.loadURL(`${backendSpaUrl()}/${winHash}`)
+  }
+}
+
 async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   // Already responding? Adopt the running instance and skip the spawn.
   if (await isBackendHealthy()) {
@@ -1059,13 +1076,16 @@ async function runBackendUpgrade(
           if (win.isDestroyed()) continue
           const url = win.webContents.getURL()
           if (url.startsWith('http://') || url.startsWith('https://')) {
+            // Already on the backend HTTP origin: a plain reload refetches
+            // the new bundle (the wheel install just refreshed index.html
+            // and bumped the JS hash). Don't go through
+            // pivotFileWindowsToBackend here — that would skip these.
             win.reload()
-          } else if (url.startsWith('file://')) {
-            const hashIdx = url.indexOf('#')
-            const winHash = hashIdx >= 0 ? url.slice(hashIdx) : '#/'
-            void win.loadURL(`${backendSpaUrl()}/${winHash}`)
           }
         }
+        // Cover file:// windows in the same pass — typical on the very
+        // first upgrade after a fresh install, before any pivot has run.
+        pivotFileWindowsToBackend()
       }, 1200)
       resolve({ exitCode, ok: true })
     }
@@ -1677,7 +1697,18 @@ if (!gotSingleInstanceLock) {
     if (installMarkerExists()) {
       void (async () => {
         const r = await startBackend()
-        if (r.ok) await fetchCapabilities()
+        if (r.ok) {
+          await fetchCapabilities()
+          // Cold-start race fix. createAppWindow runs before startBackend
+          // (see the comment block above), so loadMainContent's
+          // isBackendHealthy() probe got ECONNREFUSED and the renderer
+          // fell back to the asar's frozen SPA. Now that the backend is
+          // up, navigate any file:// windows onto the wheel-served SPA
+          // so wheel-only UI updates take effect on a clean restart —
+          // without this, every quit/relaunch leaves the renderer stuck
+          // on whatever SPA was built into the installer's asar.
+          pivotFileWindowsToBackend()
+        }
       })()
     }
   })
