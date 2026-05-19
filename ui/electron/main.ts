@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -1716,13 +1716,30 @@ if (!gotSingleInstanceLock) {
     focusMostRecentAppWindow()
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // Load the persisted config before the window opens so the preload's
     // sync IPC returns a populated value on the very first request.
     runtimeConfig = loadConfig();
     // Reconcile with ~/.openpa/.env so a deleted install dir re-triggers
     // the first-run installer instead of falling through to a broken UI.
     reconcileInstallStateWithDisk();
+    // First-run / re-install detection. ``userData`` (which holds
+    // localStorage, IndexedDB, cookies) is NOT cleared by the Windows
+    // uninstaller and is shared across all channels — without this,
+    // the SetupWizard sees ``agent_token_*`` / ``logged_in_profiles``
+    // from a prior install. The renderer-side ``_migrateOldToken``
+    // runs at module load, so the clear must happen before any window
+    // is created.
+    if (!installMarkerExists()) {
+      try {
+        await session.defaultSession.clearStorageData({
+          storages: ['localstorage', 'indexdb', 'cookies', 'serviceworkers'],
+        });
+        console.log('[openpa] first-run detected: cleared renderer storage');
+      } catch (err) {
+        console.warn('[openpa] failed to clear renderer storage', err);
+      }
+    }
     createTray();
     rebuildJumpList();
     rebuildDockMenu();
