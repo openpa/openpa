@@ -44,7 +44,21 @@ async function maybePivotToBackend(): Promise<boolean> {
   } catch {
     return false
   }
-  window.location.replace(`${agentUrl}/${window.location.hash || '#/'}`)
+  // agentUrl is the API listener (default port 1112). The wheel-bundled
+  // SPA lives on a separate listener (default port 1515 — see
+  // app/server.py:_build_ui_server). Navigating to agentUrl directly
+  // lands on the API server's root, which 405s the GET and never
+  // serves a SPA; the renderer would silently stay on the asar.
+  let spaUrl: URL
+  try {
+    spaUrl = new URL(agentUrl)
+    if (spaUrl.port === '1112' || !spaUrl.port) {
+      spaUrl.port = '1515'
+    }
+  } catch {
+    return false
+  }
+  window.location.replace(`${spaUrl.origin}/${window.location.hash || '#/'}`)
   return true
 }
 

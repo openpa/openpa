@@ -316,13 +316,25 @@ async function waitForBackendHealthy(timeoutMs = 30000): Promise<boolean> {
   return false
 }
 
-// Origin of the backend's bundled SPA — strip the ``/health`` suffix so
-// we can build URLs like ``http://127.0.0.1:1112/#/admin/settings`` and
-// load the renderer from the wheel-served SPA rather than the asar
-// snapshot. Kept in sync with backendHealthUrl() above so a future port
-// change only has to be made there.
-function backendBaseUrl(): string {
-  return backendHealthUrl().replace(/\/health$/, '')
+// Origin of the backend's bundled SPA. The backend runs TWO listeners
+// (see ``app/server.py:_build_ui_server``):
+//
+//   http://<host>:1112    A2A protocol + REST API + /health + /version
+//   http://<host>:1515    StaticFiles(app/static/ui/, html=True)
+//
+// The SPA only lives on the second one. Test20's pivot logic
+// accidentally pointed at ``backendHealthUrl().replace(/\/health$/,'')``
+// — i.e. port 1112 — so reloads landed on the API server's root, which
+// 405s the GET request and never serves a SPA. The renderer kept
+// whatever was already loaded (the asar snapshot) and the wheel's new
+// UI never reached the Electron shell.
+//
+// Mapping the API port to the UI port matches the backend's own default
+// (1112 → 1515). When OPENPA_UI_PORT is overridden on the backend, the
+// Electron shell would need a matching override here; today we just
+// hardcode the default, same as backendHealthUrl().
+function backendSpaUrl(): string {
+  return 'http://127.0.0.1:1515'
 }
 
 // Decide where to load a window's renderer from. The asar copy of the
@@ -347,7 +359,7 @@ async function loadMainContent(w: BrowserWindow, hash: string): Promise<void> {
     return
   }
   if (await isBackendHealthy()) {
-    void w.loadURL(`${backendBaseUrl()}/${hash}`)
+    void w.loadURL(`${backendSpaUrl()}/${hash}`)
     return
   }
   void w.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: hash.slice(1) })
@@ -1051,7 +1063,7 @@ async function runBackendUpgrade(
           } else if (url.startsWith('file://')) {
             const hashIdx = url.indexOf('#')
             const winHash = hashIdx >= 0 ? url.slice(hashIdx) : '#/'
-            void win.loadURL(`${backendBaseUrl()}/${winHash}`)
+            void win.loadURL(`${backendSpaUrl()}/${winHash}`)
           }
         }
       }, 1200)
