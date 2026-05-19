@@ -146,11 +146,30 @@ function authPath(): string {
   return path.join(app.getPath('userData'), 'openpa-auth.json')
 }
 
+// Diagnostic log for the auth bridge — appended to from every IPC and
+// from the load/save helpers. Lives under ~/.openpa/ so testers can
+// inspect it without DevTools (matches where the backend writes its own
+// logs). Best-effort: a failed append must not crash the bridge.
+function authLogPath(): string {
+  return path.join(app.getPath('home'), '.openpa', 'auth-bridge.log')
+}
+function logAuth(event: string, detail?: unknown): void {
+  try {
+    const dir = path.dirname(authLogPath())
+    fs.mkdirSync(dir, { recursive: true })
+    const stamp = new Date().toISOString()
+    const payload = detail === undefined ? '' : ` ${JSON.stringify(detail)}`
+    fs.appendFileSync(authLogPath(), `${stamp} ${event}${payload}\n`, 'utf8')
+  } catch {
+    // disk full / permission denied — diagnostic only, never block.
+  }
+}
+
 function loadAuth(): OpenPAAuth {
   try {
     const raw = fs.readFileSync(authPath(), 'utf8')
     const parsed = JSON.parse(raw)
-    return {
+    const loaded = {
       tokens: { ...AUTH_DEFAULTS.tokens, ...(parsed.tokens ?? {}) },
       loggedInProfiles: Array.isArray(parsed.loggedInProfiles)
         ? parsed.loggedInProfiles.filter((x: unknown): x is string => typeof x === 'string')
@@ -158,7 +177,14 @@ function loadAuth(): OpenPAAuth {
       activeProfileId: typeof parsed.activeProfileId === 'string' ? parsed.activeProfileId : '',
       reasoningEnabled: { ...AUTH_DEFAULTS.reasoningEnabled, ...(parsed.reasoningEnabled ?? {}) },
     }
-  } catch {
+    logAuth('loadAuth', {
+      profiles: loaded.loggedInProfiles,
+      tokenKeys: Object.keys(loaded.tokens),
+      activeProfileId: loaded.activeProfileId,
+    })
+    return loaded
+  } catch (err) {
+    logAuth('loadAuth.fallback', { error: String(err) })
     return { ...AUTH_DEFAULTS, tokens: {}, loggedInProfiles: [], reasoningEnabled: {} }
   }
 }
@@ -169,6 +195,11 @@ function saveAuth(state: OpenPAAuth): void {
   const tmp = `${file}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8')
   fs.renameSync(tmp, file)
+  logAuth('saveAuth', {
+    profiles: state.loggedInProfiles,
+    tokenKeys: Object.keys(state.tokens),
+    activeProfileId: state.activeProfileId,
+  })
 }
 
 let runtimeAuth: OpenPAAuth = {
@@ -317,13 +348,28 @@ ipcMain.handle('openpa:set-config', (_event, patch: Partial<OpenPAConfig>) => {
 // ``activeProfileId`` synchronously in its setup). The async handlers
 // support live updates as the user logs in / out / switches profiles.
 ipcMain.on('openpa:auth:snapshot-sync', (event) => {
+  logAuth('ipc.snapshot-sync', {
+    profiles: runtimeAuth.loggedInProfiles,
+    tokenKeys: Object.keys(runtimeAuth.tokens),
+    activeProfileId: runtimeAuth.activeProfileId,
+  })
   event.returnValue = runtimeAuth
 })
-ipcMain.handle('openpa:auth:get', () => runtimeAuth)
+ipcMain.handle('openpa:auth:get', () => {
+  logAuth('ipc.get')
+  return runtimeAuth
+})
 ipcMain.handle('openpa:auth:set', (_event, patch: Partial<OpenPAAuth>) => {
+  logAuth('ipc.set', {
+    tokenKeys: patch.tokens ? Object.keys(patch.tokens) : undefined,
+    loggedInProfiles: patch.loggedInProfiles,
+    activeProfileId: patch.activeProfileId,
+    reasoningKeys: patch.reasoningEnabled ? Object.keys(patch.reasoningEnabled) : undefined,
+  })
   return updateAuth(patch)
 })
 ipcMain.handle('openpa:auth:remove-token', (_event, profile: string) => {
+  logAuth('ipc.remove-token', { profile })
   if (typeof profile !== 'string' || !profile) return runtimeAuth
   return removeAuthToken(profile)
 })
@@ -1864,6 +1910,7 @@ if (!gotSingleInstanceLock) {
     // bridge, so the snapshot has to be populated before any window
     // opens.
     runtimeAuth = loadAuth();
+    logAuth('boot', { installMarkerExists: installMarkerExists() });
     // Reconcile with ~/.openpa/.env so a deleted install dir re-triggers
     // the first-run installer instead of falling through to a broken UI.
     reconcileInstallStateWithDisk();
@@ -1896,6 +1943,7 @@ if (!gotSingleInstanceLock) {
         reasoningEnabled: {},
       };
       try { saveAuth(runtimeAuth); } catch { /* file may not exist yet */ }
+      logAuth('boot.firstRunReset');
     }
     createTray();
     rebuildJumpList();

@@ -33,6 +33,22 @@ function isElectron(): boolean {
   return typeof __IS_ELECTRON__ !== 'undefined' && __IS_ELECTRON__
 }
 
+// Diagnostic log. Mirrors the main-process auth-bridge.log so a tester
+// can read both halves of the bridge (renderer + main) when something
+// looks wrong. Prefixed with ``[auth]`` so it's easy to filter in
+// DevTools.
+function logAuth(event: string, detail?: unknown): void {
+  try {
+    if (detail === undefined) {
+      console.log(`[auth] ${event}`)
+    } else {
+      console.log(`[auth] ${event}`, detail)
+    }
+  } catch {
+    // console may not exist in some test harnesses.
+  }
+}
+
 // Renderer-local cache of the auth state. Initialized once from the
 // preload-injected snapshot and then maintained in-renderer by every
 // write path. We cannot use ``window.openpa.auth.snapshot`` itself for
@@ -58,13 +74,29 @@ let cachedSnapshot: AuthSnapshot = isElectron()
   ? normalizeSnapshot(window.openpa?.auth?.snapshot as Partial<AuthSnapshot> | undefined)
   : { ...EMPTY_SNAPSHOT, tokens: {}, loggedInProfiles: [], reasoningEnabled: {} }
 
+logAuth('init', {
+  isElectron: isElectron(),
+  bridgePresent: typeof window !== 'undefined' && !!window.openpa?.auth,
+  initialProfiles: cachedSnapshot.loggedInProfiles,
+  initialTokenKeys: Object.keys(cachedSnapshot.tokens),
+  initialActiveProfileId: cachedSnapshot.activeProfileId,
+})
+
 function bridgeSnapshot(): AuthSnapshot {
   return cachedSnapshot
 }
 
 async function applyPatch(patch: Partial<AuthSnapshot>): Promise<void> {
   const bridge = window.openpa?.auth
-  if (!bridge) return
+  if (!bridge) {
+    logAuth('applyPatch.noBridge', patch)
+    return
+  }
+  logAuth('applyPatch.start', {
+    tokenKeys: patch.tokens ? Object.keys(patch.tokens) : undefined,
+    loggedInProfiles: patch.loggedInProfiles,
+    activeProfileId: patch.activeProfileId,
+  })
   // Optimistic update of the renderer-local cache so sync reads that
   // immediately follow the write — e.g. ``setTokenForProfile`` then
   // ``activateProfile`` inside SetupWizard.handleFinish — observe the
@@ -78,8 +110,18 @@ async function applyPatch(patch: Partial<AuthSnapshot>): Promise<void> {
       : cachedSnapshot.reasoningEnabled,
   }
   // Reconcile with whatever the main process actually saved.
-  const next = await bridge.set(patch)
-  cachedSnapshot = normalizeSnapshot(next as Partial<AuthSnapshot>)
+  try {
+    const next = await bridge.set(patch)
+    cachedSnapshot = normalizeSnapshot(next as Partial<AuthSnapshot>)
+    logAuth('applyPatch.done', {
+      profiles: cachedSnapshot.loggedInProfiles,
+      tokenKeys: Object.keys(cachedSnapshot.tokens),
+      activeProfileId: cachedSnapshot.activeProfileId,
+    })
+  } catch (err) {
+    logAuth('applyPatch.error', { error: String(err) })
+    throw err
+  }
 }
 
 // ── Tokens ─────────────────────────────────────────────────────────────
@@ -92,6 +134,7 @@ export function getToken(profile: string): string {
 }
 
 export async function setToken(profile: string, token: string): Promise<void> {
+  logAuth('setToken', { profile, tokenLength: token.length, electron: isElectron() })
   if (isElectron()) {
     const snap = bridgeSnapshot()
     const nextProfiles = snap.loggedInProfiles.includes(profile)
@@ -112,6 +155,7 @@ export async function setToken(profile: string, token: string): Promise<void> {
 }
 
 export async function removeToken(profile: string): Promise<void> {
+  logAuth('removeToken', { profile, electron: isElectron() })
   if (isElectron()) {
     const bridge = window.openpa?.auth
     if (!bridge) return
@@ -208,7 +252,10 @@ export async function setReasoningEnabled(profile: string, enabled: boolean): Pr
 export function migrateLocalStorageToBridge(): boolean {
   if (!isElectron()) return false
   const bridge = window.openpa?.auth
-  if (!bridge) return false
+  if (!bridge) {
+    logAuth('migrate.noBridge')
+    return false
+  }
   const snap = bridgeSnapshot()
   const patch: Partial<AuthSnapshot> = {}
 
@@ -254,7 +301,15 @@ export function migrateLocalStorageToBridge(): boolean {
     patch.reasoningEnabled = reasoningPatch
   }
 
-  if (Object.keys(patch).length === 0) return false
+  if (Object.keys(patch).length === 0) {
+    logAuth('migrate.noop')
+    return false
+  }
+  logAuth('migrate.applying', {
+    tokenKeys: patch.tokens ? Object.keys(patch.tokens) : undefined,
+    loggedInProfiles: patch.loggedInProfiles,
+    activeProfileId: patch.activeProfileId,
+  })
 
   // Optimistic update of the renderer-local cache so the settings
   // store's module-init read picks up the migrated values in the same
@@ -267,6 +322,12 @@ export function migrateLocalStorageToBridge(): boolean {
   }
   void bridge.set(patch).then((next) => {
     cachedSnapshot = normalizeSnapshot(next as Partial<AuthSnapshot>)
+    logAuth('migrate.done', {
+      profiles: cachedSnapshot.loggedInProfiles,
+      tokenKeys: Object.keys(cachedSnapshot.tokens),
+    })
+  }).catch((err: unknown) => {
+    logAuth('migrate.error', { error: String(err) })
   })
 
   // Drop the migrated keys from localStorage so reload-onto-new-origin
