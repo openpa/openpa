@@ -32,6 +32,11 @@ function openpaSubprocessEnv(): NodeJS.ProcessEnv {
   return { ...process.env, OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL }
 }
 
+// Test installers are prereleases for testers; DevTools is a feature there.
+function devToolsEnabled(): boolean {
+  return !app.isPackaged || INSTALL_CHANNEL !== 'production'
+}
+
 // ── Runtime config (openpa-config.json) ─────────────────────────────────────
 //
 // Lives in the per-user app-data directory. The installer writes to it at
@@ -408,6 +413,7 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   let stdoutFd: number | undefined
   let stderrFd: number | undefined
   try {
+    fs.mkdirSync(openpaHome, { recursive: true })
     stdoutFd = fs.openSync(serverLog, 'a')
     stderrFd = fs.openSync(serverErr, 'a')
   } catch (err) {
@@ -1433,7 +1439,7 @@ function createAppWindow(target: WindowKind): BrowserWindow {
         // and must not have access to the openpa IPC bridge.
         contextIsolation: true,
         sandbox: true,
-        devTools: !app.isPackaged,
+        devTools: devToolsEnabled(),
       },
     })
     windows.add(w)
@@ -1460,7 +1466,7 @@ function createAppWindow(target: WindowKind): BrowserWindow {
     icon: path.join(process.env.VITE_PUBLIC, 'logo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
-      devTools: !app.isPackaged,
+      devTools: devToolsEnabled(),
     },
   })
   windows.add(w)
