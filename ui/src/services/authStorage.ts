@@ -33,50 +33,53 @@ function isElectron(): boolean {
   return typeof __IS_ELECTRON__ !== 'undefined' && __IS_ELECTRON__
 }
 
-// Bridge access. The renderer mirrors writes back into this snapshot so
-// later sync reads (e.g. ``getToken`` during a Pinia setup function)
-// observe the latest value without a round-trip. Falls back to an empty
-// shape when the bridge isn't there yet — happens briefly in dev when
-// the preload hasn't injected before some test harness runs.
-function bridgeSnapshot(): AuthSnapshot {
-  const snap = window.openpa?.auth?.snapshot as Partial<AuthSnapshot> | undefined
-  if (!snap) return EMPTY_SNAPSHOT
+// Renderer-local cache of the auth state. Initialized once from the
+// preload-injected snapshot and then maintained in-renderer by every
+// write path. We cannot use ``window.openpa.auth.snapshot`` itself for
+// this — contextBridge deep-clones + freezes the exposed object before
+// handing it to the renderer's world, so writes like
+// ``window.openpa.auth.snapshot = x`` throw a TypeError in strict mode
+// (which is the default for ES modules and TS output). The throw
+// happens synchronously before any ``await bridge.set(patch)`` line,
+// so the IPC never fires and the disk file stays empty — exactly the
+// symptom that reached production in v0.1.9-test34. Keeping the cache
+// in a module variable sidesteps the freeze.
+function normalizeSnapshot(raw: Partial<AuthSnapshot> | undefined | null): AuthSnapshot {
+  if (!raw) return { ...EMPTY_SNAPSHOT, tokens: {}, loggedInProfiles: [], reasoningEnabled: {} }
   return {
-    tokens: snap.tokens ?? {},
-    loggedInProfiles: snap.loggedInProfiles ?? [],
-    activeProfileId: snap.activeProfileId ?? '',
-    reasoningEnabled: snap.reasoningEnabled ?? {},
+    tokens: raw.tokens ?? {},
+    loggedInProfiles: raw.loggedInProfiles ?? [],
+    activeProfileId: raw.activeProfileId ?? '',
+    reasoningEnabled: raw.reasoningEnabled ?? {},
   }
+}
+
+let cachedSnapshot: AuthSnapshot = isElectron()
+  ? normalizeSnapshot(window.openpa?.auth?.snapshot as Partial<AuthSnapshot> | undefined)
+  : { ...EMPTY_SNAPSHOT, tokens: {}, loggedInProfiles: [], reasoningEnabled: {} }
+
+function bridgeSnapshot(): AuthSnapshot {
+  return cachedSnapshot
 }
 
 async function applyPatch(patch: Partial<AuthSnapshot>): Promise<void> {
   const bridge = window.openpa?.auth
   if (!bridge) return
-  // Optimistic update before the IPC round-trip. The renderer often
-  // calls setToken(p, t) and immediately reads getToken(p) — for
-  // example, ``setTokenForProfile`` followed by ``activateProfile``
-  // inside SetupWizard.handleFinish. If we waited for ``bridge.set``
-  // to resolve, the immediate read would still see the old snapshot.
-  const snap = bridgeSnapshot()
-  const optimistic: AuthSnapshot = {
-    tokens: patch.tokens ? { ...snap.tokens, ...patch.tokens } : snap.tokens,
-    loggedInProfiles: patch.loggedInProfiles ?? snap.loggedInProfiles,
-    activeProfileId: patch.activeProfileId ?? snap.activeProfileId,
+  // Optimistic update of the renderer-local cache so sync reads that
+  // immediately follow the write — e.g. ``setTokenForProfile`` then
+  // ``activateProfile`` inside SetupWizard.handleFinish — observe the
+  // new value without waiting for the IPC round-trip.
+  cachedSnapshot = {
+    tokens: patch.tokens ? { ...cachedSnapshot.tokens, ...patch.tokens } : cachedSnapshot.tokens,
+    loggedInProfiles: patch.loggedInProfiles ?? cachedSnapshot.loggedInProfiles,
+    activeProfileId: patch.activeProfileId ?? cachedSnapshot.activeProfileId,
     reasoningEnabled: patch.reasoningEnabled
-      ? { ...snap.reasoningEnabled, ...patch.reasoningEnabled }
-      : snap.reasoningEnabled,
+      ? { ...cachedSnapshot.reasoningEnabled, ...patch.reasoningEnabled }
+      : cachedSnapshot.reasoningEnabled,
   }
-  if (window.openpa?.auth) {
-    window.openpa.auth.snapshot = optimistic
-  }
-  // Reconcile with the main-process result once the write resolves.
-  // In practice ``next`` matches the optimistic state, but we trust
-  // the main process as the source of truth in case validation
-  // dropped something.
+  // Reconcile with whatever the main process actually saved.
   const next = await bridge.set(patch)
-  if (window.openpa?.auth) {
-    window.openpa.auth.snapshot = next
-  }
+  cachedSnapshot = normalizeSnapshot(next as Partial<AuthSnapshot>)
 }
 
 // ── Tokens ─────────────────────────────────────────────────────────────
@@ -114,21 +117,15 @@ export async function removeToken(profile: string): Promise<void> {
     if (!bridge) return
     // Optimistic update for the same reason as applyPatch — callers
     // may sync-read getLoggedInProfiles right after removeToken.
-    const snap = bridgeSnapshot()
-    const remainingTokens = { ...snap.tokens }
+    const remainingTokens = { ...cachedSnapshot.tokens }
     delete remainingTokens[profile]
-    const optimistic: AuthSnapshot = {
-      ...snap,
+    cachedSnapshot = {
+      ...cachedSnapshot,
       tokens: remainingTokens,
-      loggedInProfiles: snap.loggedInProfiles.filter((p) => p !== profile),
-    }
-    if (window.openpa?.auth) {
-      window.openpa.auth.snapshot = optimistic
+      loggedInProfiles: cachedSnapshot.loggedInProfiles.filter((p) => p !== profile),
     }
     const next = await bridge.removeToken(profile)
-    if (window.openpa?.auth) {
-      window.openpa.auth.snapshot = next
-    }
+    cachedSnapshot = normalizeSnapshot(next as Partial<AuthSnapshot>)
     return
   }
   localStorage.removeItem(`agent_token_${profile}`)
@@ -259,24 +256,17 @@ export function migrateLocalStorageToBridge(): boolean {
 
   if (Object.keys(patch).length === 0) return false
 
-  // Fire-and-forget — the local snapshot won't update until the IPC
-  // resolves, but the very next read (after the user does something
-  // else) sees the merged value. For the immediate post-migration read
-  // in settings.ts's setup function, we patch the in-memory snapshot
-  // synchronously to avoid a flash of "no token".
-  const optimistic: AuthSnapshot = {
-    tokens: { ...snap.tokens, ...(patch.tokens ?? {}) },
-    loggedInProfiles: patch.loggedInProfiles ?? snap.loggedInProfiles,
-    activeProfileId: patch.activeProfileId ?? snap.activeProfileId,
-    reasoningEnabled: { ...snap.reasoningEnabled, ...(patch.reasoningEnabled ?? {}) },
-  }
-  if (window.openpa?.auth) {
-    window.openpa.auth.snapshot = optimistic
+  // Optimistic update of the renderer-local cache so the settings
+  // store's module-init read picks up the migrated values in the same
+  // tick. The IPC round-trip persists to disk in the background.
+  cachedSnapshot = {
+    tokens: { ...cachedSnapshot.tokens, ...(patch.tokens ?? {}) },
+    loggedInProfiles: patch.loggedInProfiles ?? cachedSnapshot.loggedInProfiles,
+    activeProfileId: patch.activeProfileId ?? cachedSnapshot.activeProfileId,
+    reasoningEnabled: { ...cachedSnapshot.reasoningEnabled, ...(patch.reasoningEnabled ?? {}) },
   }
   void bridge.set(patch).then((next) => {
-    if (window.openpa?.auth) {
-      window.openpa.auth.snapshot = next
-    }
+    cachedSnapshot = normalizeSnapshot(next as Partial<AuthSnapshot>)
   })
 
   // Drop the migrated keys from localStorage so reload-onto-new-origin
