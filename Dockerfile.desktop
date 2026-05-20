@@ -61,12 +61,19 @@ COPY app/__version__.py ./app/__version__.py
 COPY scripts/sync_ui_version.py ./scripts/sync_ui_version.py
 COPY ui/ ./ui/
 
-RUN cd ui && npm run web:build
+RUN cd ui && npm run web:build && npm run build:renderer
 
 # ``web:build`` outputs to ``ui/dist-web/`` (per vite.config.web.ts). The
 # runtimeConfig helper resolves the agent URL from window.location at
 # runtime, so a single build works for both local and remote access —
 # no per-deploy ``VITE_AGENT_URL`` baking required.
+#
+# ``build:renderer`` outputs to ``ui/dist/`` (per vite.config.ts, with
+# __IS_ELECTRON__: true). Stage 2 mounts it at /opt/openpa-ui-electron/
+# so the openpa server can serve it under /electron-renderer/ — the path
+# the Electron shell loads after pivoting from its asar bundle. Without
+# this bundle the shell would land on the web bundle (__IS_ELECTRON__:
+# false) and lose the custom titlebar / drag region.
 
 # ── Stage 2: desktop + python + openpa ────────────────────────────────────
 FROM ubuntu:24.04
@@ -212,6 +219,7 @@ ENV PATH="/opt/openpa/venv/bin:${PATH}"
 
 # ── built SPA from stage 1 ────────────────────────────────────────────────
 COPY --from=spa-builder /build/ui/dist-web/ /opt/openpa-ui/
+COPY --from=spa-builder /build/ui/dist/ /opt/openpa-ui-electron/
 
 # ── entrypoint ────────────────────────────────────────────────────────────
 COPY install/desktop/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -223,10 +231,17 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # It overrides the wheel-bundled location, so this image always serves
 # the freshly-built SPA from this Dockerfile rather than whatever (if
 # anything) shipped inside the openpa wheel.
+#
+# ``OPENPA_UI_ELECTRON_DIR`` points the server at the Electron-renderer
+# bundle (built with __IS_ELECTRON__: true). It's served at
+# /electron-renderer/ and is what the Electron shell loads after
+# pivoting away from its asar copy — without this the shell would land
+# on the web bundle and lose the custom titlebar / drag region.
 ENV VNC_PASSWORD=changeme \
     RESOLUTION=1280x720 \
     OPENPA_WORKING_DIR=/root/.openpa \
     OPENPA_UI_DIR=/opt/openpa-ui \
+    OPENPA_UI_ELECTRON_DIR=/opt/openpa-ui-electron \
     OPENPA_UI_PORT=1515 \
     HOST=0.0.0.0 \
     PORT=1112 \

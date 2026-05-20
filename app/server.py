@@ -977,12 +977,28 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
     # missing path — required for client-side routing under hash mode
     # to keep working when the user reloads on a deep link.
     #
-    # The optional ``ui-electron`` sibling carries the Electron-renderer
-    # bundle (built with __IS_ELECTRON__: true). It's mounted ahead of
-    # the web SPA so the Electron shell can request /electron-renderer/
-    # and get a bundle whose titlebar/drag region renders correctly.
-    # Browsers continue to hit ``/`` and get the web bundle as before.
-    ui_electron_dir = ui_dir.parent / "ui-electron"
+    # The Electron-renderer bundle (built with __IS_ELECTRON__: true) is
+    # mounted ahead of the web SPA so the Electron shell can request
+    # /electron-renderer/ and get a bundle whose titlebar/drag region
+    # renders correctly. Browsers continue to hit ``/`` and get the web
+    # bundle as before.
+    #
+    # Resolution order, matching the web-bundle pattern above:
+    #   1. OPENPA_UI_ELECTRON_DIR (explicit override — Dockerfile.desktop
+    #      sets this so the image's Electron-renderer build is used).
+    #   2. Sibling of ui_dir with ``-electron`` appended to the leaf name:
+    #        app/static/ui            → app/static/ui-electron   (wheel)
+    #        /opt/openpa-ui           → /opt/openpa-ui-electron  (Docker)
+    #      Path.with_name keeps the suffix attached to the leaf rather
+    #      than to the parent, so the override-and-wheel cases both
+    #      resolve to a sibling directory regardless of how the user
+    #      named their UI root.
+    electron_override = os.environ.get("OPENPA_UI_ELECTRON_DIR")
+    if electron_override:
+        ui_electron_dir = Path(electron_override)
+    else:
+        ui_electron_dir = ui_dir.with_name(ui_dir.name + "-electron")
+
     routes: list = []
     if ui_electron_dir.is_dir() and (ui_electron_dir / "index.html").is_file():
         routes.append(
@@ -993,6 +1009,12 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
             )
         )
         logger.info(f"SPA listener: /electron-renderer → {ui_electron_dir}")
+    else:
+        logger.info(
+            f"Electron-renderer bundle not present at {ui_electron_dir}; "
+            "/electron-renderer mount disabled (Electron shell will fall "
+            "back to the asar copy)."
+        )
     routes.append(Mount("/", app=StaticFiles(directory=str(ui_dir), html=True), name="ui"))
     spa_app = Starlette(routes=routes)
     cfg = uvicorn.Config(spa_app, host=host, port=ui_port, log_level="warning")

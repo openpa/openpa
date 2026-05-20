@@ -63,7 +63,28 @@ async function maybePivotToBackend(): Promise<boolean> {
   // the Electron shell — see the early return above), so we always want
   // the __IS_ELECTRON__: true bundle, not the web bundle at ``/`` which
   // would hide the custom titlebar and break window dragging.
-  window.location.replace(`${spaUrl.origin}/electron-renderer/${window.location.hash || '#/'}`)
+  //
+  // Probe the path first. Older backend wheels (pre-test41) don't ship
+  // the ui-electron directory, so the /electron-renderer mount isn't
+  // active and a hard redirect would dump the user on a 404 page with
+  // no recovery. When the probe fails we stay on the asar bundle (also
+  // __IS_ELECTRON__: true) — the user just won't pick up wheel-only UI
+  // updates until the backend is upgraded, which is the same trade-off
+  // documented in ui/electron/main.ts:loadMainContent.
+  const electronRendererUrl = `${spaUrl.origin}/electron-renderer/`
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 2000)
+    const probe = await fetch(`${electronRendererUrl}index.html`, {
+      method: 'HEAD',
+      signal: controller.signal,
+    })
+    clearTimeout(timer)
+    if (!probe.ok) return false
+  } catch {
+    return false
+  }
+  window.location.replace(`${electronRendererUrl}${window.location.hash || '#/'}`)
   return true
 }
 
