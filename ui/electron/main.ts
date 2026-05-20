@@ -342,6 +342,34 @@ function backendSpaUrl(): string {
   return 'http://127.0.0.1:1515'
 }
 
+// Path the Electron shell loads from the backend's SPA listener. The
+// backend serves two bundles side-by-side:
+//   /                    → web bundle  (__IS_ELECTRON__: false)
+//   /electron-renderer/  → Electron renderer bundle (__IS_ELECTRON__: true)
+// Loading the web bundle inside the Electron shell hides the custom
+// titlebar (gated on __IS_ELECTRON__) and breaks window dragging, so
+// the shell always asks for /electron-renderer/.
+const ELECTRON_RENDERER_PATH = '/electron-renderer/'
+
+// HEAD-style probe for the electron-renderer mount. Older wheels don't
+// ship the ui-electron directory; in that case the backend's StaticFiles
+// fallback at ``/`` would silently serve the web bundle instead, so we
+// detect the miss explicitly and fall back to the asar copy (which is
+// also __IS_ELECTRON__: true and at least keeps the titlebar working
+// until the user upgrades to a wheel that includes ui-electron).
+function electronRendererAvailable(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const url = `${backendSpaUrl()}${ELECTRON_RENDERER_PATH}index.html`
+    const req = http.request(url, { method: 'HEAD', timeout: 1500 }, (res) => {
+      res.resume()
+      resolve((res.statusCode ?? 0) < 400)
+    })
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.end()
+  })
+}
+
 // Decide where to load a window's renderer from. The asar copy of the
 // SPA is frozen at electron-builder time, so loading from it leaves
 // wheel-only upgrades stuck on stale UI (no new Settings cards, no new
@@ -363,8 +391,8 @@ async function loadMainContent(w: BrowserWindow, hash: string): Promise<void> {
     void w.loadURL(VITE_DEV_SERVER_URL + hash)
     return
   }
-  if (await isBackendHealthy()) {
-    void w.loadURL(`${backendSpaUrl()}/${hash}`)
+  if (await isBackendHealthy() && await electronRendererAvailable()) {
+    void w.loadURL(`${backendSpaUrl()}${ELECTRON_RENDERER_PATH}${hash}`)
     return
   }
   void w.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: hash.slice(1) })
@@ -376,14 +404,18 @@ async function loadMainContent(w: BrowserWindow, hash: string): Promise<void> {
 // Idempotent — windows already on http(s):// are left alone so a
 // successful renderer-side ``maybePivotToBackend`` is not clobbered by a
 // redundant navigation that would wipe SPA state.
-function pivotFileWindowsToBackend(): void {
+async function pivotFileWindowsToBackend(): Promise<void> {
+  // Without /electron-renderer/ we'd be navigating into the web bundle
+  // and losing __IS_ELECTRON__: true; leave the file:// windows alone in
+  // that case so they keep the asar bundle's correct Electron flags.
+  if (!(await electronRendererAvailable())) return
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue
     const url = win.webContents.getURL()
     if (!url.startsWith('file://')) continue
     const hashIdx = url.indexOf('#')
     const winHash = hashIdx >= 0 ? url.slice(hashIdx) : '#/'
-    void win.loadURL(`${backendSpaUrl()}/${winHash}`)
+    void win.loadURL(`${backendSpaUrl()}${ELECTRON_RENDERER_PATH}${winHash}`)
   }
 }
 
@@ -1124,7 +1156,7 @@ async function runBackendUpgrade(
         // pivotFileWindowsToBackend navigates these to the SPA origin;
         // the grace flag is set by the renderer-side version poll on
         // first load instead.
-        pivotFileWindowsToBackend()
+        void pivotFileWindowsToBackend()
       })()
       resolve({ exitCode, ok: true })
     }
@@ -1763,7 +1795,7 @@ if (!gotSingleInstanceLock) {
           // so wheel-only UI updates take effect on a clean restart —
           // without this, every quit/relaunch leaves the renderer stuck
           // on whatever SPA was built into the installer's asar.
-          pivotFileWindowsToBackend()
+          void pivotFileWindowsToBackend()
         }
       })()
     }

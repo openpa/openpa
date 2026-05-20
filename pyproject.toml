@@ -138,13 +138,14 @@ path = "app/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
-# The bundled SPA at app/static/ui/ is populated by scripts/build_ui.sh
-# at release time. Those files are .gitignored (they're build output),
-# so hatchling's default VCS-tracked-only filter drops them from the
-# wheel. ``artifacts`` is the documented escape hatch: include matching
-# paths even when ignored. Without this, ``openpa serve`` logs
-# "SPA not present" and the 1515 listener never opens.
-artifacts = ["app/static/ui/**"]
+# The bundled SPA at app/static/ui/ (web bundle) and app/static/ui-electron/
+# (Electron-renderer bundle, served at /electron-renderer/) are populated
+# by scripts/build_ui.sh at release time. Those files are .gitignored
+# (they're build output), so hatchling's default VCS-tracked-only filter
+# drops them from the wheel. ``artifacts`` is the documented escape hatch:
+# include matching paths even when ignored. Without this, ``openpa serve``
+# logs "SPA not present" and the 1515 listener never opens.
+artifacts = ["app/static/ui/**", "app/static/ui-electron/**"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -188,7 +189,8 @@ line-length = 120
 target-version = "py313"
 extend-exclude = [
     "app/alembic/versions",   # auto-generated migrations
-    "app/static/ui",          # built SPA artifact
+    "app/static/ui",          # built SPA artifact (web bundle)
+    "app/static/ui-electron", # built SPA artifact (Electron renderer bundle)
     ".venv",
     "dist",
     "logs",

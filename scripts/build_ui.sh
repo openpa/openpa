@@ -73,4 +73,31 @@ mkdir -p "$STATIC_DIR"
 cp -R "$DIST/." "$STATIC_DIR/"
 
 date '+%Y-%m-%dT%H:%M:%SZ' > "$STATIC_DIR/.built-at"
+
+# Electron-renderer bundle. The Electron shell, after pivoting to the
+# wheel-served SPA, must load a build with __IS_ELECTRON__: true so the
+# custom titlebar/drag region renders. ``web:build`` produces a bundle
+# with __IS_ELECTRON__: false (correct for browsers); ``build:renderer``
+# runs the Electron-aware vite config without invoking electron-builder.
+# We stage it at app/static/ui-electron/ and the backend serves it under
+# /electron-renderer/ — see _build_ui_server in app/server.py.
+ELECTRON_STATIC_DIR="$REPO_ROOT/app/static/ui-electron"
+if ! (cd "$src" && npm run build:renderer); then
+    echo "[build_ui] build:renderer failed; regenerating deps and retrying (npm/cli#4828 workaround)"
+    (cd "$src" && rm -rf node_modules package-lock.json && npm install)
+    (cd "$src" && npm run build:renderer)
+fi
+
+DIST_E="$src/dist"
+if [ ! -f "$DIST_E/index.html" ]; then
+    echo "[build_ui] expected $DIST_E/index.html after npm run build:renderer, but it's missing" >&2
+    exit 1
+fi
+
+echo "[build_ui] copying $DIST_E/ → $ELECTRON_STATIC_DIR/"
+rm -rf "$ELECTRON_STATIC_DIR"
+mkdir -p "$ELECTRON_STATIC_DIR"
+cp -R "$DIST_E/." "$ELECTRON_STATIC_DIR/"
+
+date '+%Y-%m-%dT%H:%M:%SZ' > "$ELECTRON_STATIC_DIR/.built-at"
 echo "[build_ui] done."

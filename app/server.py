@@ -976,11 +976,25 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
     # ``html=True`` makes StaticFiles fall back to index.html for any
     # missing path — required for client-side routing under hash mode
     # to keep working when the user reloads on a deep link.
-    spa_app = Starlette(
-        routes=[
-            Mount("/", app=StaticFiles(directory=str(ui_dir), html=True), name="ui"),
-        ]
-    )
+    #
+    # The optional ``ui-electron`` sibling carries the Electron-renderer
+    # bundle (built with __IS_ELECTRON__: true). It's mounted ahead of
+    # the web SPA so the Electron shell can request /electron-renderer/
+    # and get a bundle whose titlebar/drag region renders correctly.
+    # Browsers continue to hit ``/`` and get the web bundle as before.
+    ui_electron_dir = ui_dir.parent / "ui-electron"
+    routes: list = []
+    if ui_electron_dir.is_dir() and (ui_electron_dir / "index.html").is_file():
+        routes.append(
+            Mount(
+                "/electron-renderer",
+                app=StaticFiles(directory=str(ui_electron_dir), html=True),
+                name="ui-electron",
+            )
+        )
+        logger.info(f"SPA listener: /electron-renderer → {ui_electron_dir}")
+    routes.append(Mount("/", app=StaticFiles(directory=str(ui_dir), html=True), name="ui"))
+    spa_app = Starlette(routes=routes)
     cfg = uvicorn.Config(spa_app, host=host, port=ui_port, log_level="warning")
     logger.info(f"SPA listener: http://{host}:{ui_port} (serving {ui_dir})")
     return uvicorn.Server(cfg)

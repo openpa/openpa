@@ -58,7 +58,12 @@ async function maybePivotToBackend(): Promise<boolean> {
   } catch {
     return false
   }
-  window.location.replace(`${spaUrl.origin}/${window.location.hash || '#/'}`)
+  // Target the /electron-renderer/ mount on the backend's SPA listener.
+  // This function only runs when window.openpa is present (i.e., inside
+  // the Electron shell — see the early return above), so we always want
+  // the __IS_ELECTRON__: true bundle, not the web bundle at ``/`` which
+  // would hide the custom titlebar and break window dragging.
+  window.location.replace(`${spaUrl.origin}/electron-renderer/${window.location.hash || '#/'}`)
   return true
 }
 
