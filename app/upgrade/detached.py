@@ -152,12 +152,17 @@ def main(argv: list[str] | None = None) -> int:
     # sees ECONNREFUSED with no warning, and the renderer has to guess
     # what happened.
     time.sleep(2)
-    _kill_parent(args.parent_pid)
 
-    # Mark done. If the supervisor brings the backend back up, the
-    # fresh process will read this file on first /status call and
-    # surface ``done`` to the still-reconnecting renderer.
+    # Mark done BEFORE killing the parent. Two reasons:
+    #   1. Under Docker, the parent kill triggers a container restart;
+    #      Docker SIGKILLs the detached process when the container exits,
+    #      so a finish() that ran *after* the kill could be cut short and
+    #      leave the file at phase="restart" forever.
+    #   2. The new boot's clear_if_terminal preserves recently-finished
+    #      states (see status.TERMINAL_GRACE_S), so the renderer's first
+    #      poll after reconnect still sees "done" and transitions the UI.
     status.finish(ok=True, exit_code=0)
+    _kill_parent(args.parent_pid)
     return 0
 
 

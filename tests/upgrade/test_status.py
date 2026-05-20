@@ -70,12 +70,28 @@ def test_append_log_trims_to_cap() -> None:
     assert state["log_tail"][-1] == f"line {status.LOG_TAIL_MAX + 49}"
 
 
-def test_clear_if_terminal_drops_done() -> None:
+def test_clear_if_terminal_drops_done_after_grace() -> None:
     status.begin(current_version="0.1.9", target_version="0.1.10")
     status.finish(ok=True, exit_code=0)
     assert status.status_path().is_file()
+    # Backdate finished_at past the grace window so the boot hook can
+    # collect it. The realistic case for collection is a fresh boot
+    # well after the previous upgrade finished.
+    state = status.read()
+    state["finished_at"] = state["finished_at"] - (status.TERMINAL_GRACE_S + 1)
+    status.write(state)
     status.clear_if_terminal()
     assert not status.status_path().is_file()
+
+
+def test_clear_if_terminal_preserves_recent_done() -> None:
+    status.begin(current_version="0.1.9", target_version="0.1.10")
+    status.finish(ok=True, exit_code=0)
+    status.clear_if_terminal()
+    # Within the grace window the renderer's first poll after a backend
+    # restart still needs to observe ``done`` to transition the UI.
+    assert status.status_path().is_file()
+    assert status.read()["phase"] == "done"
 
 
 def test_clear_if_terminal_preserves_in_flight() -> None:

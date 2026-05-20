@@ -44,6 +44,16 @@ from typing import Any
 # has to re-trim what the API returned.
 LOG_TAIL_MAX = 500
 
+# Grace window for clear_if_terminal: keep recently-finished status
+# files so the renderer's first poll after a backend restart still
+# observes the terminal state and transitions the UI. Under Docker the
+# parent kill in detached.py triggers a container restart; by the time
+# the new container's openpa serve runs clear_if_terminal, finished_at
+# is typically only a few seconds old. 90 s is comfortably larger than
+# any realistic container cold-start (db migrations + vncserver +
+# openpa serve startup) on the supported platforms.
+TERMINAL_GRACE_S = 90
+
 
 def status_path() -> Path:
     """Resolve the status-file location under the working dir.
@@ -148,20 +158,30 @@ def finish(*, ok: bool, exit_code: int, error: str | None = None) -> None:
 
 
 def clear_if_terminal() -> None:
-    """Boot-time hook: drop the status file if the previous run finished.
+    """Boot-time hook: drop the status file once the previous run is no
+    longer needed for UI handoff.
 
     Leaves an in-flight upgrade alone (so a crashed subprocess can still
-    be observed). Called from server startup in ``app/server.py``.
+    be observed). Also leaves a recently-finished upgrade alone for
+    ``TERMINAL_GRACE_S`` — under Docker the parent kill triggers a full
+    container restart, and the renderer needs to poll ``/status`` once
+    after reconnect to transition out of ``applying``. Deleting the file
+    eagerly hides ``done`` behind a phantom ``idle`` and leaves the UI
+    stuck. Called from server startup in ``app/server.py``.
     """
     path = status_path()
     if not path.is_file():
         return
     state = read()
-    if state.get("phase") in ("done", "failed"):
-        try:
-            path.unlink()
-        except OSError:
-            pass
+    if state.get("phase") not in ("done", "failed"):
+        return
+    finished_at = state.get("finished_at")
+    if isinstance(finished_at, (int, float)) and time.time() - finished_at < TERMINAL_GRACE_S:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 def _append_line(state: dict[str, Any], line: str) -> None:
