@@ -58,33 +58,28 @@ async function maybePivotToBackend(): Promise<boolean> {
   } catch {
     return false
   }
-  // Target the /electron-renderer/ mount on the backend's SPA listener.
-  // This function only runs when window.openpa is present (i.e., inside
-  // the Electron shell — see the early return above), so we always want
-  // the __IS_ELECTRON__: true bundle, not the web bundle at ``/`` which
-  // would hide the custom titlebar and break window dragging.
-  //
-  // Probe the path first. Older backend wheels (pre-test41) don't ship
-  // the ui-electron directory, so the /electron-renderer mount isn't
-  // active and a hard redirect would dump the user on a 404 page with
-  // no recovery. When the probe fails we stay on the asar bundle (also
-  // __IS_ELECTRON__: true) — the user just won't pick up wheel-only UI
-  // updates until the backend is upgraded, which is the same trade-off
-  // documented in ui/electron/main.ts:loadMainContent.
-  const electronRendererUrl = `${spaUrl.origin}/electron-renderer/`
+  // Prefer the /electron-renderer/ mount (__IS_ELECTRON__: true so the
+  // custom titlebar / drag region renders). When the probe fails we
+  // pivot to the web bundle at ``/`` instead of staying on the asar
+  // copy — same http origin as /electron-renderer/, so the auth token
+  // written by SetupWizard.vue's pivot is visible and the user stays
+  // logged in. Asar is a different origin (file://), so leaving the
+  // window there would force a re-login.
+  const hash = window.location.hash || '#/'
+  let targetPath = '/electron-renderer/'
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 2000)
-    const probe = await fetch(`${electronRendererUrl}index.html`, {
+    const probe = await fetch(`${spaUrl.origin}/electron-renderer/index.html`, {
       method: 'HEAD',
       signal: controller.signal,
     })
     clearTimeout(timer)
-    if (!probe.ok) return false
+    if (!probe.ok) targetPath = '/'
   } catch {
-    return false
+    targetPath = '/'
   }
-  window.location.replace(`${electronRendererUrl}${window.location.hash || '#/'}`)
+  window.location.replace(`${spaUrl.origin}${targetPath}${hash}`)
   return true
 }
 

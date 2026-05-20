@@ -377,12 +377,23 @@ function electronRendererAvailable(): Promise<boolean> {
 // every wheel install immediately delivers fresh UI to the Electron
 // renderer.
 //
-// We still fall back to the asar copy in three cases:
-//   - Dev (vite serve has its own URL via VITE_DEV_SERVER_URL).
-//   - First-run installer (no backend running yet; the Setup Wizard
-//     lives in the asar SPA and configures the backend the first time).
-//   - Backend down / degraded (the asar copy at least shows something
-//     instead of a Chromium error page).
+// Fallback chain when the backend is healthy:
+//   1. /electron-renderer/  — preferred (__IS_ELECTRON__: true so the
+//      custom titlebar / drag region renders).
+//   2. /                    — same origin as #1, just the web bundle.
+//      Loses the titlebar but keeps localStorage scoped to the wheel
+//      origin (http://127.0.0.1:1515), so the auth token written by
+//      SetupWizard.vue's pivot is still visible and the user stays
+//      logged in. Used when /electron-renderer/ is missing — typically
+//      a backend wheel that pre-dates test41 paired with a newer
+//      Electron shell.
+//   3. asar (file://)       — backend unreachable. Different origin
+//      from the http token store, so the user sees a login screen, but
+//      there's no backend to authenticate against anyway. Once the
+//      backend comes back, maybePivotToBackend / pivotFileWindowsToBackend
+//      migrate the window back to the http origin and the token reappears.
+//
+// The dev path (``vite serve``) keeps its own URL via VITE_DEV_SERVER_URL.
 // The renderer's own ``maybePivotToBackend`` in ui/src/main.ts handles
 // the post-Setup-Wizard transition: once the backend comes up the asar
 // SPA navigates itself to the HTTP origin without main needing to chase.
@@ -391,8 +402,9 @@ async function loadMainContent(w: BrowserWindow, hash: string): Promise<void> {
     void w.loadURL(VITE_DEV_SERVER_URL + hash)
     return
   }
-  if (await isBackendHealthy() && await electronRendererAvailable()) {
-    void w.loadURL(`${backendSpaUrl()}${ELECTRON_RENDERER_PATH}${hash}`)
+  if (await isBackendHealthy()) {
+    const targetPath = (await electronRendererAvailable()) ? ELECTRON_RENDERER_PATH : '/'
+    void w.loadURL(`${backendSpaUrl()}${targetPath}${hash}`)
     return
   }
   void w.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: hash.slice(1) })
@@ -405,17 +417,19 @@ async function loadMainContent(w: BrowserWindow, hash: string): Promise<void> {
 // successful renderer-side ``maybePivotToBackend`` is not clobbered by a
 // redundant navigation that would wipe SPA state.
 async function pivotFileWindowsToBackend(): Promise<void> {
-  // Without /electron-renderer/ we'd be navigating into the web bundle
-  // and losing __IS_ELECTRON__: true; leave the file:// windows alone in
-  // that case so they keep the asar bundle's correct Electron flags.
-  if (!(await electronRendererAvailable())) return
+  if (!(await isBackendHealthy())) return
+  // Same path-preference as loadMainContent: /electron-renderer/ when
+  // it's there, otherwise the web bundle at /. Both share the http
+  // origin, so the auth token created by the Setup Wizard's pivot
+  // survives regardless of which path serves.
+  const targetPath = (await electronRendererAvailable()) ? ELECTRON_RENDERER_PATH : '/'
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue
     const url = win.webContents.getURL()
     if (!url.startsWith('file://')) continue
     const hashIdx = url.indexOf('#')
     const winHash = hashIdx >= 0 ? url.slice(hashIdx) : '#/'
-    void win.loadURL(`${backendSpaUrl()}${ELECTRON_RENDERER_PATH}${winHash}`)
+    void win.loadURL(`${backendSpaUrl()}${targetPath}${winHash}`)
   }
 }
 
