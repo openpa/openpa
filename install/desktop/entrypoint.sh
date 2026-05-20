@@ -27,6 +27,16 @@
 
 set -e
 
+# ── Diagnostics ──────────────────────────────────────────────────────────
+#
+# Every container start and stop emits a timestamped banner to stderr so
+# ``docker logs <container>`` shows exactly when the entrypoint booted
+# and when it exited. The in-app upgrade flow depends on the container
+# actually restarting after the upgrade runner SIGTERMs ``openpa serve``;
+# these banners are how we verify (or refute) that the restart happened.
+echo "[entrypoint] starting PID=$$ at $(date -Is)" >&2
+trap 'echo "[entrypoint] exiting with code $? at $(date -Is)" >&2' EXIT
+
 # ── 0. Seed /opt/openpa/venv from baseline ───────────────────────────────
 #
 # The image builds a thin-core venv at /opt/openpa-baseline/venv; the
@@ -149,5 +159,5 @@ EOF
 # Exit on the first child failure so Docker's restart policy can recover.
 # Without ``wait -n`` we'd silently keep running with a dead service.
 wait -n
-echo "[entrypoint] a child process exited; the container will restart." >&2
+echo "[entrypoint] a child process exited at $(date -Is); the container will restart." >&2
 exit 1

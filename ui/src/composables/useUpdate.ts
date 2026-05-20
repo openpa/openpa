@@ -47,7 +47,15 @@ import type {
 const LOG_TAIL_MAX = 500
 const BACKEND_POLL_MS = 6 * 60 * 60 * 1000  // 6h — same cadence as the old banner
 const STATUS_POLL_MS = 1500                  // web-UI poll cadence during applying
-const VERSION_POLL_MS = 30000                // /version poll cadence for auto-reload
+const VERSION_POLL_MS = 30000                // baseline /version poll cadence
+const FAST_VERSION_POLL_MS = 2000            // /version cadence while applying
+//
+// Why two cadences: the 30s baseline is enough for picking up
+// out-of-band restarts (sysadmin manually restarted the backend, etc.).
+// During an active upgrade we want to detect the new backend within a
+// couple of seconds of it coming up — the version change is the
+// ground-truth completion signal that doesn't depend on the status-file
+// handoff working perfectly across container restart.
 
 // ── module-level singletons ──────────────────────────────────────────────
 //
@@ -69,6 +77,7 @@ let backendTimer: ReturnType<typeof setInterval> | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let statusController: AbortController | null = null
 let versionTimer: ReturnType<typeof setInterval> | null = null
+let fastVersionTimer: ReturnType<typeof setInterval> | null = null
 let bootBackendVersion: string | null = null
 
 function isElectron(): boolean {
@@ -225,7 +234,6 @@ async function applyWebUpgrade(): Promise<void> {
 function startStatusPolling(): void {
   if (statusTimer) return
   let lastLogLen = log.value.length
-  let backoff = STATUS_POLL_MS
   const tick = async () => {
     const settings = useSettingsStore()
     if (!settings.agentUrl) return
@@ -240,7 +248,6 @@ function startStatusPolling(): void {
         headers, signal: statusController.signal,
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      backoff = STATUS_POLL_MS  // success — reset
       const body = (await r.json()) as UpgradeStatusFile
       mergeStatusFile(body, lastLogLen)
       lastLogLen = log.value.length
@@ -254,12 +261,13 @@ function startStatusPolling(): void {
     } catch {
       // Backend likely restarting — the runner kills the parent at the
       // end of the upgrade and the supervisor (Docker / Electron) takes
-      // a few seconds to bring it back. Keep polling with backoff so we
-      // re-attach when it comes back.
-      backoff = Math.min(backoff * 1.5, 10000)
+      // a few seconds to bring it back. We deliberately keep polling at
+      // the fixed brisk STATUS_POLL_MS cadence (no exponential backoff)
+      // so we re-attach promptly when the new backend is up; slow
+      // polling defeats the post-restart UX.
     }
   }
-  statusTimer = setInterval(() => { void tick() }, backoff)
+  statusTimer = setInterval(() => { void tick() }, STATUS_POLL_MS)
   void tick()
 }
 
@@ -296,6 +304,11 @@ type ReconcileArgs = { backendOk: boolean; backendError?: string | null }
 
 /** Decide the final unified phase once a track finishes. */
 function reconcileTerminalPhase(args: ReconcileArgs): void {
+  // Either signal landing here means the upgrade is over; the fast
+  // /version poll has done its job (or won't be needed). Stop it
+  // before we touch phase so any in-flight tick can't race a
+  // setPhase('done') against a setPhase('failed').
+  stopFastVersionPoll()
   if (!args.backendOk) {
     setPhase('failed', args.backendError ?? 'Upgrade failed.')
     return
@@ -358,6 +371,30 @@ async function pollVersion(): Promise<void> {
   }
 }
 
+// While ``phase === 'applying'`` we run a second /version poll at
+// FAST_VERSION_POLL_MS cadence so the page reload fires within a couple
+// of seconds of the new backend coming up. Outside that phase the
+// baseline 30s poller is sufficient — we don't want to burn battery
+// hitting /version every 2s indefinitely.
+function startFastVersionPoll(): void {
+  if (fastVersionTimer) return
+  // Seed bootBackendVersion if init's first pollVersion hasn't landed
+  // yet (race when the user clicks Update very early in the session).
+  // Overwrite-only-if-null so we don't lose the original boot value
+  // mid-session.
+  if (bootBackendVersion === null) {
+    void fetchBackendVersion().then((v) => {
+      if (bootBackendVersion === null && v) bootBackendVersion = v
+    })
+  }
+  fastVersionTimer = setInterval(() => { void pollVersion() }, FAST_VERSION_POLL_MS)
+}
+
+function stopFastVersionPoll(): void {
+  if (fastVersionTimer) clearInterval(fastVersionTimer)
+  fastVersionTimer = null
+}
+
 // ── Initialisation (idempotent) ──────────────────────────────────────────
 
 function init(): void {
@@ -393,6 +430,7 @@ function teardown(): void {
     clearInterval(versionTimer)
     versionTimer = null
   }
+  stopFastVersionPoll()
   bootBackendVersion = null
   stopStatusPolling()
   if (window.openpa?.updater) {
@@ -508,6 +546,13 @@ export function useUpdate() {
     explicitRestartRequired.value = false
     setPhase('applying')
     pushLog('Starting upgrade…')
+    // Start fast /version polling so we detect the new backend within a
+    // couple of seconds of it coming up — independent of the status-file
+    // handoff. The version change triggers a page reload via the
+    // existing pollVersion() path; reconcileTerminalPhase stops the
+    // fast poll when the status file (or Electron IPC) also reports
+    // done/failed.
+    startFastVersionPoll()
 
     // Shell track (Electron only): kick off the download in parallel.
     const u = updater.value

@@ -405,6 +405,48 @@ def _silence_proactor_connection_reset(loop: asyncio.AbstractEventLoop) -> None:
     loop.set_exception_handler(_handler)
 
 
+# Hard cap on the time the lifespan shutdown hook may spend cleaning
+# up. If channel adapters or skill watchers stall (network calls
+# without their own timeouts), the wrapper below cancels them and
+# lets the lifespan dispatcher unblock. Under Docker / Electron this
+# is the difference between a clean container restart and the in-app
+# upgrade stalling forever on the dying container.
+SHUTDOWN_TIMEOUT_S = 8.0
+
+
+async def _do_shutdown() -> None:
+    """The actual cleanup body. Module-level so tests can patch it."""
+    try:
+        stop_all_watchers()
+    except Exception:  # noqa: BLE001
+        logger.exception("Error stopping skill watchers during shutdown")
+    try:
+        from app.channels import get_channel_registry
+
+        await get_channel_registry().stop_all()
+    except Exception:  # noqa: BLE001
+        logger.exception("Error stopping channel adapters during shutdown")
+
+
+async def _on_shutdown() -> None:
+    """Lifespan-shutdown hook registered on the Starlette app.
+
+    Bounds the inner cleanup with ``asyncio.wait_for`` so a hung
+    channel adapter can't park ``openpa serve`` forever. uvicorn's
+    ``timeout_graceful_shutdown`` only bounds the *connection-drain*
+    phase, not the lifespan dispatcher (see uvicorn/server.py:271-301
+    and uvicorn/lifespan/on.py:64-70), so the timeout has to live
+    HERE, in the hook itself.
+    """
+    try:
+        await asyncio.wait_for(_do_shutdown(), timeout=SHUTDOWN_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"on_shutdown exceeded {SHUTDOWN_TIMEOUT_S}s; abandoning "
+            "graceful cleanup so the supervisor can restart us."
+        )
+
+
 async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     _silence_proactor_connection_reset(asyncio.get_running_loop())
 
@@ -422,6 +464,34 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         # Best-effort; a missing module or unreadable file mustn't
         # block startup. The /api/upgrade/status endpoint handles a
         # corrupt file gracefully on its own.
+        pass
+
+    # 0a'. If the previous run left a recent terminal status file
+    #      (still inside TERMINAL_GRACE_S), append a boot marker so the
+    #      renderer's first post-reconnect poll observes an unambiguous
+    #      "the new backend is up on version X" line in the log tail.
+    #      This is the positive signal the renderer needs to settle the
+    #      UI out of ``applying`` even when the version-change reload
+    #      hasn't fired yet.
+    try:
+        import time as _time
+
+        from app.__version__ import __version__ as _version
+        from app.upgrade import status as _upgrade_status
+
+        _path = _upgrade_status.status_path()
+        if _path.is_file():
+            _state = _upgrade_status.read()
+            _phase = _state.get("phase")
+            _finished = _state.get("finished_at")
+            if _phase in ("done", "failed") and isinstance(
+                _finished, (int, float)
+            ) and _time.time() - _finished < _upgrade_status.TERMINAL_GRACE_S:
+                _upgrade_status.append_log(
+                    f"[boot] backend {_version} started"
+                )
+    except Exception:  # noqa: BLE001
+        # Same best-effort rationale as the clear above.
         pass
 
     # 0b. Verify channel sidecars' node_modules; reinstall if missing or
@@ -540,18 +610,6 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     from app.middleware import A2AAuthGuard
 
     middleware_stack.append(Middleware(A2AAuthGuard))
-
-    async def _on_shutdown() -> None:
-        try:
-            stop_all_watchers()
-        except Exception:  # noqa: BLE001
-            logger.exception("Error stopping skill watchers during shutdown")
-        try:
-            from app.channels import get_channel_registry
-
-            await get_channel_registry().stop_all()
-        except Exception:  # noqa: BLE001
-            logger.exception("Error stopping channel adapters during shutdown")
 
     app = Starlette(
         routes=routes,
@@ -895,24 +953,58 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             "The Setup Wizard's POST /api/config/setup will materialise storage."
         )
 
-    config = uvicorn.Config(app, host=host, port=port)
+    # ``timeout_graceful_shutdown`` bounds connection drain (SSE streams
+    # under /api/upgrade/stream and /api/services/logs/stream would
+    # otherwise hold the server alive). It does NOT bound the lifespan
+    # shutdown hook — that's handled in _on_shutdown itself via
+    # asyncio.wait_for. Keep both.
+    config = uvicorn.Config(
+        app, host=host, port=port, timeout_graceful_shutdown=10
+    )
 
     import os
+    import threading
 
-    class _ForceQuitServer(uvicorn.Server):
-        _sigint_count = 0
+    # Detect supervised environments where a hung shutdown would block
+    # a container restart: Docker (INSTALL_MODE set by the entrypoint /
+    # docker-compose template) and Electron (OPENPA_ELECTRON_PARENT set
+    # by the Electron main process when it spawns us). Bare ``openpa
+    # serve`` in dev keeps the old clean-shutdown behaviour so Ctrl-C
+    # doesn't truncate work.
+    _supervised = (
+        os.environ.get("INSTALL_MODE") == "docker"
+        or os.environ.get("OPENPA_ELECTRON_PARENT") is not None
+    )
+
+    class _BoundedShutdownServer(uvicorn.Server):
+        """uvicorn.Server with a hard exit-deadline on SIGTERM/SIGINT.
+
+        The detached upgrade runner SIGTERMs us at the end of an
+        ``apply`` and expects the container's supervisor (Docker /
+        Electron) to bring us back on the new wheel. If the lifespan
+        shutdown hangs — e.g. an asyncio task that ignores cancellation,
+        a deadlock between background tasks, an OS-level issue — the
+        supervisor can't recover us because we never exit. A daemon
+        timer guarantees ``os._exit(0)`` runs within ``deadline``
+        seconds of the first signal, no matter what. ``os._exit`` skips
+        Python finalisers, which is intentional: a hung finaliser is
+        exactly what we're guarding against.
+        """
+
+        # Slightly longer than _on_shutdown's 8s asyncio.wait_for plus
+        # uvicorn's own timeout_graceful_shutdown=10, so the normal
+        # clean-shutdown path is the typical winner.
+        _deadline_s = 12.0
 
         def handle_exit(self, sig, frame):
-            type(self)._sigint_count += 1
-            if type(self)._sigint_count >= 2:
-                os._exit(130)
-            print(
-                "\nShutting down... press Ctrl+C again to force quit.",
-                flush=True,
-            )
+            if _supervised:
+                threading.Timer(
+                    self._deadline_s,
+                    lambda: os._exit(0),
+                ).start()
             super().handle_exit(sig, frame)
 
-    server = _ForceQuitServer(config)
+    server = _BoundedShutdownServer(config)
 
     # ── Bundled SPA listener ───────────────────────────────────────────────
     #

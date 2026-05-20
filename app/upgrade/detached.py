@@ -146,11 +146,13 @@ def main(argv: list[str] | None = None) -> int:
     # parent out from under the API request that triggered us. The
     # client may still be polling /status when the SIGTERM lands.
     status.update_phase("restart", "Restarting backend on the new version...")
+    print(f"[detached] T={time.time():.3f} restart phase set", flush=True)
 
     # Small delay so the API's most-recent /status response reaches the
     # client before the listener dies — without this, the SSE/poll just
     # sees ECONNREFUSED with no warning, and the renderer has to guess
     # what happened.
+    print(f"[detached] T={time.time():.3f} sleeping 2s pre-finish", flush=True)
     time.sleep(2)
 
     # Mark done BEFORE killing the parent. Two reasons:
@@ -161,8 +163,14 @@ def main(argv: list[str] | None = None) -> int:
     #   2. The new boot's clear_if_terminal preserves recently-finished
     #      states (see status.TERMINAL_GRACE_S), so the renderer's first
     #      poll after reconnect still sees "done" and transitions the UI.
+    print(f"[detached] T={time.time():.3f} calling status.finish(ok=True)", flush=True)
     status.finish(ok=True, exit_code=0)
+    print(
+        f"[detached] T={time.time():.3f} sending SIGTERM to pid {args.parent_pid}",
+        flush=True,
+    )
     _kill_parent(args.parent_pid)
+    print(f"[detached] T={time.time():.3f} kill returned", flush=True)
     return 0
 
 
