@@ -159,6 +159,23 @@ const routes = [
     props: true,
     meta: { title: 'Events' },
   },
+  // Developer — debug tools (live log stream, etc.). Admin-only; mirrors
+  // the embedding-settings guard pattern above so non-admin profiles
+  // never see a 403'd page.
+  {
+    path: '/:profile/developer',
+    name: 'developer',
+    component: () => import('../views/DeveloperPage.vue'),
+    props: true,
+    meta: { title: 'Developer' },
+    beforeEnter: (to: RouteLocationNormalized) => {
+      const profile = to.params.profile as string | undefined;
+      if (profile && profile !== 'admin') {
+        return { path: `/${profile}`, replace: true };
+      }
+      return true;
+    },
+  },
 ];
 
 const router = createRouter({

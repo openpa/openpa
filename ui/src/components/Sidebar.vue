@@ -265,6 +265,17 @@ const handleOpenEvents = () => {
   router.push({ name: 'skill-events', params: { profile } });
 };
 
+// Developer page is admin-only — backend's require_admin would 403
+// non-admin profiles, and the route guard already redirects them.
+// Hiding the sidebar row keeps them from ever seeing the entry point.
+const isAdminProfile = computed(() => (route.params.profile as string) === 'admin');
+
+const handleOpenDeveloper = () => {
+  const profile = route.params.profile as string;
+  if (!profile) return;
+  router.push({ name: 'developer', params: { profile } });
+};
+
 const handleLogout = () => {
   emit('logout');
 };
@@ -605,6 +616,13 @@ const toggleThemeFromIcon = () => {
         <div class="settings-row" @click="handleOpenProcessManager">
           <Icon icon="mdi:console" class="settings-icon" />
           <span class="settings-label" v-if="!isCollapsed">Process Manager</span>
+          <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
+        </div>
+      </ElTooltip>
+      <ElTooltip v-if="isAdminProfile" content="Developer" placement="right" :show-after="300" :disabled="!isCollapsed">
+        <div class="settings-row" @click="handleOpenDeveloper">
+          <Icon icon="mdi:bug-outline" class="settings-icon" />
+          <span class="settings-label" v-if="!isCollapsed">Developer</span>
           <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
         </div>
       </ElTooltip>

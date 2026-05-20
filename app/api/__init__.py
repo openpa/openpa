@@ -10,6 +10,7 @@ from app.api.oauth2 import get_oauth2_routes
 from app.api.processes import get_process_routes
 from app.api.profiles import get_profile_routes
 from app.api.embedding_stream import get_embedding_stream_routes
+from app.api.logs_stream import get_logs_stream_routes
 from app.api.settings_stream import get_settings_stream_routes
 from app.api.system_vars import get_system_vars_routes
 from app.api.tokens import get_token_routes
@@ -70,4 +71,5 @@ def get_api_routes(
     routes.extend(get_file_watcher_routes())
     routes.extend(get_settings_stream_routes())
     routes.extend(get_embedding_stream_routes())
+    routes.extend(get_logs_stream_routes())
     return routes

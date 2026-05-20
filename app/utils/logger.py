@@ -45,5 +45,55 @@ logger.add(
     enqueue=True,
 )
 
+
+# In-memory bus sink — feeds the Developer page's live log viewer.
+# Imported lazily to avoid a hard dependency cycle if the bus module
+# ever wants to log something itself (the loopback guard below blocks
+# records from this module and from the bus).
+_LOOPBACK_PREFIXES = ("app.events.log_stream_bus", "app.api.logs_stream")
+_TRACEBACK_CAP = 8 * 1024
+
+
+def _bus_sink(message: Any) -> None:
+    """Publish a Loguru record to the log stream bus.
+
+    Loguru passes a ``Message`` whose ``.record`` is the structured
+    dict. We extract a small JSON-safe shape and drop on any failure —
+    a sink that raises breaks every ``logger.X`` call site.
+    """
+    try:
+        record = message.record
+        name = record.get("name") or ""
+        if name.startswith(_LOOPBACK_PREFIXES):
+            return
+        time_obj = record.get("time")
+        ts = time_obj.isoformat() if time_obj is not None else ""
+        level_obj = record.get("level")
+        level_name = getattr(level_obj, "name", str(level_obj or "INFO"))
+        line = record.get("line") or 0
+        function = record.get("function") or ""
+        source = f"{name}:{function}:{line}" if name else function
+        text = record.get("message") or ""
+        if record.get("exception") is not None:
+            formatted = str(message)
+            if len(formatted) > _TRACEBACK_CAP:
+                formatted = formatted[:_TRACEBACK_CAP] + "...[truncated]"
+            text = formatted
+        entry: Dict[str, Any] = {
+            "ts": ts,
+            "level": level_name,
+            "source": source,
+            "message": text,
+        }
+        from app.events.log_stream_bus import get_log_stream_bus
+        get_log_stream_bus().publish(entry)
+    except Exception:  # noqa: BLE001
+        # Sinks must never raise.
+        pass
+
+
+logger.add(_bus_sink, level="DEBUG")
+
+
 # Export
 __all__ = ["logger"]
