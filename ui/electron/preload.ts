@@ -70,6 +70,11 @@ contextBridge.exposeInMainWorld('openpa', {
   server: {
     start: (): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('openpa:server:start'),
+    // Kills + respawns the backend child. Used by the Developer
+    // page's Restart Server button under Electron; web/Docker builds
+    // hit POST /api/system/restart directly instead.
+    restart: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('openpa:server:restart'),
   },
 
   // Backend upgrade bridge — runs ``openpa upgrade --yes`` as a child

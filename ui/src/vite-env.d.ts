@@ -94,6 +94,10 @@ type OpenPAServerBridge = {
   // health endpoint is reachable, or ``{ ok: false, error }`` if it
   // failed to start.
   start: () => Promise<{ ok: boolean; error?: string }>
+  // SIGTERM the running backend child and respawn it. Used by the
+  // Developer page's Restart Server button under Electron. Resolves
+  // once the new backend's /health returns 200.
+  restart: () => Promise<{ ok: boolean; error?: string }>
 }
 
 // In-app ``openpa upgrade`` flow. ``apply`` spawns the CLI under the

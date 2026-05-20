@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElButton, ElCard, ElCheckTag, ElEmpty, ElInput, ElSwitch, ElTag } from 'element-plus';
+import { ElButton, ElCard, ElCheckTag, ElEmpty, ElInput, ElMessageBox, ElSwitch, ElTag } from 'element-plus';
 import { Icon } from '@iconify/vue';
 
 import { useSettingsStore } from '../stores/settings';
 import { openServerLogsStream, type LogEntry, type ServerLogsStreamHandle } from '../services/serverLogsStream';
+import { useServerRestart } from '../composables/useServerRestart';
 
 const props = defineProps<{ profile: string }>();
 const router = useRouter();
@@ -35,6 +36,77 @@ const streamError = ref<string | null>(null);
 
 const viewportRef = ref<HTMLElement | null>(null);
 let streamHandle: ServerLogsStreamHandle | null = null;
+
+const {
+  phase: restartPhase,
+  error: restartError,
+  installMode,
+  isBusy: restartBusy,
+  loadInstallMode,
+  restart: triggerRestart,
+} = useServerRestart();
+
+const restartBadge = computed<{ label: string; type: 'info' | 'success' | 'warning' | 'danger' }>(() => {
+  switch (restartPhase.value) {
+    case 'restarting':
+      return { label: 'Restarting…', type: 'warning' };
+    case 'reconnected':
+      return { label: 'Reconnected', type: 'success' };
+    case 'failed':
+      return { label: 'Failed', type: 'danger' };
+    case 'idle':
+    default:
+      return { label: 'Idle', type: 'info' };
+  }
+});
+
+// Confirmation copy is install-mode-specific so the user sees what
+// will actually happen on their environment. The unsupervised case
+// is loudest — that's the one where the backend will stay down.
+const restartConfirmCopy = computed(() => {
+  switch (installMode.value) {
+    case 'docker':
+      return {
+        message:
+          'Active connections will drop. The container will restart automatically ' +
+          '— this usually takes 5–15 seconds.',
+        type: 'warning' as const,
+      };
+    case 'electron':
+      return {
+        message:
+          'Active connections will drop. OpenPA will relaunch its backend automatically.',
+        type: 'warning' as const,
+      };
+    default:
+      // ``native`` and ``null`` (unknown) — assume no supervisor.
+      return {
+        message:
+          'Warning: this install has no supervisor. The backend will exit and ' +
+          'you will need to relaunch ``openpa serve`` manually. Active connections ' +
+          'will drop.',
+        type: 'error' as const,
+      };
+  }
+});
+
+async function handleRestartClick() {
+  try {
+    await ElMessageBox.confirm(
+      restartConfirmCopy.value.message,
+      'Restart OpenPA Server',
+      {
+        type: restartConfirmCopy.value.type,
+        confirmButtonText: 'Restart now',
+        cancelButtonText: 'Cancel',
+        confirmButtonClass: 'el-button--danger',
+      },
+    );
+  } catch {
+    return;
+  }
+  await triggerRestart();
+}
 
 function handleLevelChange(level: LogLevel, value: boolean) {
   activeLevels.value[level] = value;
@@ -137,6 +209,7 @@ function formatTimestamp(iso: string): string {
 }
 
 onMounted(() => {
+  void loadInstallMode();
   const agentUrl = settingsStore.agentUrl;
   const token = settingsStore.authToken;
   if (!agentUrl || !token) {
@@ -179,6 +252,58 @@ watch(autoScroll, (on) => {
       <h1>Developer</h1>
       <p>Debugging and development tools.</p>
     </div>
+
+    <ElCard class="restart-card" shadow="never">
+      <template #header>
+        <div class="restart-card-header">
+          <div class="restart-card-title">
+            <Icon icon="mdi:restart" class="restart-card-icon" />
+            <span>Restart Server</span>
+            <ElTag
+              :type="restartBadge.type"
+              size="small"
+              effect="plain"
+            >{{ restartBadge.label }}</ElTag>
+          </div>
+          <ElButton
+            type="danger"
+            size="small"
+            :loading="restartBusy"
+            :disabled="restartBusy"
+            @click="handleRestartClick"
+          >
+            <Icon icon="mdi:restart" />
+            Restart Server
+          </ElButton>
+        </div>
+      </template>
+
+      <div class="restart-card-body">
+        <p class="restart-description">
+          Stops and respawns the OpenPA backend process. Active HTTP, SSE, and chat
+          connections will drop while the server is unavailable.
+        </p>
+        <div v-if="installMode === 'docker'" class="restart-hint">
+          <Icon icon="mdi:docker" />
+          <span>Docker install — the container will restart automatically.</span>
+        </div>
+        <div v-else-if="installMode === 'electron'" class="restart-hint">
+          <Icon icon="mdi:application-brackets-outline" />
+          <span>Electron install — OpenPA will relaunch the backend automatically.</span>
+        </div>
+        <div v-else class="restart-hint restart-hint-warning">
+          <Icon icon="mdi:alert-outline" />
+          <span>
+            No supervisor detected — restarting will leave the backend down. You will
+            need to relaunch <code>openpa serve</code> manually.
+          </span>
+        </div>
+        <div v-if="restartPhase === 'failed' && restartError" class="restart-error">
+          <Icon icon="mdi:close-circle-outline" />
+          <span>{{ restartError }}</span>
+        </div>
+      </div>
+    </ElCard>
 
     <ElCard class="logs-card" shadow="never">
       <template #header>
@@ -320,6 +445,57 @@ watch(autoScroll, (on) => {
 .developer-header p { font-size: 0.875rem; color: var(--text-secondary); margin: 0; }
 
 .logs-card { background: var(--card-bg, var(--bg-color)); }
+
+.restart-card {
+  background: var(--card-bg, var(--bg-color));
+  margin-bottom: 16px;
+}
+.restart-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.restart-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.restart-card-icon { font-size: 20px; color: var(--el-color-danger); }
+.restart-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.restart-description {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+.restart-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.restart-hint code {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  background: var(--el-fill-color-light, rgba(127, 127, 127, 0.12));
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.restart-hint-warning { color: var(--el-color-warning); }
+.restart-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--el-color-danger);
+}
 
 .logs-card-header {
   display: flex;

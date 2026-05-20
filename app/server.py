@@ -52,6 +52,7 @@ from app.api.config import get_config_routes
 from app.api.features import get_features_routes
 from app.api.llm import get_llm_routes
 from app.api.setup_stream import get_setup_stream_routes
+from app.api.system import get_system_routes
 from app.api.tools import get_tool_routes
 from app.api.upgrade import get_upgrade_routes
 from app.api.version import get_version_routes
@@ -516,6 +517,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # (registry=None → catalog-only) and the post-boot UI seamlessly.
     routes.extend(get_version_routes())
     routes.extend(get_upgrade_routes())
+    routes.extend(get_system_routes())
     routes.extend(get_features_routes())
     routes.extend(get_config_routes(state))
     routes.extend(get_llm_routes(state))

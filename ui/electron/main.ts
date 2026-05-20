@@ -499,6 +499,33 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
 
 ipcMain.handle('openpa:server:start', async () => startBackend())
 
+// Restart the backend in-process. The Developer page's Restart Server
+// button routes here when running under Electron — without this
+// handler, hitting POST /api/system/restart would kill the backend
+// (the ``child.on('exit')`` hook above just nulls out backendProcess
+// without respawning), leaving the user with a dead app.
+//
+// We SIGTERM the child, wait briefly for the exit hook to fire (so
+// backendProcess is already cleared and startBackend's "already
+// spawned?" guard takes the cold path), then call startBackend()
+// which spawns a fresh ``openpa serve`` and polls /health until it
+// returns 200.
+ipcMain.handle('openpa:server:restart', async (): Promise<{ ok: boolean; error?: string }> => {
+  const existing = backendProcess
+  if (existing && existing.exitCode === null) {
+    // Wait for the exit hook before respawning so the new child isn't
+    // racing the old one for the listening port.
+    const exited = new Promise<void>((resolve) => {
+      existing.once('exit', () => resolve())
+      // Safety net — exit hook should fire within a second of SIGTERM.
+      setTimeout(() => resolve(), 5000)
+    })
+    try { existing.kill('SIGTERM') } catch { /* already gone */ }
+    await exited
+  }
+  return startBackend()
+})
+
 // ── In-app backend upgrade ──────────────────────────────────────────────
 //
 // Runs ``openpa upgrade --yes`` as a subprocess and streams its output
