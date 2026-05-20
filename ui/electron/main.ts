@@ -1004,6 +1004,18 @@ async function runBackendUpgrade(
     if (!sender.isDestroyed()) sender.send(channel, message)
   }
 
+  // Docker installs have no local venv on the host. The renderer is
+  // expected to route these to POST /api/upgrade/apply (handled inside
+  // the container) instead of invoking this IPC handler. If we land
+  // here in Docker mode anyway — stale renderer, plugin, or future
+  // regression — surface a clear error instead of the misleading
+  // "venv python missing" path below.
+  if (installMode === 'docker') {
+    const error = 'Docker installs upgrade via the backend API, not the Electron IPC path.'
+    send('openpa:backend-upgrade:done', { exitCode: -1, ok: false, error })
+    return { exitCode: -1, ok: false, error }
+  }
+
   // Spawn via the venv interpreter rather than openpa.exe so the pip
   // step inside this subprocess can replace openpa.exe on Windows —
   // see venvPythonPath() comment.

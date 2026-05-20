@@ -156,6 +156,34 @@ function labelForBackendPhase(p: string): string {
   }
 }
 
+// ── Install mode (for transport routing) ─────────────────────────────────
+//
+// Docker installs have no local venv on the host, so the Electron IPC
+// upgrade path (which spawns local Python) can't work. We must route
+// them through the web HTTP POST instead. ``/api/services/tray-capabilities``
+// is the deliberately-public endpoint that exposes ``install_mode`` —
+// same source Electron's main process uses for its own gating. Cached
+// because applyUpdate() consults this on every click.
+
+let cachedInstallMode: string | null | undefined
+async function getInstallMode(): Promise<string | null> {
+  if (cachedInstallMode !== undefined) return cachedInstallMode
+  const settings = useSettingsStore()
+  if (!settings.agentUrl) {
+    cachedInstallMode = null
+    return null
+  }
+  try {
+    const r = await fetch(`${settings.agentUrl}/api/services/tray-capabilities`)
+    if (!r.ok) { cachedInstallMode = null; return null }
+    const body = (await r.json()) as { install_mode?: string | null }
+    cachedInstallMode = body.install_mode ?? null
+  } catch {
+    cachedInstallMode = null
+  }
+  return cachedInstallMode
+}
+
 // ── Web-UI POST /apply + status poll ─────────────────────────────────────
 
 async function applyWebUpgrade(): Promise<void> {
@@ -492,13 +520,21 @@ export function useUpdate() {
       }
     }
 
-    // Backend track: pick whichever transport is available. Electron
-    // IPC is preferred when present because it carries the post-upgrade
-    // backend restart itself; the web-UI POST relies on the supervisor
-    // (Docker / Electron) to relaunch.
-    if (isElectron() && window.openpa?.backendUpgrade) {
+    // Backend track: pick whichever transport is correct for the install.
+    // Native Electron installs prefer IPC because it spawns local Python
+    // and carries the post-upgrade backend restart itself. Docker installs
+    // MUST use the web HTTP POST — there's no venv on the host; the backend
+    // (inside the container) runs the upgrade and Docker's restart policy
+    // brings it back up. Pure-web (non-Electron) users always use HTTP.
+    const installMode = await getInstallMode()
+    const useElectronIpc =
+      isElectron()
+      && !!window.openpa?.backendUpgrade
+      && installMode !== 'docker'
+
+    if (useElectronIpc) {
       try {
-        await window.openpa.backendUpgrade.apply()
+        await window.openpa!.backendUpgrade!.apply()
         // onDone handler reconciles the terminal phase
       } catch (e) {
         setPhase('failed', e instanceof Error ? e.message : String(e))
