@@ -273,6 +273,19 @@ async function continueToSetupWizard() {
     // (``pivotFileWindowsToBackend`` in electron/main.ts) loads — so
     // the user never has to re-enter their token after restart.
     //
+    // We drive this through main (``wizard.pivot()`` →
+    // ``BrowserWindow.loadURL``) rather than the obvious
+    // ``window.location.replace`` — the renderer-side replace was
+    // empirically observed (test52/test53) to be silently dropped on
+    // the FIRST click after the installer finishes: brief spinner
+    // flash, zero requests in DevTools Network, zero requests on the
+    // backend. The second click would then work because… nothing
+    // material differed between the two. The root cause sits somewhere
+    // in Chromium/Electron's renderer-process state right after the
+    // installer subprocess exits; rather than chase it, route the
+    // navigation through main where ``webContents.loadURL`` is a
+    // direct command and can't be silently dropped.
+    //
     // Path B in ``onMounted`` re-runs ``runPostInstallSetupChecks``
     // against the now-healthy backend on the new origin, so we don't
     // need to call it here. ``embeddingStatusStore.connect`` likewise
@@ -282,7 +295,18 @@ async function continueToSetupWizard() {
     // Install stage stays on the asar — only the *setup* stage moves
     // to http. The user has not entered any wizard data at this seam.
     if (window.location.protocol === 'file:') {
-      window.location.replace('http://127.0.0.1:1515/#/setup');
+      const pivotResult = await window.openpa?.wizard?.pivot();
+      if (pivotResult && !pivotResult.ok) {
+        installFailed.value = true;
+        installError.value =
+          pivotResult.error ||
+          'Failed to load the Setup Wizard. Please retry.';
+        currentStage.value = 'installer';
+        currentStep.value = installerSteps.length - 1;
+      }
+      // Whether the IPC succeeded or not, the renderer is either about
+      // to be replaced by the new page (success) or has surfaced an
+      // error (failure). Either way, there's nothing more to do here.
       return;
     }
     embeddingStatusStore.connect(settingsStore.agentUrl);

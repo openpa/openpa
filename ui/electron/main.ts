@@ -588,6 +588,39 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
 
 ipcMain.handle('openpa:server:start', async () => startBackend())
 
+// Pivot the renderer that called this from file:// onto the wheel-served
+// SPA at http://127.0.0.1:1515/#/setup. Driven from main rather than from
+// the renderer (via ``window.location.replace``) because user reports on
+// test52/test53 confirm the renderer-side replace was silently dropped on
+// the first ``Continue to Setup Wizard`` click after install: brief
+// spinner flash, no HTTP requests in DevTools Network, no requests on
+// the backend either. ``webContents.loadURL`` from main is a direct
+// Chromium command that the renderer cannot interfere with, so the first
+// click reliably navigates.
+//
+// We schedule the navigation in setImmediate so the IPC reply lands
+// first — otherwise the renderer is torn down before resolving the
+// invoke promise, which Electron logs as a noisy "object has been
+// destroyed" warning even though the navigation succeeded.
+ipcMain.handle('openpa:wizard:pivot', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (!win || win.isDestroyed()) {
+    return { ok: false, error: 'window destroyed' }
+  }
+  // Be defensive: also persist agentUrl here in case bridge.start wasn't
+  // called (e.g., web-build callers that don't have the server bridge).
+  // updateConfig is sync + idempotent, so the cost is negligible.
+  if (!runtimeConfig.agentUrl) {
+    updateConfig({ agentUrl: 'http://localhost:1112' })
+  }
+  setImmediate(() => {
+    if (!win.isDestroyed()) {
+      void win.loadURL('http://127.0.0.1:1515/#/setup')
+    }
+  })
+  return { ok: true }
+})
+
 // Restart the backend in-process. The Developer page's Restart Server
 // button routes here when running under Electron — without this
 // handler, hitting POST /api/system/restart would kill the backend
