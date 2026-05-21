@@ -486,24 +486,46 @@ async function pivotFileWindowsToBackend(): Promise<void> {
   }
 }
 
+// Persist the default agent URL on disk the moment the backend reports
+// healthy, so the renderer's wizard-pivot navigation doesn't have to
+// touch ``openpa:set-config`` first. That IPC handler fires
+// ``void fetchCapabilities()`` (HTTP + setJumpList/setContextMenu/etc.)
+// as a side-effect, and the resulting main-process work races the
+// file:// → http://127.0.0.1:1515 navigation that immediately follows,
+// intermittently swallowing the first ``Continue to Setup Wizard``
+// click. Going through ``updateConfig`` directly bypasses that handler;
+// fetchCapabilities still fires at boot (installMarkerExists branch)
+// and on any explicit Settings-page agentUrl change. ``updateConfig``
+// is idempotent on disk (atomic temp + rename) so calling this on every
+// startBackend ok-return is cheap.
+function persistAgentUrlIfMissing(): void {
+  if (!runtimeConfig.agentUrl) {
+    updateConfig({ agentUrl: 'http://localhost:1112' })
+  }
+}
+
 async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   // Already responding? Adopt the running instance and skip the spawn.
   // Still wait for the SPA listener — even an "already up" backend may
   // have just bound port 1112 a moment ago with 1515 still binding.
   if (await isBackendHealthy()) {
     const spaOk = await waitForSpaListenerHealthy()
-    return spaOk
-      ? { ok: true }
-      : { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
+    if (!spaOk) {
+      return { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
+    }
+    persistAgentUrlIfMissing()
+    return { ok: true }
   }
   // Already spawned but not healthy yet? Just wait.
   if (backendProcess && backendProcess.exitCode === null) {
     const ok = await waitForBackendHealthy()
     if (!ok) return { ok: false, error: 'backend did not become healthy' }
     const spaOk = await waitForSpaListenerHealthy()
-    return spaOk
-      ? { ok: true }
-      : { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
+    if (!spaOk) {
+      return { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
+    }
+    persistAgentUrlIfMissing()
+    return { ok: true }
   }
 
   // Spawn via the venv interpreter rather than openpa.exe so that
@@ -560,6 +582,7 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   if (!spaOk) {
     return { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
   }
+  persistAgentUrlIfMissing()
   return { ok: true }
 }
 

@@ -242,12 +242,29 @@ async function continueToSetupWizard() {
         return;
       }
     }
-    // Sync the agentUrl now that the backend is up. ``setAgentUrl``
-    // persists through to runtimeConfig (main-process JSON file via
-    // the preload bridge), so the value survives the cross-origin
-    // pivot below.
+    // bridge.start() has already persisted runtimeConfig.agentUrl on
+    // disk (via main's persistAgentUrlIfMissing — see electron/main.ts).
+    // Mirror that value into the local Pinia ref + the preload
+    // bridge.config snapshot so the non-pivot branch below (dev mode at
+    // http://localhost:1515) sees a populated agentUrl. We do this by
+    // direct assignment rather than settingsStore.setAgentUrl, because
+    // setAgentUrl goes through the openpa:set-config IPC handler, which
+    // fires ``void fetchCapabilities()`` as a side-effect (HTTP +
+    // setJumpList/setContextMenu/setDockMenu). On the first click that
+    // side-effect races the file:// → http://127.0.0.1:1515 navigation
+    // below and intermittently swallows it, forcing the user to click
+    // ``Continue to Setup Wizard`` a second time — exactly the
+    // (test52-survived) symptom we were debugging. On the second click
+    // settingsStore.agentUrl was already populated so this block was
+    // skipped, no IPC, no race, navigation landed. Keeping every click
+    // symmetrical eliminates the race entirely. fetchCapabilities still
+    // fires at boot (installMarkerExists branch) and on any explicit
+    // Settings-page agentUrl change.
     if (!settingsStore.agentUrl) {
-      await settingsStore.setAgentUrl('http://localhost:1112');
+      settingsStore.agentUrl = 'http://localhost:1112';
+      if (window.openpa?.config) {
+        window.openpa.config.agentUrl = 'http://localhost:1112';
+      }
     }
     // Pivot off ``file://`` onto the wheel-served SPA origin before
     // the user touches any setup form. The auth token created in
