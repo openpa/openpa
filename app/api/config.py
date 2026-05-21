@@ -1240,6 +1240,59 @@ def get_config_routes(state: BootedState) -> list[Route]:
 
         return JSONResponse({"success": True})
 
+    async def handle_install_secrets(request: Request) -> JSONResponse:
+        """Return Docker-install-time secrets for the post-setup config export.
+
+        Admin-only. Reads ``${OPENPA_WORKING_DIR}/docker/.env`` (written by
+        install.sh/.ps1) and returns the values the Setup Wizard's
+        downloadable config bundle can't otherwise see — VNC password and
+        the Docker-generated Postgres credentials. Returns
+        ``{deployment: "native", available: false}`` when the file is
+        absent (native install path).
+        """
+        denied = require_admin(request)
+        if denied is not None:
+            return denied
+
+        docker_env = Path(BaseConfig.OPENPA_WORKING_DIR) / "docker" / ".env"
+        if not docker_env.exists():
+            return JSONResponse({"deployment": "native", "available": False})
+
+        wanted = {"VNC_PASSWORD", "PG_USER", "PG_PASSWORD", "PG_DATABASE"}
+        found: dict[str, str | None] = {key: None for key in wanted}
+        try:
+            for raw_line in docker_env.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                eq = line.find("=")
+                if eq <= 0:
+                    continue
+                key = line[:eq].strip()
+                if key not in wanted:
+                    continue
+                value = line[eq + 1:].strip()
+                # Strip a single layer of matching quotes if present.
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                # Skip the install template's untouched placeholders.
+                if value.startswith("__") and value.endswith("__"):
+                    continue
+                found[key] = value or None
+        except OSError as e:
+            return JSONResponse(
+                {"error": f"Failed to read docker/.env: {e}"}, status_code=500,
+            )
+
+        return JSONResponse({
+            "deployment": "docker",
+            "available": True,
+            "vnc_password": found["VNC_PASSWORD"],
+            "pg_user": found["PG_USER"],
+            "pg_password": found["PG_PASSWORD"],
+            "pg_database": found["PG_DATABASE"],
+        })
+
     return [
         # Unauthenticated endpoints for setup and recovery
         Route("/api/config/install-catalog", handle_install_catalog, methods=["GET"]),
@@ -1253,6 +1306,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         # Authenticated endpoints
         Route("/api/config/server", handle_get_server_config, methods=["GET"]),
         Route("/api/config/server", handle_update_server_config, methods=["PUT"]),
+        Route("/api/config/install-secrets", handle_install_secrets, methods=["GET"]),
         Route("/api/config/embedding", handle_get_embedding_config, methods=["GET"]),
         Route("/api/config/embedding", handle_put_embedding_config, methods=["PUT"]),
         Route("/api/config/reconfigure", handle_reconfigure, methods=["POST"]),

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ElButton, ElInput, ElAlert } from 'element-plus';
+import { ref } from 'vue';
+import { ElButton, ElAlert, ElSelect, ElOption } from 'element-plus';
 import { Icon } from '@iconify/vue';
 
 defineProps<{
@@ -10,8 +11,10 @@ defineProps<{
 
 const emit = defineEmits<{
   generate: [];
-  copy: [];
+  download: [format: 'md' | 'json' | 'env'];
 }>();
+
+const exportFormat = ref<'md' | 'json' | 'env'>('md');
 </script>
 
 <template>
@@ -38,18 +41,33 @@ const emit = defineEmits<{
     <div v-else class="token-section">
       <ElAlert type="success" :closable="false" show-icon class="token-alert">
         <template #title>Setup Complete!</template>
-        Copy this token. It's also saved at <code>~/.openpa/tokens/{{ profileName }}.token</code> on the server.
+        Download your configuration below. The token inside is also saved at
+        <code>~/.openpa/tokens/{{ profileName }}.token</code> on the server.
       </ElAlert>
 
-      <div class="token-display">
-        <ElInput :model-value="token" type="textarea" :rows="3" readonly class="token-input" />
-        <ElButton type="primary" @click="emit('copy')" class="copy-btn">
-          <Icon icon="mdi:content-copy" /> Copy Token
+      <div class="download-controls">
+        <div class="format-row">
+          <label class="format-label">Format</label>
+          <ElSelect v-model="exportFormat" class="format-select">
+            <ElOption label="Markdown (.md)" value="md" />
+            <ElOption label="JSON (.json)" value="json" />
+            <ElOption label="Env file (.env)" value="env" />
+          </ElSelect>
+        </div>
+        <ElButton
+          type="primary"
+          class="download-btn"
+          @click="emit('download', exportFormat)"
+        >
+          <Icon icon="mdi:download" /> Download configuration
         </ElButton>
       </div>
 
       <div class="info-box">
-        If you lose this token, you can recover it from the server by reading <code>~/.openpa/tokens/{{ profileName }}.token</code>.
+        The export bundles your token, project paths, database and vector-store
+        parameters, embedding settings, channels, and the VNC password when
+        running under Docker. If you lose the token later, recover it from
+        <code>~/.openpa/tokens/{{ profileName }}.token</code> on the server.
       </div>
     </div>
   </div>
@@ -65,9 +83,14 @@ const emit = defineEmits<{
 .info-value { font-family: monospace; font-size: 0.95rem; color: var(--primary-color); font-weight: 600; }
 .token-alert { margin-bottom: 16px; }
 .token-alert code { background: var(--surface-color); padding: 1px 4px; border-radius: 3px; font-size: 0.75rem; }
-.token-display { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
-.token-input :deep(textarea) { font-family: monospace; font-size: 0.8rem; }
-.copy-btn { align-self: flex-start; }
+.download-controls {
+  display: flex; align-items: flex-end; gap: 12px;
+  margin-bottom: 16px; flex-wrap: wrap;
+}
+.format-row { display: flex; flex-direction: column; gap: 4px; }
+.format-label { font-size: 0.825rem; color: var(--text-secondary); }
+.format-select { width: 200px; }
+.download-btn { align-self: flex-end; }
 .info-box {
   padding: 12px 16px; background: var(--hover-bg); border-radius: 8px;
   font-size: 0.825rem; color: var(--text-secondary); line-height: 1.5;

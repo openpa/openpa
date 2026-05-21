@@ -142,6 +142,33 @@ export async function completeSetup(
   return res.json();
 }
 
+export interface InstallSecrets {
+  deployment: 'docker' | 'native';
+  available: boolean;
+  vnc_password?: string | null;
+  pg_user?: string | null;
+  pg_password?: string | null;
+  pg_database?: string | null;
+}
+
+export async function fetchInstallSecrets(
+  agentUrl: string,
+  token: string,
+): Promise<InstallSecrets> {
+  try {
+    const base = resolveBaseUrl(agentUrl);
+    const res = await fetch(`${base}/api/config/install-secrets`, {
+      headers: authHeaders(token),
+    });
+    if (!res.ok) {
+      return { deployment: 'native', available: false };
+    }
+    return await res.json();
+  } catch {
+    return { deployment: 'native', available: false };
+  }
+}
+
 export type EmbeddingStatus =
   | 'disabled'
   | 'initializing'

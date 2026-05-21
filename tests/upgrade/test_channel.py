@@ -550,6 +550,11 @@ def test_pip_install_prod_argv(monkeypatch: pytest.MonkeyPatch) -> None:
         captured["env"] = env
 
     monkeypatch.setattr(runner, "_run", fake_run)
+    # Pin to the pip-branch shape this test asserts; the uv-pip fallback
+    # path is exercised in the dedicated *_uv_argv test below. Without
+    # this, CI runs in a uv-managed venv (no bundled pip) and the
+    # fallback branch produces a different argv.
+    monkeypatch.setattr(runner, "_have_pip", lambda: True)
     from app.config.settings import BaseConfig
 
     monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
@@ -572,6 +577,8 @@ def test_pip_install_test_argv(monkeypatch: pytest.MonkeyPatch) -> None:
         captured["env"] = env
 
     monkeypatch.setattr(runner, "_run", fake_run)
+    # Pin to the pip-branch shape (see prod-argv test for rationale).
+    monkeypatch.setattr(runner, "_have_pip", lambda: True)
     from app.config.settings import BaseConfig
 
     monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
