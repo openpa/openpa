@@ -1091,18 +1091,60 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
         return None
 
     # Resolution order:
-    #   OPENPA_UI_DIR (explicit)  →  app/static/ui/ (wheel-bundled)
+    #   1. Wheel-bundled SPA at app/static/ui/   ← ALWAYS preferred when
+    #                                              present, because that
+    #                                              copy is upgraded in
+    #                                              lockstep with the
+    #                                              running ``openpa serve``
+    #                                              code (both come from
+    #                                              the same wheel via pip).
+    #   2. OPENPA_UI_DIR override                ← fallback when the wheel
+    #                                              has no bundled SPA
+    #                                              (typical dev install
+    #                                              before scripts/build_ui.sh
+    #                                              has run).
+    #
+    # Why this order: under Docker the image used to set
+    # ``OPENPA_UI_DIR=/opt/openpa-ui`` pointing at a SPA copied in during
+    # ``docker build``. That directory is on the image overlay, not a
+    # volume — so the in-app upgrade (which pip-installs a new wheel
+    # into the openpa-venv volume) could never refresh it. Result:
+    # backend was upgraded but the SPA bytes served from port 1515 were
+    # stuck on whatever version the image was built with. Preferring
+    # the wheel-bundled SPA fixes this — the same pip install that
+    # brings the new backend brings the new SPA, and the override
+    # becomes harmless.
     from pathlib import Path
 
+    wheel_ui_dir = Path(__file__).resolve().parent / "static" / "ui"
     override = os.environ.get("OPENPA_UI_DIR")
-    if override:
-        ui_dir = Path(override)
-    else:
-        ui_dir = Path(__file__).resolve().parent / "static" / "ui"
 
-    if not (ui_dir.is_dir() and (ui_dir / "index.html").is_file()):
+    if wheel_ui_dir.is_dir() and (wheel_ui_dir / "index.html").is_file():
+        ui_dir = wheel_ui_dir
+        if override:
+            logger.warning(
+                f"SPA: ignoring OPENPA_UI_DIR={override!r}; the wheel-bundled "
+                f"SPA at {ui_dir} is the source of truth (it upgrades with "
+                "the wheel). To use the override, rm -rf app/static/ui in "
+                "your install first."
+            )
+        else:
+            logger.info(f"SPA: serving wheel-bundled UI at {ui_dir}")
+    elif override:
+        ui_dir = Path(override)
+        if not (ui_dir.is_dir() and (ui_dir / "index.html").is_file()):
+            logger.info(
+                f"SPA not present at OPENPA_UI_DIR={ui_dir}; UI listener disabled "
+                "(run scripts/build_ui.sh or fix the OPENPA_UI_DIR path)."
+            )
+            return None
         logger.info(
-            f"SPA not present at {ui_dir}; UI listener disabled "
+            f"SPA: serving OPENPA_UI_DIR fallback at {ui_dir} "
+            "(no wheel-bundled SPA found — dev install?)"
+        )
+    else:
+        logger.info(
+            f"SPA not present at {wheel_ui_dir}; UI listener disabled "
             "(run scripts/build_ui.sh or set OPENPA_UI_DIR=/path/to/built/ui)."
         )
         return None
@@ -1117,24 +1159,33 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
     # renders correctly. Browsers continue to hit ``/`` and get the web
     # bundle as before.
     #
-    # Resolution order, matching the web-bundle pattern above:
-    #   1. OPENPA_UI_ELECTRON_DIR (explicit override — Dockerfile.desktop
-    #      sets this so the image's Electron-renderer build is used).
-    #   2. Sibling of ui_dir with ``-electron`` appended to the leaf name:
-    #        app/static/ui            → app/static/ui-electron   (wheel)
-    #        /opt/openpa-ui           → /opt/openpa-ui-electron  (Docker)
-    #      Path.with_name keeps the suffix attached to the leaf rather
-    #      than to the parent, so the override-and-wheel cases both
-    #      resolve to a sibling directory regardless of how the user
-    #      named their UI root.
+    # Resolution mirrors the web-bundle logic above: wheel-bundled wins,
+    # OPENPA_UI_ELECTRON_DIR is a fallback for dev installs that don't
+    # have a sibling ``-electron`` directory.
+    wheel_electron_dir = wheel_ui_dir.with_name(wheel_ui_dir.name + "-electron")
     electron_override = os.environ.get("OPENPA_UI_ELECTRON_DIR")
-    if electron_override:
+
+    if wheel_electron_dir.is_dir() and (wheel_electron_dir / "index.html").is_file():
+        ui_electron_dir: Path | None = wheel_electron_dir
+        if electron_override:
+            logger.warning(
+                f"SPA: ignoring OPENPA_UI_ELECTRON_DIR={electron_override!r}; "
+                f"the wheel-bundled Electron-renderer at {ui_electron_dir} is "
+                "the source of truth."
+            )
+    elif electron_override and Path(electron_override).is_dir() and (
+        Path(electron_override) / "index.html"
+    ).is_file():
         ui_electron_dir = Path(electron_override)
+        logger.info(
+            f"SPA: Electron-renderer from OPENPA_UI_ELECTRON_DIR fallback at "
+            f"{ui_electron_dir} (no wheel-bundled electron bundle)."
+        )
     else:
-        ui_electron_dir = ui_dir.with_name(ui_dir.name + "-electron")
+        ui_electron_dir = None
 
     routes: list = []
-    if ui_electron_dir.is_dir() and (ui_electron_dir / "index.html").is_file():
+    if ui_electron_dir is not None:
         routes.append(
             Mount(
                 "/electron-renderer",
@@ -1145,7 +1196,7 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
         logger.info(f"SPA listener: /electron-renderer → {ui_electron_dir}")
     else:
         logger.info(
-            f"Electron-renderer bundle not present at {ui_electron_dir}; "
+            "Electron-renderer bundle not present; "
             "/electron-renderer mount disabled (Electron shell will fall "
             "back to the asar copy)."
         )

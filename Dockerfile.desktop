@@ -217,31 +217,26 @@ ENV PATH="/opt/openpa/venv/bin:${PATH}"
 # ``PLAYWRIGHT_BROWSERS_PATH`` parks the cache inside the working-dir
 # volume so it persists across container recreation.
 
-# ── built SPA from stage 1 ────────────────────────────────────────────────
-COPY --from=spa-builder /build/ui/dist-web/ /opt/openpa-ui/
-COPY --from=spa-builder /build/ui/dist/ /opt/openpa-ui-electron/
-
 # ── entrypoint ────────────────────────────────────────────────────────────
 COPY install/desktop/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # ── runtime defaults ──────────────────────────────────────────────────────
 #
-# ``OPENPA_UI_DIR`` points ``openpa serve`` at the SPA built in stage 1.
-# It overrides the wheel-bundled location, so this image always serves
-# the freshly-built SPA from this Dockerfile rather than whatever (if
-# anything) shipped inside the openpa wheel.
-#
-# ``OPENPA_UI_ELECTRON_DIR`` points the server at the Electron-renderer
-# bundle (built with __IS_ELECTRON__: true). It's served at
-# /electron-renderer/ and is what the Electron shell loads after
-# pivoting away from its asar copy — without this the shell would land
-# on the web bundle and lose the custom titlebar / drag region.
+# The SPA is *not* COPYed into a separate image location. The wheel
+# carries ``app/static/ui/`` and ``app/static/ui-electron/`` as build
+# artifacts (see pyproject.toml [tool.hatch.build.targets.wheel]), pip
+# installs them into ``site-packages``, and the running ``openpa serve``
+# reads from there. That makes the SPA upgrade in lockstep with the
+# backend whenever the in-app updater pip-installs a new wheel — the
+# old image-baked /opt/openpa-ui copy was on the overlay filesystem
+# (not a volume) and reverted to the image's bytes on every container
+# restart, defeating every upgrade. Resolution is handled in
+# ``app/server.py:_build_ui_server`` and prefers the wheel-bundled
+# path unconditionally.
 ENV VNC_PASSWORD=changeme \
     RESOLUTION=1280x720 \
     OPENPA_WORKING_DIR=/root/.openpa \
-    OPENPA_UI_DIR=/opt/openpa-ui \
-    OPENPA_UI_ELECTRON_DIR=/opt/openpa-ui-electron \
     OPENPA_UI_PORT=1515 \
     HOST=0.0.0.0 \
     PORT=1112 \
