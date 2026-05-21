@@ -58,8 +58,28 @@ export async function setAgentUrl(url: string): Promise<void> {
     // ``getApiOrigin``) keeps returning the stale value for the rest
     // of the session, producing ``Invalid base URL`` from the A2A SDK
     // the next time it tries to build a request.
+    //
+    // Wrapped in try/catch because Electron 30's ``contextBridge``
+    // freezes the exposed config object — the assignment throws
+    // ``TypeError: Cannot assign to read only property 'agentUrl'``,
+    // which used to abort the wizard's pivot click handler before it
+    // could call ``window.location.replace`` (the user had to click
+    // ``Continue to Setup Wizard`` twice). Swallowing is safe: the
+    // IPC above already persisted the value to disk, so the next
+    // renderer process (post-pivot, when the SPA loads from
+    // http://127.0.0.1:1515) reads it fresh via preload's
+    // sendSync. The Pinia store ref (set by setAgentUrlAction one
+    // frame earlier) is also already populated, so any in-session
+    // caller routed through ``useSettingsStore()`` sees the new
+    // value too. The only thing that stays stale is the direct
+    // ``getAgentUrl()`` read — which ``a2aClient.getBaseUrl()``
+    // already short-circuits past via its ``fromStore`` check.
     if (window.openpa.config) {
-      window.openpa.config.agentUrl = url
+      try {
+        window.openpa.config.agentUrl = url
+      } catch {
+        /* see comment above */
+      }
     }
   }
   // Web build has no persistent runtime store. The renderer keeps the

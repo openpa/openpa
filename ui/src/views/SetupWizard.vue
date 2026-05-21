@@ -242,29 +242,12 @@ async function continueToSetupWizard() {
         return;
       }
     }
-    // bridge.start() has already persisted runtimeConfig.agentUrl on
-    // disk (via main's persistAgentUrlIfMissing — see electron/main.ts).
-    // Mirror that value into the local Pinia ref + the preload
-    // bridge.config snapshot so the non-pivot branch below (dev mode at
-    // http://localhost:1515) sees a populated agentUrl. We do this by
-    // direct assignment rather than settingsStore.setAgentUrl, because
-    // setAgentUrl goes through the openpa:set-config IPC handler, which
-    // fires ``void fetchCapabilities()`` as a side-effect (HTTP +
-    // setJumpList/setContextMenu/setDockMenu). On the first click that
-    // side-effect races the file:// → http://127.0.0.1:1515 navigation
-    // below and intermittently swallows it, forcing the user to click
-    // ``Continue to Setup Wizard`` a second time — exactly the
-    // (test52-survived) symptom we were debugging. On the second click
-    // settingsStore.agentUrl was already populated so this block was
-    // skipped, no IPC, no race, navigation landed. Keeping every click
-    // symmetrical eliminates the race entirely. fetchCapabilities still
-    // fires at boot (installMarkerExists branch) and on any explicit
-    // Settings-page agentUrl change.
+    // Sync the agentUrl now that the backend is up. ``setAgentUrl``
+    // persists through to runtimeConfig (main-process JSON file via
+    // the preload bridge), so the value survives the cross-origin
+    // pivot below.
     if (!settingsStore.agentUrl) {
-      settingsStore.agentUrl = 'http://localhost:1112';
-      if (window.openpa?.config) {
-        window.openpa.config.agentUrl = 'http://localhost:1112';
-      }
+      await settingsStore.setAgentUrl('http://localhost:1112');
     }
     // Pivot off ``file://`` onto the wheel-served SPA origin before
     // the user touches any setup form. The auth token created in
@@ -272,19 +255,6 @@ async function continueToSetupWizard() {
     // same origin every subsequent launch's pivot
     // (``pivotFileWindowsToBackend`` in electron/main.ts) loads — so
     // the user never has to re-enter their token after restart.
-    //
-    // We drive this through main (``wizard.pivot()`` →
-    // ``BrowserWindow.loadURL``) rather than the obvious
-    // ``window.location.replace`` — the renderer-side replace was
-    // empirically observed (test52/test53) to be silently dropped on
-    // the FIRST click after the installer finishes: brief spinner
-    // flash, zero requests in DevTools Network, zero requests on the
-    // backend. The second click would then work because… nothing
-    // material differed between the two. The root cause sits somewhere
-    // in Chromium/Electron's renderer-process state right after the
-    // installer subprocess exits; rather than chase it, route the
-    // navigation through main where ``webContents.loadURL`` is a
-    // direct command and can't be silently dropped.
     //
     // Path B in ``onMounted`` re-runs ``runPostInstallSetupChecks``
     // against the now-healthy backend on the new origin, so we don't
@@ -295,18 +265,7 @@ async function continueToSetupWizard() {
     // Install stage stays on the asar — only the *setup* stage moves
     // to http. The user has not entered any wizard data at this seam.
     if (window.location.protocol === 'file:') {
-      const pivotResult = await window.openpa?.wizard?.pivot();
-      if (pivotResult && !pivotResult.ok) {
-        installFailed.value = true;
-        installError.value =
-          pivotResult.error ||
-          'Failed to load the Setup Wizard. Please retry.';
-        currentStage.value = 'installer';
-        currentStep.value = installerSteps.length - 1;
-      }
-      // Whether the IPC succeeded or not, the renderer is either about
-      // to be replaced by the new page (success) or has surfaced an
-      // error (failure). Either way, there's nothing more to do here.
+      window.location.replace('http://127.0.0.1:1515/#/setup');
       return;
     }
     embeddingStatusStore.connect(settingsStore.agentUrl);

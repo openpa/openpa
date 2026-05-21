@@ -29,22 +29,7 @@ const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL_
 // consistent with it.
 function openpaSubprocessEnv(): NodeJS.ProcessEnv {
   if (INSTALL_CHANNEL === 'production') return process.env
-  const overrides: Record<string, string> = {
-    OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL,
-  }
-  // Dev channel (``npm run dev``) runs Vite on port 1515 to match the
-  // SPA-origin assumptions the Electron shell hardcodes. The backend's
-  // own SPA listener would otherwise fight Vite for that port — and
-  // ``waitForSpaListenerHealthy()`` would still pass either way, but
-  // whichever bound first would win and the user could end up looking
-  // at a stale wheel SPA with no HMR. Disable the backend listener
-  // explicitly so Vite owns 1515 unambiguously. Mirrors the manual
-  // ``$env:OPENPA_UI_PORT = "0"`` step documented in CONTRIBUTING.md
-  // for the web-dev workflow.
-  if (INSTALL_CHANNEL === 'dev') {
-    overrides.OPENPA_UI_PORT = '0'
-  }
-  return { ...process.env, ...overrides }
+  return { ...process.env, OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL }
 }
 
 // Test installers are prereleases for testers; DevTools is a feature there.
@@ -336,44 +321,6 @@ async function waitForBackendHealthy(timeoutMs = 30000): Promise<boolean> {
   return false
 }
 
-// ``openpa serve`` runs the SPA listener as a sibling asyncio task to the
-// API server (see ``app/server.py:_build_ui_server``), so port 1112's
-// /health going green does NOT mean port 1515 is bound yet. Without this
-// probe, ``startBackend()`` returned the moment 1112 answered and the
-// Setup Wizard's ``window.location.replace('http://127.0.0.1:1515/…')``
-// raced an unbound socket — the first click after install silently
-// failed and the user had to click 2-3× before the SPA listener caught up.
-//
-// We HEAD ``/index.html`` because the web mount at ``/`` is the only one
-// guaranteed to exist (the ``/electron-renderer`` mount is conditional on
-// the wheel shipping a ui-electron build).
-//
-// Assumes ``OPENPA_UI_PORT`` is non-zero — the Electron flow never sets
-// it to 0 (the cross-origin pivot to the wheel SPA depends on this
-// listener). If a future change ever passes ``OPENPA_UI_PORT=0`` via
-// ``openpaSubprocessEnv()``, this wait will need to become conditional.
-function isSpaListenerHealthy(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const url = `${backendSpaUrl()}/index.html`
-    const req = http.request(url, { method: 'HEAD', timeout: 1500 }, (res) => {
-      res.resume()
-      resolve((res.statusCode ?? 0) < 400)
-    })
-    req.on('error', () => resolve(false))
-    req.on('timeout', () => { req.destroy(); resolve(false) })
-    req.end()
-  })
-}
-
-async function waitForSpaListenerHealthy(timeoutMs = 30000): Promise<boolean> {
-  const start = Date.now()
-  while (Date.now() - start < timeoutMs) {
-    if (await isSpaListenerHealthy()) return true
-    await new Promise((r) => setTimeout(r, 500))
-  }
-  return false
-}
-
 // Origin of the backend's bundled SPA. The backend runs TWO listeners
 // (see ``app/server.py:_build_ui_server``):
 //
@@ -486,46 +433,15 @@ async function pivotFileWindowsToBackend(): Promise<void> {
   }
 }
 
-// Persist the default agent URL on disk the moment the backend reports
-// healthy, so the renderer's wizard-pivot navigation doesn't have to
-// touch ``openpa:set-config`` first. That IPC handler fires
-// ``void fetchCapabilities()`` (HTTP + setJumpList/setContextMenu/etc.)
-// as a side-effect, and the resulting main-process work races the
-// file:// → http://127.0.0.1:1515 navigation that immediately follows,
-// intermittently swallowing the first ``Continue to Setup Wizard``
-// click. Going through ``updateConfig`` directly bypasses that handler;
-// fetchCapabilities still fires at boot (installMarkerExists branch)
-// and on any explicit Settings-page agentUrl change. ``updateConfig``
-// is idempotent on disk (atomic temp + rename) so calling this on every
-// startBackend ok-return is cheap.
-function persistAgentUrlIfMissing(): void {
-  if (!runtimeConfig.agentUrl) {
-    updateConfig({ agentUrl: 'http://localhost:1112' })
-  }
-}
-
 async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   // Already responding? Adopt the running instance and skip the spawn.
-  // Still wait for the SPA listener — even an "already up" backend may
-  // have just bound port 1112 a moment ago with 1515 still binding.
   if (await isBackendHealthy()) {
-    const spaOk = await waitForSpaListenerHealthy()
-    if (!spaOk) {
-      return { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
-    }
-    persistAgentUrlIfMissing()
     return { ok: true }
   }
   // Already spawned but not healthy yet? Just wait.
   if (backendProcess && backendProcess.exitCode === null) {
     const ok = await waitForBackendHealthy()
-    if (!ok) return { ok: false, error: 'backend did not become healthy' }
-    const spaOk = await waitForSpaListenerHealthy()
-    if (!spaOk) {
-      return { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
-    }
-    persistAgentUrlIfMissing()
-    return { ok: true }
+    return ok ? { ok: true } : { ok: false, error: 'backend did not become healthy' }
   }
 
   // Spawn via the venv interpreter rather than openpa.exe so that
@@ -578,48 +494,10 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   if (!ok) {
     return { ok: false, error: `backend at ${backendHealthUrl()} did not respond after 30s` }
   }
-  const spaOk = await waitForSpaListenerHealthy()
-  if (!spaOk) {
-    return { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
-  }
-  persistAgentUrlIfMissing()
   return { ok: true }
 }
 
 ipcMain.handle('openpa:server:start', async () => startBackend())
-
-// Pivot the renderer that called this from file:// onto the wheel-served
-// SPA at http://127.0.0.1:1515/#/setup. Driven from main rather than from
-// the renderer (via ``window.location.replace``) because user reports on
-// test52/test53 confirm the renderer-side replace was silently dropped on
-// the first ``Continue to Setup Wizard`` click after install: brief
-// spinner flash, no HTTP requests in DevTools Network, no requests on
-// the backend either. ``webContents.loadURL`` from main is a direct
-// Chromium command that the renderer cannot interfere with, so the first
-// click reliably navigates.
-//
-// We schedule the navigation in setImmediate so the IPC reply lands
-// first — otherwise the renderer is torn down before resolving the
-// invoke promise, which Electron logs as a noisy "object has been
-// destroyed" warning even though the navigation succeeded.
-ipcMain.handle('openpa:wizard:pivot', (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender)
-  if (!win || win.isDestroyed()) {
-    return { ok: false, error: 'window destroyed' }
-  }
-  // Be defensive: also persist agentUrl here in case bridge.start wasn't
-  // called (e.g., web-build callers that don't have the server bridge).
-  // updateConfig is sync + idempotent, so the cost is negligible.
-  if (!runtimeConfig.agentUrl) {
-    updateConfig({ agentUrl: 'http://localhost:1112' })
-  }
-  setImmediate(() => {
-    if (!win.isDestroyed()) {
-      void win.loadURL('http://127.0.0.1:1515/#/setup')
-    }
-  })
-  return { ok: true }
-})
 
 // Restart the backend in-process. The Developer page's Restart Server
 // button routes here when running under Electron — without this

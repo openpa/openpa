@@ -77,18 +77,6 @@ contextBridge.exposeInMainWorld('openpa', {
       ipcRenderer.invoke('openpa:server:restart'),
   },
 
-  // First-run wizard pivot. Drives the file:// → http://127.0.0.1:1515
-  // navigation from the main process so the renderer's
-  // ``window.location.replace`` can't be silently dropped (user reports
-  // on test52/test53 showed the renderer-side replace failing on the
-  // first click after install — brief spinner flash, zero HTTP, no
-  // navigation). ``webContents.loadURL`` from main bypasses whatever was
-  // interfering.
-  wizard: {
-    pivot: (): Promise<{ ok: boolean; error?: string }> =>
-      ipcRenderer.invoke('openpa:wizard:pivot'),
-  },
-
   // Backend upgrade bridge — runs ``openpa upgrade --yes`` as a child
   // process under main, streaming progress back so the renderer can
   // show a live log modal without sending the user to a terminal.

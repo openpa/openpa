@@ -762,7 +762,7 @@ if ($Mode -eq 'docker') {
         }
     }
 
-    # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:1515)
+    # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
     # and other ad-hoc dev origins can hit the API without preflight
     # failures. Production and test installs keep the locked-down list.
     if ($Channel -eq 'dev') {
@@ -1321,7 +1321,7 @@ switch ($Channel) {
             Add-Content -Path $EnvFile -Value "`nOPENPA_UPGRADE_CHANNEL=dev" -Encoding utf8
         }
         # Replace the static template's locked-down CORS list with ``*``
-        # so ``npm run dev`` (Vite at localhost:1515) and other ad-hoc dev
+        # so ``npm run dev`` (Vite at localhost:5173) and other ad-hoc dev
         # origins work without preflight failures. Idempotent: skip if
         # already wildcarded so re-runs don't churn the file. ``-Encoding
         # utf8`` is critical on both read and write — Windows PowerShell

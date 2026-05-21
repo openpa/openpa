@@ -100,15 +100,6 @@ type OpenPAServerBridge = {
   restart: () => Promise<{ ok: boolean; error?: string }>
 }
 
-// First-run wizard bridge. ``pivot`` asks main to navigate the calling
-// BrowserWindow from file:// onto the wheel-served SPA at
-// http://127.0.0.1:1515/#/setup. Driven from main instead of the
-// renderer's ``window.location.replace`` because the latter was
-// observed to be silently dropped on the first click after install.
-type OpenPAWizardBridge = {
-  pivot: () => Promise<{ ok: boolean; error?: string }>
-}
-
 // In-app ``openpa upgrade`` flow. ``apply`` spawns the CLI under the
 // main process; ``onLog`` streams every line it prints; ``onStatus``
 // emits coarse phase transitions; ``onDone`` carries the terminal
@@ -142,7 +133,6 @@ type OpenPABridge = {
   ) => Promise<OpenPABridge['config']>
   installer: OpenPAInstallerBridge
   server: OpenPAServerBridge
-  wizard: OpenPAWizardBridge
   updater: OpenPAUpdaterBridge
   backendUpgrade: OpenPABackendUpgradeBridge
 }
