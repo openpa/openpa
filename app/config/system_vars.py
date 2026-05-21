@@ -65,7 +65,12 @@ SYSTEM_VARS: list[SystemVarSpec] = [
     SystemVarSpec(
         name="OPENPA_SYSTEM_DIR",
         resolve=lambda _profile: BaseConfig.OPENPA_SYSTEM_DIR,
-        description="OpenPA System Directory (install + runtime artifacts root).",
+        description="OpenPA System Directory (~/.openpa) — runtime state + user content root.",
+    ),
+    SystemVarSpec(
+        name="OPENPA_INSTALL_DIR",
+        resolve=lambda _profile: BaseConfig.OPENPA_INSTALL_DIR,
+        description="OpenPA Install Directory — install-time scratch (compose bundle, install.log, caches).",
     ),
     SystemVarSpec(
         name="OPENPA_USER_WORKING_DIR",

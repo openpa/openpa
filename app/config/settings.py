@@ -72,7 +72,21 @@ DEFAULT_USER_WORKING_DIR = os.path.join(os.path.expanduser("~"), ".openpa")
 
 
 def _default_system_dir() -> str:
-    """Platform-conventional default for the OpenPA System Directory.
+    """Default for the OpenPA System Directory.
+
+    ``~/.openpa`` on every platform — the OpenPA "home" where runtime
+    state and user content live. Power users can relocate via the
+    ``OPENPA_SYSTEM_DIR`` env var.
+    """
+    return os.path.join(os.path.expanduser("~"), ".openpa")
+
+
+def _default_install_dir() -> str:
+    """Platform-conventional default for the OpenPA Install Directory.
+
+    Install scratch only — install.log, docker compose bundle, install
+    PID, pip/uv caches, downloaded Python. Kept separate from the
+    System Directory so install artifacts never pollute ``~/.openpa``.
 
     Linux:   ``$XDG_DATA_HOME/openpa`` (falls back to ``~/.local/share/openpa``)
     macOS:   ``~/Library/Application Support/OpenPA``
@@ -90,16 +104,33 @@ def _default_system_dir() -> str:
 
 
 def get_system_directory() -> str:
-    """Resolve the OpenPA System Directory — install + runtime artifacts root.
+    """Resolve the OpenPA System Directory — runtime state + user content root.
 
-    Holds: ``.env``, ``bootstrap.toml``, ``storage/openpa.db``, ``venv/``,
-    ``bin/``, ``docker/``, ``tokens/``, install/server/upgrade logs and PID
-    files, ``pip-cache/``, per-profile state (``<profile>/PERSONA.md``,
-    ``<profile>/skills/``, ``<profile>/browser-profile/``, ...).
+    Holds: ``.env``, ``bootstrap.toml``, ``storage/openpa.db``,
+    ``tokens/``, Native-mode ``venv/`` and ``bin/``, per-profile state
+    (``<profile>/PERSONA.md``, ``<profile>/skills/``,
+    ``<profile>/browser-profile/``, …), ``server.log``, upgrade
+    artifacts, ``backups/``.
 
-    Override via ``OPENPA_SYSTEM_DIR`` env var; otherwise platform default.
+    Override via ``OPENPA_SYSTEM_DIR`` env var; otherwise ``~/.openpa``.
     """
     raw = os.environ.get("OPENPA_SYSTEM_DIR") or _default_system_dir()
+    if raw.startswith("~"):
+        raw = os.path.expanduser(raw)
+    return os.path.normpath(raw)
+
+
+def get_install_directory() -> str:
+    """Resolve the OpenPA Install Directory — install-time scratch only.
+
+    Holds: ``install.log``, ``install.pid``, ``docker/`` (compose
+    bundle), ``pip-cache/``, ``uv-cache/``, ``python/``. Nothing the
+    user is expected to look at directly — everything here is regenerated
+    by the install script (or is a transient cache).
+
+    Override via ``OPENPA_INSTALL_DIR`` env var; otherwise platform default.
+    """
+    raw = os.environ.get("OPENPA_INSTALL_DIR") or _default_install_dir()
     if raw.startswith("~"):
         raw = os.path.expanduser(raw)
     return os.path.normpath(raw)
@@ -157,6 +188,7 @@ class BaseConfig:
     SESSION_TOKEN_DEFAULT_TTL = int(_dynaconf_get("general.session_token_default_ttl", 3600))
     MCP_TOOL_CALL_TIMEOUT = int(_dynaconf_get("general.mcp_tool_call_timeout", 300))
     OPENPA_SYSTEM_DIR = get_system_directory()
+    OPENPA_INSTALL_DIR = get_install_directory()
 
     SQLITE_DB_PATH = os.path.join(
         OPENPA_SYSTEM_DIR, "storage",

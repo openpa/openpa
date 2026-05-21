@@ -512,13 +512,13 @@ def _pip_install(
         installer = "uv pip"
 
     env = os.environ.copy()
-    # Scope cache to the working dir for both channels — same reason
+    # Scope cache to the Install Dir for both channels — same reason
     # the installers do (avoid a stale ~/.cache/pip pinning an old
     # wheel after a reinstall). ``UV_CACHE_DIR`` covers the uv fallback;
     # uv ignores ``PIP_CACHE_DIR`` so we set both to be explicit.
     from app.config.settings import BaseConfig
 
-    cache_dir = str(Path(BaseConfig.OPENPA_SYSTEM_DIR) / "pip-cache")
+    cache_dir = str(Path(BaseConfig.OPENPA_INSTALL_DIR) / "pip-cache")
     env["PIP_CACHE_DIR"] = cache_dir
     env["UV_CACHE_DIR"] = cache_dir
 

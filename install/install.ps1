@@ -100,11 +100,38 @@ param(
     [switch] $ModifyPath,
     [switch] $NoModifyPath,
     [string] $Version = '',
-    [string] $ElectronVersion = ''
+    [string] $ElectronVersion = '',
+    # Uninstall switch: when set, this script delegates to install\uninstall.ps1
+    # and exits. -Keep / -Purge are forwarded along; omit both for interactive.
+    [switch] $Uninstall,
+    [switch] $Keep,
+    [switch] $Purge
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# ── -Uninstall short-circuit ──────────────────────────────────────────────
+# Delegate to the sibling uninstall.ps1 and exit. Resolves relative to
+# this script so iwr|iex installs (where uninstall.ps1 isn't on disk)
+# fail with a clear error.
+if ($Uninstall) {
+    if (-not $PSCommandPath) {
+        Write-Host "ERR -Uninstall requires install.ps1 to be on disk (not piped via iwr|iex)." -ForegroundColor Red
+        Write-Host "    Download install.ps1 + uninstall.ps1 alongside each other and re-run." -ForegroundColor Red
+        exit 2
+    }
+    $uninstallScript = Join-Path (Split-Path -Parent $PSCommandPath) 'uninstall.ps1'
+    if (-not (Test-Path -LiteralPath $uninstallScript)) {
+        Write-Host "ERR -Uninstall requires uninstall.ps1 next to install.ps1, but $uninstallScript is missing." -ForegroundColor Red
+        exit 2
+    }
+    $uninstallArgs = @()
+    if ($Purge) { $uninstallArgs += '-Purge' }
+    elseif ($Keep) { $uninstallArgs += '-Keep' }
+    & $uninstallScript @uninstallArgs
+    exit $LASTEXITCODE
+}
 
 # Channel is validated by the param()'s ValidateSet attribute; reaching
 # this point implies $Channel is one of production / test / dev.
@@ -236,40 +263,55 @@ if ($Unattended -and -not $AutoInstallPython -and -not $NoAutoInstallPython) {
 
 # ── paths ─────────────────────────────────────────────────────────────────
 
-# OpenPA System Directory — install + runtime artifacts root. Defaults to
-# %LOCALAPPDATA%\OpenPA so install artifacts never collide with whatever
-# the user picks as their User Working Directory (the agent's CWD).
-# Override via $env:OPENPA_SYSTEM_DIR so power users can install side-by-side
-# (e.g., a staging copy at %TEMP%\openpa-staging).
+# OpenPA System Directory — runtime state + user content root. Defaults to
+# %USERPROFILE%\.openpa (the conventional ~/.openpa on Windows) so the
+# layout users see hasn't changed since v0.1.9-test55. Override via
+# $env:OPENPA_SYSTEM_DIR so power users can install side-by-side.
 $OpenpaSystemDir = if ($env:OPENPA_SYSTEM_DIR) {
     $env:OPENPA_SYSTEM_DIR
 } else {
+    Join-Path $env:USERPROFILE '.openpa'
+}
+$DefaultOpenpaSystemDir = Join-Path $env:USERPROFILE '.openpa'
+
+# OpenPA Install Directory — install-time scratch (install.log, install.pid,
+# docker compose bundle, pip/uv caches, downloaded Python). Defaults to
+# %LOCALAPPDATA%\OpenPA so install artifacts never pollute ~/.openpa.
+$OpenpaInstallDir = if ($env:OPENPA_INSTALL_DIR) {
+    $env:OPENPA_INSTALL_DIR
+} else {
     Join-Path $env:LOCALAPPDATA 'OpenPA'
 }
+
+# Paths in the System Dir (preserved across uninstall -Keep)
 $VenvDir       = Join-Path $OpenpaSystemDir 'venv'
 $EnvFile       = Join-Path $OpenpaSystemDir '.env'
 $BootstrapFile = Join-Path $OpenpaSystemDir 'bootstrap.toml'
-$LogFile       = Join-Path $OpenpaSystemDir 'install.log'
-$PidFile       = Join-Path $OpenpaSystemDir 'install.pid'
 $ServerLogFile = Join-Path $OpenpaSystemDir 'server.log'
 $BinDir        = Join-Path $OpenpaSystemDir 'bin'
 $UvExe         = Join-Path $BinDir 'uv.exe'
 
-# Scope pip's cache under our install dir so `Remove-Item -Recurse $OpenpaSystemDir`
-# (or -Reinstall) wipes any stale index responses. Without this, pip uses
-# %LOCALAPPDATA%\pip\Cache, which persists across reinstalls.
-$env:PIP_CACHE_DIR = Join-Path $OpenpaSystemDir 'pip-cache'
+# Paths in the Install Dir (scratch — safely deletable on uninstall -Keep)
+$LogFile       = Join-Path $OpenpaInstallDir 'install.log'
+$PidFile       = Join-Path $OpenpaInstallDir 'install.pid'
 
-if (-not (Test-Path $OpenpaSystemDir)) { New-Item -ItemType Directory -Path $OpenpaSystemDir | Out-Null }
+# Scope pip's cache under the Install Dir so a wipe of the System Dir
+# (or -Reinstall) doesn't lose it, and a wipe of the Install Dir clears
+# stale index responses. Without this, pip uses %LOCALAPPDATA%\pip\Cache,
+# which persists across reinstalls.
+$env:PIP_CACHE_DIR = Join-Path $OpenpaInstallDir 'pip-cache'
 
-# Forward to the Python backend so its settings layer agrees with this
-# script on the System Dir location (subprocess inherits this).
-$env:OPENPA_SYSTEM_DIR = $OpenpaSystemDir
+if (-not (Test-Path $OpenpaSystemDir))  { New-Item -ItemType Directory -Path $OpenpaSystemDir  | Out-Null }
+if (-not (Test-Path $OpenpaInstallDir)) { New-Item -ItemType Directory -Path $OpenpaInstallDir | Out-Null }
 
-# Default ModifyPath: only modify User PATH for the canonical install dir
+# Forward both to the Python backend so its settings layer agrees with this
+# script on path resolution (subprocess inherits these).
+$env:OPENPA_SYSTEM_DIR  = $OpenpaSystemDir
+$env:OPENPA_INSTALL_DIR = $OpenpaInstallDir
+
+# Default ModifyPath: only modify User PATH for the canonical System Dir,
 # so a staging/test install at a custom OPENPA_SYSTEM_DIR doesn't clobber
 # the prod PATH entry. -ModifyPath / -NoModifyPath override.
-$DefaultOpenpaSystemDir = Join-Path $env:LOCALAPPDATA 'OpenPA'
 if (-not $ModifyPath -and -not $NoModifyPath) {
     if ($OpenpaSystemDir -ieq $DefaultOpenpaSystemDir) {
         $ModifyPath = $true
@@ -324,7 +366,7 @@ if ($Channel -eq 'dev') {
     } else {
         'https://raw.githubusercontent.com/openpa/openpa/main/install'
     }
-    $CatalogTmp = Join-Path $OpenpaSystemDir '_catalog.ps1'
+    $CatalogTmp = Join-Path $OpenpaInstallDir '_catalog.ps1'
     try {
         Invoke-WebRequest -UseBasicParsing -Uri "$CatalogBase/_catalog.ps1" -OutFile $CatalogTmp
     } catch {
@@ -732,7 +774,7 @@ function Resolve-OpenPAVersion {
 if ($Mode -eq 'docker') {
     Write-Step "Docker install"
 
-    $DockerDir = Join-Path $OpenpaSystemDir 'docker'
+    $DockerDir = Join-Path $OpenpaInstallDir 'docker'
     if (-not (Test-Path $DockerDir)) { New-Item -ItemType Directory -Path $DockerDir | Out-Null }
 
     $ComposeFile = Join-Path $DockerDir 'docker-compose.yml'
@@ -783,7 +825,14 @@ if ($Mode -eq 'docker') {
     }
 
     Write-Info "Fetching docker-compose template"
-    Get-TemplateContent 'docker-compose.yml.tmpl' | Set-Content -Path $ComposeFile -Encoding utf8
+    # Render __OPENPA_SYSTEM_DIR__ -> the absolute host path so the openpa
+    # service bind-mounts ~/.openpa (or the OPENPA_SYSTEM_DIR override)
+    # into the container at /root/.openpa. Forward slashes so Docker
+    # Desktop accepts the path on Windows.
+    $SystemDirCompose = $OpenpaSystemDir -replace '\\', '/'
+    $composeRendered = (Get-TemplateContent 'docker-compose.yml.tmpl') `
+        -replace '__OPENPA_SYSTEM_DIR__', $SystemDirCompose
+    $composeRendered | Set-Content -Path $ComposeFile -Encoding utf8
 
     Write-Info "Writing $EnvDocker (secrets, do not commit)"
     $rendered = (Get-TemplateContent 'docker.env.tmpl') `
@@ -1043,8 +1092,8 @@ function Install-UvLocally {
 # return its absolute path via $script:Python. The cache and install dir
 # are scoped to OpenpaSystemDir so removing the dir cleans everything.
 function Install-PythonViaUv {
-    $env:UV_PYTHON_INSTALL_DIR = Join-Path $OpenpaSystemDir 'python'
-    $env:UV_CACHE_DIR          = Join-Path $OpenpaSystemDir 'uv-cache'
+    $env:UV_PYTHON_INSTALL_DIR = Join-Path $OpenpaInstallDir 'python'
+    $env:UV_CACHE_DIR          = Join-Path $OpenpaInstallDir 'uv-cache'
     Write-Info "Downloading isolated Python 3.13 (this may take a minute)"
     Invoke-NativeLogged { & $UvExe python install 3.13 }
     if ($LASTEXITCODE -ne 0) {

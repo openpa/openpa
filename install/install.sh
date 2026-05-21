@@ -106,6 +106,10 @@ MODE=""           # docker | native (default: prompt if Docker available)
 NO_LAUNCH=0
 UNATTENDED=0
 REINSTALL=0
+# Uninstall switch: when set, this script delegates to install/uninstall.sh
+# and exits. The keep/purge flag (if any) is forwarded along.
+UNINSTALL=0
+UNINSTALL_FLAG=""        # --keep | --purge | empty (interactive)
 AUTO_INSTALL_PYTHON=""   # "" = ask interactively; "1" = yes; "0" = no
 MODIFY_PATH=""           # "" = auto (1 for canonical home, 0 otherwise); 0/1 explicit
 # Explicit openpa version to install. Empty = resolve channel default
@@ -157,6 +161,9 @@ while [ $# -gt 0 ]; do
         --version=*)              VERSION_SPEC="${1#*=}"; shift ;;
         --electron-version)       ELECTRON_VERSION="$2"; shift 2 ;;
         --electron-version=*)     ELECTRON_VERSION="${1#*=}"; shift ;;
+        --uninstall)              UNINSTALL=1; shift ;;
+        --keep)                   UNINSTALL_FLAG="--keep"; shift ;;
+        --purge)                  UNINSTALL_FLAG="--purge"; shift ;;
         --help|-h)
             sed -n '1,/^set -e/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^set -e/d'
             exit 0
@@ -167,6 +174,26 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# ── --uninstall short-circuit ─────────────────────────────────────────────
+# When --uninstall is passed, delegate to the sibling uninstall.sh and exit.
+# We resolve the script next to ourselves so a curl|bash one-liner that
+# has only downloaded install.sh would get a clear error rather than a
+# silent no-op.
+if [ "$UNINSTALL" -eq 1 ]; then
+    _self_dir="$(cd "$(dirname "$0")" && pwd 2>/dev/null || echo "")"
+    _uninstall_script="$_self_dir/uninstall.sh"
+    if [ ! -f "$_uninstall_script" ]; then
+        echo "ERROR: --uninstall requires uninstall.sh next to install.sh, but $_uninstall_script is missing." >&2
+        echo "Download the uninstall script alongside install.sh and re-run." >&2
+        exit 2
+    fi
+    if [ -n "$UNINSTALL_FLAG" ]; then
+        exec bash "$_uninstall_script" "$UNINSTALL_FLAG"
+    else
+        exec bash "$_uninstall_script"
+    fi
+fi
 
 # ``container`` was a separate deployment in earlier installs; it's now a
 # narrow case of ``custom`` (listen on 0.0.0.0, URLs at localhost). Accept
@@ -280,31 +307,34 @@ fi
 
 # ── paths ─────────────────────────────────────────────────────────────────
 
-# OpenPA System Directory — install + runtime artifacts root. Platform-
-# conventional default: ~/.local/share/openpa on Linux, ~/Library/Application
-# Support/OpenPA on macOS. Override via OPENPA_SYSTEM_DIR so power users can
-# install side-by-side (e.g., a staging copy at /tmp/openpa-staging).
-if [ -z "$OPENPA_SYSTEM_DIR" ]; then
+# OpenPA System Directory — runtime state + user content root. Defaults to
+# ~/.openpa so the layout users see hasn't changed since v0.1.9-test55.
+# Override via OPENPA_SYSTEM_DIR so power users can install side-by-side
+# (e.g., a staging copy at ~/.openpa-staging).
+OPENPA_SYSTEM_DIR="${OPENPA_SYSTEM_DIR:-$HOME/.openpa}"
+_DEFAULT_OPENPA_SYSTEM_DIR="$HOME/.openpa"
+
+# OpenPA Install Directory — install-time scratch (install.log, install.pid,
+# docker compose bundle, pip/uv caches, downloaded Python). Platform-
+# conventional default so install artifacts never pollute ~/.openpa.
+if [ -z "$OPENPA_INSTALL_DIR" ]; then
     case "$(uname -s)" in
-        Darwin) OPENPA_SYSTEM_DIR="$HOME/Library/Application Support/OpenPA" ;;
-        *)      OPENPA_SYSTEM_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openpa" ;;
+        Darwin) OPENPA_INSTALL_DIR="$HOME/Library/Application Support/OpenPA" ;;
+        *)      OPENPA_INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openpa" ;;
     esac
 fi
+
+# Paths in the System Dir (preserved across uninstall --keep)
 VENV_DIR="$OPENPA_SYSTEM_DIR/venv"
 ENV_FILE="$OPENPA_SYSTEM_DIR/.env"
 BOOTSTRAP_FILE="$OPENPA_SYSTEM_DIR/bootstrap.toml"
-LOG_FILE="$OPENPA_SYSTEM_DIR/install.log"
 BIN_DIR="$OPENPA_SYSTEM_DIR/bin"
 UV_BIN="$BIN_DIR/uv"
 
-# Resolve the canonical platform default so MODIFY_PATH only fires for it
-# (staging installs at custom OPENPA_SYSTEM_DIR don't clobber the prod PATH).
-case "$(uname -s)" in
-    Darwin) _DEFAULT_OPENPA_SYSTEM_DIR="$HOME/Library/Application Support/OpenPA" ;;
-    *)      _DEFAULT_OPENPA_SYSTEM_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openpa" ;;
-esac
+# Paths in the Install Dir (scratch — safely deletable on uninstall --keep)
+LOG_FILE="$OPENPA_INSTALL_DIR/install.log"
 
-# Default MODIFY_PATH: only modify shell rc for the canonical install dir,
+# Default MODIFY_PATH: only modify shell rc for the canonical System Dir,
 # so a staging/test install at a custom OPENPA_SYSTEM_DIR doesn't clobber
 # the prod PATH entry. --modify-path / --no-modify-path override.
 if [ -z "$MODIFY_PATH" ]; then
@@ -315,18 +345,18 @@ if [ -z "$MODIFY_PATH" ]; then
     fi
 fi
 
-# Scope pip's HTTP + wheel cache under our install dir so a user-driven
-# wipe of the System Dir (or --reinstall) can't leave behind a stale index
-# response that makes pip pin an old version. Without this, pip uses
-# ~/.cache/pip/, which persists across openpa reinstalls and has bitten
-# us when re-resolving the latest pre-release.
-export PIP_CACHE_DIR="$OPENPA_SYSTEM_DIR/pip-cache"
+# Scope pip's HTTP + wheel cache under the Install Dir so a user-driven
+# wipe of the System Dir (or --reinstall) doesn't lose the cache, and a
+# wipe of the Install Dir clears stale index responses cleanly. Without
+# this, pip uses ~/.cache/pip/, which persists across openpa reinstalls
+# and has bitten us when re-resolving the latest pre-release.
+export PIP_CACHE_DIR="$OPENPA_INSTALL_DIR/pip-cache"
 
-mkdir -p "$OPENPA_SYSTEM_DIR"
+mkdir -p "$OPENPA_SYSTEM_DIR" "$OPENPA_INSTALL_DIR"
 
-# Forward to the Python backend so its settings layer agrees with the
-# install script on the System Dir location (subprocess inherits this).
-export OPENPA_SYSTEM_DIR
+# Forward both to the Python backend so its settings layer agrees with the
+# install script on path resolution (subprocess inherits these).
+export OPENPA_SYSTEM_DIR OPENPA_INSTALL_DIR
 
 # Templates are fetched at install time so we don't need to ship them
 # alongside the script. Production/test fetch from GitHub; dev reads from
@@ -357,7 +387,7 @@ if [ "$CHANNEL" = "dev" ]; then
     . "$CATALOG_BASE/_catalog.sh"
 else
     CATALOG_BASE="${OPENPA_CATALOG_BASE:-https://raw.githubusercontent.com/openpa/openpa/main/install}"
-    CATALOG_TMP="$(mktemp 2>/dev/null || echo "$OPENPA_SYSTEM_DIR/_catalog.sh")"
+    CATALOG_TMP="$(mktemp 2>/dev/null || echo "$OPENPA_INSTALL_DIR/_catalog.sh")"
     if ! curl -fsSL "$CATALOG_BASE/_catalog.sh" -o "$CATALOG_TMP"; then
         err "Failed to fetch install catalog from $CATALOG_BASE/_catalog.sh"
         exit 1
@@ -789,7 +819,7 @@ resolve_version() {
 if [ "$MODE" = "docker" ]; then
     step "Docker install"
 
-    DOCKER_DIR="$OPENPA_SYSTEM_DIR/docker"
+    DOCKER_DIR="$OPENPA_INSTALL_DIR/docker"
     mkdir -p "$DOCKER_DIR"
 
     # Sidecar services (postgres / qdrant / chroma) are no longer
@@ -837,7 +867,13 @@ if [ "$MODE" = "docker" ]; then
     fi
 
     info "Fetching docker-compose template"
-    fetch_template "docker-compose.yml.tmpl" > "$DOCKER_DIR/docker-compose.yml"
+    # Render __OPENPA_SYSTEM_DIR__ -> the absolute host path so the openpa
+    # service bind-mounts ~/.openpa (or the OPENPA_SYSTEM_DIR override) into
+    # the container at /root/.openpa. Lets host see runtime state (storage/,
+    # tokens/, profile dirs) regardless of install mode.
+    fetch_template "docker-compose.yml.tmpl" \
+        | sed -e "s|__OPENPA_SYSTEM_DIR__|$OPENPA_SYSTEM_DIR|g" \
+        > "$DOCKER_DIR/docker-compose.yml"
 
     info "Writing $DOCKER_DIR/.env (secrets, do not commit)"
     fetch_template "docker.env.tmpl" \
@@ -1029,7 +1065,7 @@ prompt_for_python_install() {
     cat <<EOF
 
 OpenPA can install an isolated Python 3.13 just for itself
-(~70 MB downloaded into $OPENPA_SYSTEM_DIR/python, no admin needed; system
+(~70 MB downloaded into $OPENPA_INSTALL_DIR/python, no admin needed; system
 Python is left untouched).
 
 EOF
@@ -1078,12 +1114,13 @@ EOF
     ok "Installed uv at $UV_BIN"
 }
 
-# Use uv to download an isolated Python 3.13 into $OPENPA_SYSTEM_DIR/python and
-# return its absolute path via $PYTHON. The cache and install dir are
-# scoped to OPENPA_SYSTEM_DIR so a System Dir wipe removes everything.
+# Use uv to download an isolated Python 3.13 into $OPENPA_INSTALL_DIR/python
+# and return its absolute path via $PYTHON. The cache and install dir are
+# scoped to OPENPA_INSTALL_DIR so an Install Dir wipe removes everything
+# (the interpreter is install-time scratch, not part of the user's data).
 install_python_via_uv() {
-    export UV_PYTHON_INSTALL_DIR="$OPENPA_SYSTEM_DIR/python"
-    export UV_CACHE_DIR="$OPENPA_SYSTEM_DIR/uv-cache"
+    export UV_PYTHON_INSTALL_DIR="$OPENPA_INSTALL_DIR/python"
+    export UV_CACHE_DIR="$OPENPA_INSTALL_DIR/uv-cache"
     info "Downloading isolated Python 3.13 (this may take a minute)"
     if ! "$UV_BIN" python install 3.13 >>"$LOG_FILE" 2>&1; then
         err "uv failed to install Python 3.13 — see $LOG_FILE."
@@ -1460,13 +1497,13 @@ fi
 # the app spawns the backend itself once the user clicks "Continue to
 # Setup Wizard", and that's also the point at which the SQLite DB is
 # created (via the backend's own initialize() call).
-SERVER_PID_FILE="$OPENPA_SYSTEM_DIR/install.pid"
+SERVER_PID_FILE="$OPENPA_INSTALL_DIR/install.pid"
 if [ "${OPENPA_INSTALLER_FRONTEND:-}" != "electron" ]; then
     step "Starting OpenPA"
 
     # We start the server in the background so the wizard URL works as
     # soon as we open the browser. The PID is recorded so the user can
-    # stop it with `kill $(cat $OPENPA_SYSTEM_DIR/install.pid)`. Future Phase:
+    # stop it with `kill $(cat $OPENPA_INSTALL_DIR/install.pid)`. Future Phase:
     # install a real service unit (systemd / launchd) so it survives
     # logout.
 

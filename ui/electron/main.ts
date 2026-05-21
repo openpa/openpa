@@ -12,22 +12,32 @@ type AutoUpdaterModule = typeof import('electron-updater')
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // On Windows, Electron's app.getPath('userData') resolves to %APPDATA%\OpenPA
-// by default, but the install script writes to %LOCALAPPDATA%\OpenPA. Override
-// before any other getPath() call so both surfaces converge on the same dir
-// (and we don't have to maintain two locations).
+// by default. We point it at %LOCALAPPDATA%\OpenPA — same dir the install
+// script uses as the Install Dir — so Electron-owned scratch (openpa-config.json,
+// downloaded installer scripts) sits next to install artifacts.
 if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
   app.setPath('userData', path.join(process.env.LOCALAPPDATA, 'OpenPA'))
 }
 
-// OpenPA System Directory — install + runtime artifacts root. Must match the
-// default resolved by install.sh / install.ps1 / app/config/settings.py so all
-// three surfaces agree on where .env, storage/, venv/, etc. live.
+// OpenPA System Directory — runtime state + user content root.
+// Defaults to ~/.openpa on every platform, matching the install scripts.
+// Holds: .env, bootstrap.toml, storage/, tokens/, venv/, bin/, per-profile
+// dirs (PERSONA, skills, documents, browser-profile), server.log, upgrade
+// artifacts, backups/. Override via $OPENPA_SYSTEM_DIR for staging.
+function systemDirPath(): string {
+  if (process.env.OPENPA_SYSTEM_DIR) return process.env.OPENPA_SYSTEM_DIR
+  return path.join(app.getPath('home'), '.openpa')
+}
+
+// OpenPA Install Directory — install-time scratch only.
+// Holds: install.log, install.pid, docker/ compose bundle, pip-cache/,
+// uv-cache/, python/. Platform-conventional default so install artifacts
+// never pollute ~/.openpa. Override via $OPENPA_INSTALL_DIR.
 //   Linux:   $XDG_DATA_HOME/openpa (or ~/.local/share/openpa)
 //   macOS:   ~/Library/Application Support/OpenPA  (== app.getPath('userData'))
 //   Windows: %LOCALAPPDATA%\OpenPA                 (== overridden userData above)
-// Override via $OPENPA_SYSTEM_DIR for staging/test installs.
-function systemDirPath(): string {
-  if (process.env.OPENPA_SYSTEM_DIR) return process.env.OPENPA_SYSTEM_DIR
+function installDirPath(): string {
+  if (process.env.OPENPA_INSTALL_DIR) return process.env.OPENPA_INSTALL_DIR
   if (process.platform === 'linux') {
     const xdg = process.env.XDG_DATA_HOME || path.join(app.getPath('home'), '.local', 'share')
     return path.join(xdg, 'openpa')
@@ -52,7 +62,11 @@ const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL_
 // follows the same pattern via ``--channel``; this keeps backend serve
 // and upgrade apply consistent with it.
 function openpaSubprocessEnv(): NodeJS.ProcessEnv {
-  const base = { ...process.env, OPENPA_SYSTEM_DIR: systemDirPath() }
+  const base = {
+    ...process.env,
+    OPENPA_SYSTEM_DIR: systemDirPath(),
+    OPENPA_INSTALL_DIR: installDirPath(),
+  }
   if (INSTALL_CHANNEL === 'production') return base
   return { ...base, OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL }
 }
@@ -145,10 +159,12 @@ function updateConfig(patch: Partial<OpenPAConfig>): OpenPAConfig {
 // Docker install predates the top-level marker fix don't get bounced back
 // to the wizard on app upgrade.
 function installMarkerExists(): boolean {
-  const sys = systemDirPath()
+  // Native marker: $SYSTEM_DIR/.env is written at install time and read at
+  // every boot. Docker marker: $INSTALL_DIR/docker/.env (the compose env
+  // file). Either one is enough.
   return (
-    fs.existsSync(path.join(sys, '.env')) ||
-    fs.existsSync(path.join(sys, 'docker', '.env'))
+    fs.existsSync(path.join(systemDirPath(), '.env')) ||
+    fs.existsSync(path.join(installDirPath(), 'docker', '.env'))
   )
 }
 function reconcileInstallStateWithDisk(): void {
@@ -276,7 +292,9 @@ let uninstallerProcess: ChildProcess | null = null
 // install has already completed.
 
 function backendPidFilePath(): string {
-  return path.join(systemDirPath(), 'install.pid')
+  // install.pid is install-session scratch (the install script's spawned
+  // backend), written to the Install Dir.
+  return path.join(installDirPath(), 'install.pid')
 }
 
 // Resolve the actual openpa executable, bypassing the user-facing shim.
@@ -974,9 +992,11 @@ async function runInstaller(
     const child = spawn(cmd, cmdArgs, {
       env: {
         ...process.env,
-        // Hand the spawned install script the same System Dir the
-        // Electron app resolves, so both surfaces write to one location.
+        // Hand the spawned install script the same System Dir + Install
+        // Dir the Electron app resolves, so both surfaces write to one
+        // pair of locations.
         OPENPA_SYSTEM_DIR: systemDirPath(),
+        OPENPA_INSTALL_DIR: installDirPath(),
         // Preserve any custom template/script base the user set, so
         // staging installs can be tested end-to-end from the GUI.
         OPENPA_TEMPLATE_BASE: process.env.OPENPA_TEMPLATE_BASE ?? `${INSTALLER_SCRIPT_BASE}/templates`,
@@ -1124,7 +1144,11 @@ async function runUninstaller(
 
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, cmdArgs, {
-      env: { ...process.env, OPENPA_SYSTEM_DIR: systemDirPath() },
+      env: {
+        ...process.env,
+        OPENPA_SYSTEM_DIR: systemDirPath(),
+        OPENPA_INSTALL_DIR: installDirPath(),
+      },
     })
     uninstallerProcess = child
 
@@ -1719,7 +1743,7 @@ function createAppWindow(target: WindowKind): BrowserWindow {
 // ── Process tree cleanup on quit ────────────────────────────────────────
 //
 // The install script spawns the openpa backend in the background and
-// writes the backend PID to <SYSTEM_DIR>/install.pid. We track:
+// writes the backend PID to <INSTALL_DIR>/install.pid. We track:
 //   - the install script's own process (``installerProcess``)
 //   - the backend PID from the pidfile
 // and synchronously kill both trees on ``before-quit`` so closing the
@@ -1757,7 +1781,7 @@ function killTrackedProcessesSync(): void {
   //    ``startBackend``). Kills any backend we might have lost the
   //    in-memory reference to (e.g., the user wiped/restored the
   //    System Dir between launches).
-  const serverPidFile = path.join(systemDirPath(), 'install.pid')
+  const serverPidFile = path.join(installDirPath(), 'install.pid')
   try {
     const pid = parseInt(fs.readFileSync(serverPidFile, 'utf8').trim(), 10)
     if (pid > 0) killProcessTreeSync(pid)
@@ -1908,7 +1932,7 @@ if (process.platform === 'win32') {
 // second instance calls ``app.quit()`` below, which fires ``before-quit``;
 // if that handler were wired up at module top level it would run inside
 // the secondary process and ``killTrackedProcessesSync()`` would read
-// ``<SYSTEM_DIR>/install.pid`` (written by the primary) and force-kill the
+// ``<INSTALL_DIR>/install.pid`` (written by the primary) and force-kill the
 // primary's backend tree. Registering lifecycle handlers only inside the
 // primary branch closes that hole.
 const gotSingleInstanceLock = app.requestSingleInstanceLock()

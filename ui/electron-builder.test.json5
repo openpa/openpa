@@ -22,6 +22,13 @@
     "dist",
     "dist-electron"
   ],
+  // Bundle the install/uninstall scripts so the NSIS customUnInstall macro
+  // in build/installer.nsh can invoke uninstall.ps1 when the user removes
+  // OpenPA via Windows Settings → Apps. Mirror of electron-builder.json5.
+  "extraResources": [
+    { "from": "../install/uninstall.ps1", "to": "uninstall.ps1" },
+    { "from": "../install/uninstall.sh",  "to": "uninstall.sh" }
+  ],
   "mac": {
     "target": [
       "dmg"

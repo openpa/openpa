@@ -70,7 +70,13 @@ services:
       VNC_PASSWORD: ${VNC_PASSWORD}
       RESOLUTION: ${RESOLUTION:-1280x720}
     volumes:
-      - openpa-data:/root/.openpa
+      # Bind-mount the host's OpenPA System Directory into the container.
+      # The placeholder is substituted by install.sh / install.ps1 at render
+      # time (e.g., /home/user/.openpa or C:/Users/user/.openpa) so the
+      # container's /root/.openpa IS the host's ~/.openpa — storage,
+      # tokens, profile dirs, .env, bootstrap.toml all live on the host
+      # and survive docker compose down -v on purge uninstalls.
+      - __OPENPA_SYSTEM_DIR__:/root/.openpa
       # The runtime venv lives in a named volume so wizard-installed
       # extras (sentence-transformers, qdrant-client, anthropic, ...)
       # persist across ``docker compose down && up``. The entrypoint
@@ -128,7 +134,10 @@ services:
     restart: unless-stopped
 
 volumes:
-  openpa-data:
+  # openpa-data was replaced with a host bind-mount of ~/.openpa above so
+  # `docker volume ls` doesn't carry an orphan. Sidecar service volumes
+  # (postgres, qdrant, chroma) and the runtime venv stay as named volumes
+  # because nothing on the host needs to inspect them directly.
   openpa-venv:
   pg-data:
   qdrant-data:
