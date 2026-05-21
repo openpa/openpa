@@ -29,7 +29,22 @@ const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL_
 // consistent with it.
 function openpaSubprocessEnv(): NodeJS.ProcessEnv {
   if (INSTALL_CHANNEL === 'production') return process.env
-  return { ...process.env, OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL }
+  const overrides: Record<string, string> = {
+    OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL,
+  }
+  // Dev channel (``npm run dev``) runs Vite on port 1515 to match the
+  // SPA-origin assumptions the Electron shell hardcodes. The backend's
+  // own SPA listener would otherwise fight Vite for that port — and
+  // ``waitForSpaListenerHealthy()`` would still pass either way, but
+  // whichever bound first would win and the user could end up looking
+  // at a stale wheel SPA with no HMR. Disable the backend listener
+  // explicitly so Vite owns 1515 unambiguously. Mirrors the manual
+  // ``$env:OPENPA_UI_PORT = "0"`` step documented in CONTRIBUTING.md
+  // for the web-dev workflow.
+  if (INSTALL_CHANNEL === 'dev') {
+    overrides.OPENPA_UI_PORT = '0'
+  }
+  return { ...process.env, ...overrides }
 }
 
 // Test installers are prereleases for testers; DevTools is a feature there.
@@ -321,6 +336,44 @@ async function waitForBackendHealthy(timeoutMs = 30000): Promise<boolean> {
   return false
 }
 
+// ``openpa serve`` runs the SPA listener as a sibling asyncio task to the
+// API server (see ``app/server.py:_build_ui_server``), so port 1112's
+// /health going green does NOT mean port 1515 is bound yet. Without this
+// probe, ``startBackend()`` returned the moment 1112 answered and the
+// Setup Wizard's ``window.location.replace('http://127.0.0.1:1515/…')``
+// raced an unbound socket — the first click after install silently
+// failed and the user had to click 2-3× before the SPA listener caught up.
+//
+// We HEAD ``/index.html`` because the web mount at ``/`` is the only one
+// guaranteed to exist (the ``/electron-renderer`` mount is conditional on
+// the wheel shipping a ui-electron build).
+//
+// Assumes ``OPENPA_UI_PORT`` is non-zero — the Electron flow never sets
+// it to 0 (the cross-origin pivot to the wheel SPA depends on this
+// listener). If a future change ever passes ``OPENPA_UI_PORT=0`` via
+// ``openpaSubprocessEnv()``, this wait will need to become conditional.
+function isSpaListenerHealthy(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const url = `${backendSpaUrl()}/index.html`
+    const req = http.request(url, { method: 'HEAD', timeout: 1500 }, (res) => {
+      res.resume()
+      resolve((res.statusCode ?? 0) < 400)
+    })
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.end()
+  })
+}
+
+async function waitForSpaListenerHealthy(timeoutMs = 30000): Promise<boolean> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (await isSpaListenerHealthy()) return true
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return false
+}
+
 // Origin of the backend's bundled SPA. The backend runs TWO listeners
 // (see ``app/server.py:_build_ui_server``):
 //
@@ -435,13 +488,22 @@ async function pivotFileWindowsToBackend(): Promise<void> {
 
 async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   // Already responding? Adopt the running instance and skip the spawn.
+  // Still wait for the SPA listener — even an "already up" backend may
+  // have just bound port 1112 a moment ago with 1515 still binding.
   if (await isBackendHealthy()) {
-    return { ok: true }
+    const spaOk = await waitForSpaListenerHealthy()
+    return spaOk
+      ? { ok: true }
+      : { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
   }
   // Already spawned but not healthy yet? Just wait.
   if (backendProcess && backendProcess.exitCode === null) {
     const ok = await waitForBackendHealthy()
-    return ok ? { ok: true } : { ok: false, error: 'backend did not become healthy' }
+    if (!ok) return { ok: false, error: 'backend did not become healthy' }
+    const spaOk = await waitForSpaListenerHealthy()
+    return spaOk
+      ? { ok: true }
+      : { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
   }
 
   // Spawn via the venv interpreter rather than openpa.exe so that
@@ -493,6 +555,10 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
   const ok = await waitForBackendHealthy()
   if (!ok) {
     return { ok: false, error: `backend at ${backendHealthUrl()} did not respond after 30s` }
+  }
+  const spaOk = await waitForSpaListenerHealthy()
+  if (!spaOk) {
+    return { ok: false, error: `SPA listener at ${backendSpaUrl()} did not respond after 30s` }
   }
   return { ok: true }
 }

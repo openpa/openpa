@@ -811,7 +811,7 @@ if [ "$MODE" = "docker" ]; then
             ;;
     esac
 
-    # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:5173)
+    # Dev channel: open CORS so ``npm run dev`` (Vite at localhost:1515)
     # and other ad-hoc dev origins can hit the API without preflight
     # failures. Production and test installs keep the locked-down list.
     if [ "$CHANNEL" = "dev" ]; then
@@ -1388,7 +1388,7 @@ case "$CHANNEL" in
             printf '\nOPENPA_UPGRADE_CHANNEL=dev\n' >> "$ENV_FILE"
         fi
         # Replace the static template's locked-down CORS list with ``*``
-        # so ``npm run dev`` (Vite at localhost:5173) and other ad-hoc dev
+        # so ``npm run dev`` (Vite at localhost:1515) and other ad-hoc dev
         # origins work without preflight failures. Idempotent: skip if
         # already wildcarded so re-runs don't churn the file.
         if ! grep -q '^CORS_ALLOWED_ORIGINS=\*$' "$ENV_FILE" 2>/dev/null; then

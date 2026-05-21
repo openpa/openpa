@@ -42,7 +42,16 @@ export default defineConfig(({ mode, command }) => {
     },
     server: {
       host: env.HOST || '0.0.0.0',
-      port: parseInt(env.PORT) || 0,
+      // Bind 1515 to match the wheel-bundled SPA listener's default
+      // (app/server.py:_build_ui_server). The Electron shell hardcodes
+      // ``http://127.0.0.1:1515`` as the SPA origin in three places
+      // (backendSpaUrl(), SetupWizard's file:// pivot, ui/src/main.ts's
+      // port-swap heuristic), so keeping Vite-dev on the same port means
+      // every redirect/probe lands on the right place in both dev and
+      // prod. The backend's own SPA listener is silenced in dev via
+      // ``OPENPA_UI_PORT=0`` from openpaSubprocessEnv() so there's no
+      // clash. Same default the web-only config already uses.
+      port: parseInt(env.PORT) || 1515,
     },
     plugins: [
     vue(),
