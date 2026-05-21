@@ -21,8 +21,16 @@ import {
   completeSetup,
   checkSetupStatus,
   fetchServiceCapabilities,
+  fetchInstallSecrets,
   type ServiceCapabilitiesResponse,
+  type InstallSecrets,
 } from '../services/configApi';
+import {
+  buildExport,
+  exportMimeType,
+  type ConfigExportSnapshot,
+  type ExportFormat,
+} from '../utils/configExport';
 import {
   openSetupProgressStream,
   type SetupLogEntry,
@@ -345,6 +353,8 @@ if (settingsStore.agentUrl) {
 const profileName = computed(() => props.profile || 'admin');
 const isFirstSetup = ref(true);
 const generatedToken = ref('');
+const tokenExpiresAt = ref<string>('');
+const installSecrets = ref<InstallSecrets | null>(null);
 const checkingStatus = ref(true);
 
 // Collected config from each step.
@@ -852,9 +862,19 @@ async function handleCompleteSetup() {
 
     const result = await completeSetup(settingsStore.agentUrl, config as any);
     generatedToken.value = result.token;
+    tokenExpiresAt.value = (result as any).expires_at || '';
     restartRequired.value = Boolean((result as any).restart_required);
     createdChannels.value = (result as any).channels || [];
     channelErrors.value = (result as any).channel_errors || [];
+
+    // Fire-and-forget: the downloadable config bundle wants Docker
+    // install-time secrets (VNC password, docker-generated PG creds)
+    // that don't live in wizard state. A failure here just means the
+    // export omits the Docker section — never block setup completion
+    // on it.
+    fetchInstallSecrets(settingsStore.agentUrl, generatedToken.value)
+      .then((secrets) => { installSecrets.value = secrets; })
+      .catch(() => { installSecrets.value = null; });
 
     // Activate the token immediately so the in-wizard pairing dialog
     // (ChannelPairingDialog) can authenticate against the SSE stream.
@@ -953,13 +973,128 @@ const embeddingBlocking = computed(() => {
 
 const embeddingFailed = computed(() => embeddingStatus.value === 'failed');
 
-async function copyToken() {
-  try {
-    await navigator.clipboard.writeText(generatedToken.value);
-    ElMessage.success('Token copied to clipboard!');
-  } catch {
-    ElMessage.error('Failed to copy token');
+function buildConfigSnapshot(): ConfigExportSnapshot {
+  const server = serverConfig.value as Record<string, any>;
+  const dbProvider: 'postgres' | 'sqlite' = server.db_provider === 'postgres'
+    ? 'postgres'
+    : 'sqlite';
+
+  let postgres: ConfigExportSnapshot['database']['postgres'] | undefined;
+  if (dbProvider === 'postgres') {
+    const pg = (server.postgres ?? {}) as Record<string, any>;
+    postgres = {
+      host: String(pg.host ?? 'localhost'),
+      port: Number(pg.port ?? 5432),
+      database: String(pg.database ?? installSecrets.value?.pg_database ?? 'openpa'),
+      user: String(pg.user ?? installSecrets.value?.pg_user ?? 'openpa'),
+      password: String(pg.password ?? installSecrets.value?.pg_password ?? ''),
+      sslmode: pg.sslmode ? String(pg.sslmode) : undefined,
+    };
   }
+
+  const workingDir = String(server.user_working_dir ?? '~/.openpa');
+  const sqlitePath = `${workingDir.replace(/[\\/]+$/, '')}/storage/openpa.db`;
+
+  const vectorProviderRaw = String(server['vectorstore.provider'] ?? 'none');
+  const vectorProvider: 'qdrant' | 'chroma' | 'none' =
+    vectorProviderRaw === 'qdrant' || vectorProviderRaw === 'chroma'
+      ? vectorProviderRaw
+      : 'none';
+
+  let qdrant: ConfigExportSnapshot['vectorStore']['qdrant'] | undefined;
+  if (vectorProvider === 'qdrant') {
+    qdrant = {
+      host: String(server['qdrant.host'] ?? 'localhost'),
+      port: Number(server['qdrant.port'] ?? 6333),
+      api_key: server['qdrant.api_key']
+        ? String(server['qdrant.api_key']) : undefined,
+      https: String(server['qdrant.https'] ?? 'false') === 'true',
+    };
+  }
+
+  let chroma: ConfigExportSnapshot['vectorStore']['chroma'] | undefined;
+  if (vectorProvider === 'chroma') {
+    const mode = String(server['chroma.mode'] ?? 'persistent');
+    chroma = {
+      mode: mode === 'http' ? 'http' : 'persistent',
+      host: server['chroma.host'] ? String(server['chroma.host']) : undefined,
+      port: server['chroma.port'] !== undefined
+        ? Number(server['chroma.port']) : undefined,
+      ssl: server['chroma.ssl'] !== undefined
+        ? String(server['chroma.ssl']) === 'true' : undefined,
+      api_key: server['chroma.api_key']
+        ? String(server['chroma.api_key']) : undefined,
+      persist_path: server['chroma.persist_path']
+        ? String(server['chroma.persist_path']) : undefined,
+    };
+  }
+
+  const includeVnc = installMode.value === 'docker'
+    && Boolean(installSecrets.value?.vnc_password);
+
+  const customFields = installDeployment.value === 'custom'
+    ? { ...installCustomValues.value } : undefined;
+
+  return {
+    profile: profileName.value,
+    token: generatedToken.value,
+    tokenExpiresAt: tokenExpiresAt.value,
+    agentUrl: settingsStore.agentUrl,
+    generatedAt: new Date().toISOString(),
+    deployment: {
+      type: installDeployment.value,
+      mode: installMode.value,
+      customFields,
+    },
+    vnc: includeVnc
+      ? { password: installSecrets.value!.vnc_password as string }
+      : undefined,
+    workingDir,
+    database: {
+      provider: dbProvider,
+      postgres,
+      sqlite: dbProvider === 'sqlite' ? { path: sqlitePath } : undefined,
+    },
+    vectorStore: {
+      provider: vectorProvider,
+      qdrant,
+      chroma,
+    },
+    embedding: {
+      enabled: Boolean(embeddingConfig.value?.enabled),
+      provider: embeddingConfig.value?.provider,
+    },
+    channels: createdChannels.value.map((ch) => ({
+      type: String((ch as any).channel_type ?? ''),
+      mode: String((ch as any).mode ?? ''),
+      id: String((ch as any).id ?? ''),
+    })),
+  };
+}
+
+function downloadConfigFile(format: ExportFormat) {
+  if (!generatedToken.value) {
+    ElMessage.warning('Setup is not complete yet.');
+    return;
+  }
+  const snapshot = buildConfigSnapshot();
+  const content = buildExport(format, snapshot);
+  const mime = exportMimeType(format);
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const filename = `openpa-${profileName.value}-config-${stamp}.${format}`;
+  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 </script>
 
@@ -1324,7 +1459,7 @@ async function copyToken() {
           :submitting="submitting"
           :profile-name="profileName"
           @generate="handleCompleteSetup"
-          @copy="copyToken"
+          @download="downloadConfigFile"
         />
 
         <div
