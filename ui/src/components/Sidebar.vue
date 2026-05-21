@@ -671,17 +671,17 @@ const toggleThemeFromIcon = () => {
           />
         </div>
       </ElTooltip>
-      <ElTooltip content="Logout" placement="right" :show-after="300" :disabled="!isCollapsed">
-        <div class="settings-row logout-row" @click="handleLogout">
-          <Icon icon="mdi:logout" class="settings-icon" />
-          <span class="settings-label" v-if="!isCollapsed">Logout</span>
-          <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
-        </div>
-      </ElTooltip>
       <ElTooltip content="Settings" placement="right" :show-after="300" :disabled="!isCollapsed">
         <div class="settings-row" @click="handleOpenSettings">
           <Icon icon="mdi:cog" class="settings-icon" />
           <span class="settings-label" v-if="!isCollapsed">Settings</span>
+          <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
+        </div>
+      </ElTooltip>
+      <ElTooltip content="Logout" placement="right" :show-after="300" :disabled="!isCollapsed">
+        <div class="settings-row logout-row" @click="handleLogout">
+          <Icon icon="mdi:logout" class="settings-icon" />
+          <span class="settings-label" v-if="!isCollapsed">Logout</span>
           <Icon icon="mdi:chevron-right" class="chevron-icon" v-if="!isCollapsed" />
         </div>
       </ElTooltip>
