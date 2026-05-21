@@ -325,6 +325,24 @@ function reconcileTerminalPhase(args: ReconcileArgs): void {
   // transient state the renderer can use to show a success toast for
   // a couple of seconds before settling back to ``idle``.
   void checkBackend()
+  // Trigger the post-update reload deterministically right now,
+  // rather than waiting up to 30 s for the next slow /version poll.
+  // Without this the user can land on About (or Settings) while the
+  // backend reports the new version but the in-memory SPA bundle is
+  // still the old one — exactly the "UI didn't update" symptom that
+  // appeared after test47 fixed the container restart. We re-fetch
+  // /version explicitly here because a stale ``bootBackendVersion``
+  // seed (or a fast-poll race) would otherwise let the success path
+  // skip the reload entirely. If /version is briefly unreachable
+  // because the new backend isn't quite ready yet, the slow 30 s
+  // pollVersion still catches it later.
+  void (async () => {
+    if (bootBackendVersion === null) return
+    const current = await fetchBackendVersion()
+    if (current && current !== bootBackendVersion) {
+      triggerPostUpdateReload()
+    }
+  })()
 }
 
 // ── Version polling for auto-reload ──────────────────────────────────────
@@ -356,7 +374,24 @@ function triggerPostUpdateReload(): void {
   } catch {
     // sessionStorage unavailable (private mode etc.) — reload anyway.
   }
-  window.location.reload()
+  // If we're on the asar fallback (file://) the cache-busting query
+  // trick would navigate to a different origin entirely; just reload.
+  if (window.location.protocol === 'file:') {
+    window.location.reload()
+    return
+  }
+  // Cache-bust the URL so Chromium can't serve a stale index.html from
+  // its HTTP cache. ``StaticFiles`` ignores query strings for routing
+  // (the path is still ``/electron-renderer/``), but the HTTP cache is
+  // keyed on the full URL — a new ``_v`` makes it a guaranteed miss,
+  // fetches fresh HTML, and the new asset-hash references resolve to
+  // fresh bundles. This is the deterministic equivalent of a hard
+  // reload — ``location.reload(true)`` is deprecated and ignored on
+  // modern Chromium.
+  const url = new URL(window.location.href)
+  url.searchParams.delete('_v')
+  url.searchParams.set('_v', Date.now().toString())
+  window.location.href = url.toString()
 }
 
 async function pollVersion(): Promise<void> {

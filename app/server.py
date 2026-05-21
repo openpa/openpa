@@ -1035,6 +1035,46 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         await asyncio.gather(server.serve(), ui_server.serve())
 
 
+class _CachingStaticFiles(StaticFiles):
+    """``StaticFiles`` with sensible Cache-Control for SPA bundles.
+
+    Vite emits content-hashed assets under ``/assets/`` (e.g.
+    ``assets/index-abc123.js``); the URL is effectively a content
+    address, so we cache forever and skip revalidation. Everything
+    else (``index.html``, top-level files, ``html=True`` fallbacks for
+    deep links) is cacheable only with revalidation: the file content
+    can change without the URL changing, and the renderer's post-
+    upgrade reload must reliably pick up a fresh ``index.html``.
+
+    Without this the renderer can serve a cached pre-upgrade
+    ``index.html`` whose embedded asset-hash references point at the
+    old bundle — exactly the "UI didn't update" symptom seen after
+    test48 shipped.
+    """
+
+    def file_response(
+        self,
+        full_path,  # PathLike
+        stat_result,
+        scope,
+        status_code: int = 200,
+    ):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        # ``scope["path"]`` is the request path inside this mount (the
+        # mount prefix has already been consumed by Starlette routing),
+        # so ``/electron-renderer/assets/foo.js`` becomes ``/assets/foo.js``
+        # here. The ``html=True`` fallback (deep-link routes that map to
+        # index.html) hits the ``else`` branch — correct, because what
+        # gets served is index.html and we want it revalidated.
+        if "/assets/" in scope.get("path", ""):
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable"
+            )
+        else:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 def _build_ui_server(*, host: str) -> uvicorn.Server | None:
     """Return a uvicorn server for the bundled SPA, or None if disabled.
 
@@ -1098,7 +1138,7 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
         routes.append(
             Mount(
                 "/electron-renderer",
-                app=StaticFiles(directory=str(ui_electron_dir), html=True),
+                app=_CachingStaticFiles(directory=str(ui_electron_dir), html=True),
                 name="ui-electron",
             )
         )
@@ -1109,7 +1149,7 @@ def _build_ui_server(*, host: str) -> uvicorn.Server | None:
             "/electron-renderer mount disabled (Electron shell will fall "
             "back to the asar copy)."
         )
-    routes.append(Mount("/", app=StaticFiles(directory=str(ui_dir), html=True), name="ui"))
+    routes.append(Mount("/", app=_CachingStaticFiles(directory=str(ui_dir), html=True), name="ui"))
     spa_app = Starlette(routes=routes)
     cfg = uvicorn.Config(spa_app, host=host, port=ui_port, log_level="warning")
     logger.info(f"SPA listener: http://{host}:{ui_port} (serving {ui_dir})")
