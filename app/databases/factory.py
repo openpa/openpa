@@ -23,7 +23,7 @@ def create_database_provider() -> DatabaseProvider:
 
     if provider == "sqlite":
         # Imported here so SQLITE_DB_PATH resolution stays lazy — the path
-        # depends on OPENPA_WORKING_DIR which itself comes from settings.
+        # depends on OPENPA_SYSTEM_DIR which itself comes from settings.
         from app.config.settings import BaseConfig
         from .sqlite import SqliteDatabaseProvider
         return SqliteDatabaseProvider(BaseConfig.SQLITE_DB_PATH)

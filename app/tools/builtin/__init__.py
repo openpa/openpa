@@ -236,7 +236,7 @@ async def register_builtin_tools(
             continue
 
         config: dict[str, str] = {}
-        config["OPENPA_WORKING_DIR"] = BaseConfig.OPENPA_WORKING_DIR
+        config["OPENPA_SYSTEM_DIR"] = BaseConfig.OPENPA_SYSTEM_DIR
         config["SQLITE_DB_PATH"] = BaseConfig.SQLITE_DB_PATH
 
         try:
@@ -249,7 +249,7 @@ async def register_builtin_tools(
         llm_defaults: dict = dict(tool_info.get("llm_parameters") or {})
         instructions = llm_defaults.get("tool_instructions", "") or ""
         if hasattr(module, "_make_server_instructions"):
-            instructions = module._make_server_instructions(config["OPENPA_WORKING_DIR"])
+            instructions = module._make_server_instructions(config["OPENPA_SYSTEM_DIR"])
 
         prepare_tools_fn = None
         if hasattr(module, "get_prepare_tools"):

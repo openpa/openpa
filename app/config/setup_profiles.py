@@ -48,8 +48,7 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
             "sqlite_db_path": "openpa.db",
             "service_name": "openpa-agent",
             "agent_name": "OPENPA Agent",
-            "working_dir": "~/.openpa",
-            "user_working_dir": "~/Documents",
+            "user_working_dir": "~/.openpa",
         },
         "embedding_config": {
             "enabled": False,

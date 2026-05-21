@@ -1,7 +1,7 @@
 """Documentation Search built-in tool.
 
-Vector-searches Markdown documentation kept under ``<OPENPA_WORKING_DIR>/documents``
-(shared) and ``<OPENPA_WORKING_DIR>/<profile>/documents`` (per-profile),
+Vector-searches Markdown documentation kept under ``<OPENPA_SYSTEM_DIR>/documents``
+(shared) and ``<OPENPA_SYSTEM_DIR>/<profile>/documents`` (per-profile),
 then runs an internal LLM-as-judge to pick the single most accurate
 candidate before loading that one document's body and returning it to the
 Reasoning Agent.

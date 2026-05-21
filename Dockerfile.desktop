@@ -236,7 +236,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # path unconditionally.
 ENV VNC_PASSWORD=changeme \
     RESOLUTION=1280x720 \
-    OPENPA_WORKING_DIR=/root/.openpa \
+    OPENPA_SYSTEM_DIR=/root/.openpa \
     OPENPA_UI_PORT=1515 \
     HOST=0.0.0.0 \
     PORT=1112 \

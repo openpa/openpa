@@ -1,4 +1,4 @@
-"""File serving API for OPENPA_WORKING_DIR.
+"""File serving API for OPENPA_SYSTEM_DIR.
 
 Serves files from the configured data directory with path-traversal prevention.
 Protected by the application's existing JWT authentication middleware.
@@ -32,7 +32,7 @@ def _allowed_bases() -> list[str]:
     Includes both the internal OpenPA working dir and the user's
     working dir (where the agent operates and produces files).
     """
-    bases = [os.path.realpath(BaseConfig.OPENPA_WORKING_DIR)]
+    bases = [os.path.realpath(BaseConfig.OPENPA_SYSTEM_DIR)]
     user_dir = os.path.realpath(get_user_working_directory())
     if user_dir not in bases:
         bases.append(user_dir)
@@ -68,11 +68,11 @@ def _is_inside_allowed(target: str, conversation_id: str | None = None) -> bool:
 
 
 def _safe_resolve(relative_path: str) -> str | None:
-    """Resolve a relative path inside OPENPA_WORKING_DIR.
+    """Resolve a relative path inside OPENPA_SYSTEM_DIR.
 
     Returns the absolute path if safe, or None if traversal is detected.
     """
-    base = os.path.realpath(BaseConfig.OPENPA_WORKING_DIR)
+    base = os.path.realpath(BaseConfig.OPENPA_SYSTEM_DIR)
     target = os.path.realpath(os.path.join(base, relative_path))
     if target != base and not target.startswith(base + os.sep):
         return None
@@ -93,7 +93,7 @@ async def _serve_file(request: Request):
     if not relative_path:
         return JSONResponse({"error": "No path specified"}, status_code=400)
 
-    logger.debug(f"File request: relative_path={relative_path}, OPENPA_WORKING_DIR={BaseConfig.OPENPA_WORKING_DIR}")
+    logger.debug(f"File request: relative_path={relative_path}, OPENPA_SYSTEM_DIR={BaseConfig.OPENPA_SYSTEM_DIR}")
     target = _safe_resolve(relative_path)
     if target is None:
         return JSONResponse({"error": "Access denied"}, status_code=403)
@@ -101,7 +101,7 @@ async def _serve_file(request: Request):
     logger.debug(f"Resolved file path: {target}, exists={os.path.isfile(target)}")
     if not os.path.isfile(target):
         return JSONResponse(
-            {"error": "File not found", "resolved_path": target, "data_dir": BaseConfig.OPENPA_WORKING_DIR},
+            {"error": "File not found", "resolved_path": target, "data_dir": BaseConfig.OPENPA_SYSTEM_DIR},
             status_code=404,
         )
 
@@ -112,7 +112,7 @@ async def _serve_file_by_path(request: Request):
     """Serve a file given its absolute path.
 
     The path must resolve inside one of the allowed bases
-    (OPENPA_WORKING_DIR or the user working directory).
+    (OPENPA_SYSTEM_DIR or the user working directory).
     """
     unauth = _require_auth(request)
     if unauth is not None:
@@ -343,7 +343,7 @@ def _is_allowed_base(path: str) -> bool:
     """``True`` iff ``path`` (already realpath'd) is exactly an allowed base.
 
     Used to refuse delete/move operations that would clobber a configured
-    root (OPENPA_WORKING_DIR or the user working dir).
+    root (OPENPA_SYSTEM_DIR or the user working dir).
     """
     return path in _allowed_bases()
 

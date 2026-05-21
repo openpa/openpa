@@ -43,7 +43,7 @@
     Use defaults; never prompt. With Deployment='server', requires AppHost.
 
 .PARAMETER Reinstall
-    Wipe any existing %USERPROFILE%\.openpa\venv before installing.
+    Wipe any existing %LOCALAPPDATA%\OpenPA\venv before installing.
 
 .PARAMETER AutoInstallPython
     Auto-install isolated Python 3.13 if missing (default: prompt;
@@ -236,29 +236,42 @@ if ($Unattended -and -not $AutoInstallPython -and -not $NoAutoInstallPython) {
 
 # ── paths ─────────────────────────────────────────────────────────────────
 
-$OpenpaHome = if ($env:OPENPA_WORKING_DIR) { $env:OPENPA_WORKING_DIR } else { Join-Path $env:USERPROFILE '.openpa' }
-$VenvDir       = Join-Path $OpenpaHome 'venv'
-$EnvFile       = Join-Path $OpenpaHome '.env'
-$BootstrapFile = Join-Path $OpenpaHome 'bootstrap.toml'
-$LogFile       = Join-Path $OpenpaHome 'install.log'
-$PidFile       = Join-Path $OpenpaHome 'install.pid'
-$ServerLogFile = Join-Path $OpenpaHome 'server.log'
-$BinDir        = Join-Path $OpenpaHome 'bin'
+# OpenPA System Directory — install + runtime artifacts root. Defaults to
+# %LOCALAPPDATA%\OpenPA so install artifacts never collide with whatever
+# the user picks as their User Working Directory (the agent's CWD).
+# Override via $env:OPENPA_SYSTEM_DIR so power users can install side-by-side
+# (e.g., a staging copy at %TEMP%\openpa-staging).
+$OpenpaSystemDir = if ($env:OPENPA_SYSTEM_DIR) {
+    $env:OPENPA_SYSTEM_DIR
+} else {
+    Join-Path $env:LOCALAPPDATA 'OpenPA'
+}
+$VenvDir       = Join-Path $OpenpaSystemDir 'venv'
+$EnvFile       = Join-Path $OpenpaSystemDir '.env'
+$BootstrapFile = Join-Path $OpenpaSystemDir 'bootstrap.toml'
+$LogFile       = Join-Path $OpenpaSystemDir 'install.log'
+$PidFile       = Join-Path $OpenpaSystemDir 'install.pid'
+$ServerLogFile = Join-Path $OpenpaSystemDir 'server.log'
+$BinDir        = Join-Path $OpenpaSystemDir 'bin'
 $UvExe         = Join-Path $BinDir 'uv.exe'
 
-# Scope pip's cache under our install dir so `Remove-Item -Recurse $OpenpaHome`
+# Scope pip's cache under our install dir so `Remove-Item -Recurse $OpenpaSystemDir`
 # (or -Reinstall) wipes any stale index responses. Without this, pip uses
 # %LOCALAPPDATA%\pip\Cache, which persists across reinstalls.
-$env:PIP_CACHE_DIR = Join-Path $OpenpaHome 'pip-cache'
+$env:PIP_CACHE_DIR = Join-Path $OpenpaSystemDir 'pip-cache'
 
-if (-not (Test-Path $OpenpaHome)) { New-Item -ItemType Directory -Path $OpenpaHome | Out-Null }
+if (-not (Test-Path $OpenpaSystemDir)) { New-Item -ItemType Directory -Path $OpenpaSystemDir | Out-Null }
+
+# Forward to the Python backend so its settings layer agrees with this
+# script on the System Dir location (subprocess inherits this).
+$env:OPENPA_SYSTEM_DIR = $OpenpaSystemDir
 
 # Default ModifyPath: only modify User PATH for the canonical install dir
-# so a staging/test install at OPENPA_WORKING_DIR=~\.openpa-test doesn't
-# clobber the prod PATH entry. -ModifyPath / -NoModifyPath override.
-$DefaultOpenpaHome = Join-Path $env:USERPROFILE '.openpa'
+# so a staging/test install at a custom OPENPA_SYSTEM_DIR doesn't clobber
+# the prod PATH entry. -ModifyPath / -NoModifyPath override.
+$DefaultOpenpaSystemDir = Join-Path $env:LOCALAPPDATA 'OpenPA'
 if (-not $ModifyPath -and -not $NoModifyPath) {
-    if ($OpenpaHome -ieq $DefaultOpenpaHome) {
+    if ($OpenpaSystemDir -ieq $DefaultOpenpaSystemDir) {
         $ModifyPath = $true
     } else {
         $NoModifyPath = $true
@@ -311,7 +324,7 @@ if ($Channel -eq 'dev') {
     } else {
         'https://raw.githubusercontent.com/openpa/openpa/main/install'
     }
-    $CatalogTmp = Join-Path $OpenpaHome '_catalog.ps1'
+    $CatalogTmp = Join-Path $OpenpaSystemDir '_catalog.ps1'
     try {
         Invoke-WebRequest -UseBasicParsing -Uri "$CatalogBase/_catalog.ps1" -OutFile $CatalogTmp
     } catch {
@@ -719,7 +732,7 @@ function Resolve-OpenPAVersion {
 if ($Mode -eq 'docker') {
     Write-Step "Docker install"
 
-    $DockerDir = Join-Path $OpenpaHome 'docker'
+    $DockerDir = Join-Path $OpenpaSystemDir 'docker'
     if (-not (Test-Path $DockerDir)) { New-Item -ItemType Directory -Path $DockerDir | Out-Null }
 
     $ComposeFile = Join-Path $DockerDir 'docker-compose.yml'
@@ -960,7 +973,7 @@ function Confirm-AutoInstallPython {
     if ($AutoInstallPython) { return }
     Write-Host ""
     Write-Host "OpenPA can install an isolated Python 3.13 just for itself"
-    Write-Host "(~70 MB downloaded into $OpenpaHome\python, no admin needed; system"
+    Write-Host "(~70 MB downloaded into $OpenpaSystemDir\python, no admin needed; system"
     Write-Host "Python is left untouched)."
     Write-Host ""
     while ($true) {
@@ -984,7 +997,7 @@ function Confirm-AutoInstallPython {
     }
 }
 
-# Download a private copy of `uv` into $OpenpaHome\bin so we can manage
+# Download a private copy of `uv` into $OpenpaSystemDir\bin so we can manage
 # Python and venv installs without touching system tools.
 function Install-UvLocally {
     if (Test-Path $UvExe) {
@@ -1026,12 +1039,12 @@ function Install-UvLocally {
     Write-Ok "Installed uv at $UvExe"
 }
 
-# Use uv to download an isolated Python 3.13 into $OpenpaHome\python and
+# Use uv to download an isolated Python 3.13 into $OpenpaSystemDir\python and
 # return its absolute path via $script:Python. The cache and install dir
-# are scoped to OpenpaHome so removing the dir cleans everything.
+# are scoped to OpenpaSystemDir so removing the dir cleans everything.
 function Install-PythonViaUv {
-    $env:UV_PYTHON_INSTALL_DIR = Join-Path $OpenpaHome 'python'
-    $env:UV_CACHE_DIR          = Join-Path $OpenpaHome 'uv-cache'
+    $env:UV_PYTHON_INSTALL_DIR = Join-Path $OpenpaSystemDir 'python'
+    $env:UV_CACHE_DIR          = Join-Path $OpenpaSystemDir 'uv-cache'
     Write-Info "Downloading isolated Python 3.13 (this may take a minute)"
     Invoke-NativeLogged { & $UvExe python install 3.13 }
     if ($LASTEXITCODE -ne 0) {
@@ -1063,7 +1076,7 @@ Write-Step "Install"
 if ($Channel -eq 'dev') {
     # Dev channel: reuse the developer's local .venv (managed by
     # ``uv sync`` from <repo>\pyproject.toml) instead of building a
-    # parallel venv at $OpenpaHome\venv. The dev already has openpa +
+    # parallel venv at $OpenpaSystemDir\venv. The dev already has openpa +
     # every transitive dep installed in editable mode; reinstalling
     # them into a separate venv takes minutes for no benefit.
     if ($Reinstall) {
@@ -1196,7 +1209,7 @@ if ($Channel -eq 'dev') {
 
 # Drop a small wrapper into $BinDir so a single, stable path on PATH
 # points at the venv's openpa.exe even after re-installs. In dev mode
-# the target lives in $RepoRoot\.venv, not $OpenpaHome\venv, so we emit
+# the target lives in $RepoRoot\.venv, not $OpenpaSystemDir\venv, so we emit
 # the absolute path of $VenvOpenpa rather than a relative ``..\venv``
 # walk that would dangle.
 if (-not (Test-Path $BinDir)) {
@@ -1341,7 +1354,7 @@ switch ($Channel) {
 # Skip the default-SQLite bootstrap.toml when the Electron app is driving
 # — the Setup Wizard will write the file once the user picks a backend,
 # and the backend boots in deferred-storage mode until then so no DB is
-# materialised under ~/.openpa/storage before the user has chosen.
+# materialised under $OpenpaSystemDir\storage before the user has chosen.
 # Native installs (curl | sh, no Electron) get the SQLite default here,
 # matching the legacy behavior; the wizard can still flip them to
 # Postgres on first setup.
@@ -1364,7 +1377,7 @@ db_provider = "sqlite"
 # file) when the Electron app is driving — the app starts the backend
 # only after the user clicks "Continue to Setup Wizard", and the backend
 # is what eventually creates the DB. Keeping this here means a stray
-# ~/.openpa/storage/openpa.db never shows up between the installer
+# $OpenpaSystemDir\storage\openpa.db never shows up between the installer
 # finishing and the user choosing to continue.
 if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
     Write-Info "Migrating database to current schema"
@@ -1425,9 +1438,9 @@ if ($env:OPENPA_INSTALLER_FRONTEND -ne 'electron') {
     if (-not $running) {
         # Start-Process refuses identical stdout / stderr paths on PS
         # 5.1, so write stderr to a sibling file. They're both rotated
-        # together via ``rm ~/.openpa/server*.log`` if the user wants a
+        # together via ``Remove-Item $OpenpaSystemDir\server*.log`` if the user wants a
         # clean slate.
-        $ServerErrFile = Join-Path $OpenpaHome 'server.err.log'
+        $ServerErrFile = Join-Path $OpenpaSystemDir 'server.err.log'
         $proc = Start-Process -FilePath $VenvOpenpa -ArgumentList 'serve' `
             -RedirectStandardOutput $ServerLogFile -RedirectStandardError $ServerErrFile `
             -WindowStyle Hidden -PassThru

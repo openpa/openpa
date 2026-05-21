@@ -78,7 +78,7 @@ async def _provision_in_process(
     if user_path:
         persist_path = os.path.expanduser(user_path)
     else:
-        working_dir = os.path.expanduser(BaseConfig.OPENPA_WORKING_DIR)
+        working_dir = os.path.expanduser(BaseConfig.OPENPA_SYSTEM_DIR)
         persist_path = os.path.join(working_dir, "storage", spec.native.default_data_subpath)
 
     _emit(

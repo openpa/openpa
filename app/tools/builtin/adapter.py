@@ -320,7 +320,7 @@ class BuiltInToolAdapter:
                 # Inject the User Working Directory (default ~/Documents,
                 # configurable via the setup wizard) as the active path for
                 # all built-in tools. This is intentionally distinct from
-                # OPENPA_WORKING_DIR/<profile>, which is reserved for
+                # OPENPA_SYSTEM_DIR/<profile>, which is reserved for
                 # OpenPA-internal storage (skills, persona, exec_shell stdout).
                 # ``change_working_directory`` may store a per-conversation
                 # override under ``_working_directory_override`` -- honor it.

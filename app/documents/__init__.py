@@ -2,8 +2,8 @@
 
 Two on-disk roots are watched:
 
-- ``<OPENPA_WORKING_DIR>/documents``                     -- shared docs
-- ``<OPENPA_WORKING_DIR>/<profile>/documents``           -- per-profile docs
+- ``<OPENPA_SYSTEM_DIR>/documents``                     -- shared docs
+- ``<OPENPA_SYSTEM_DIR>/<profile>/documents``           -- per-profile docs
 
 Markdown files in either tree must declare a YAML-frontmatter ``description``
 field. Only the description is embedded into the Qdrant collection used by

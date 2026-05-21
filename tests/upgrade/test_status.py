@@ -16,7 +16,7 @@ def _isolate_working_dir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from app.config.settings import BaseConfig
 
-    monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", str(tmp_path))
+    monkeypatch.setattr(BaseConfig, "OPENPA_SYSTEM_DIR", str(tmp_path))
 
 
 def test_read_returns_idle_when_no_file() -> None:

@@ -129,11 +129,11 @@ class WhatsappAdapter(BaseChannelAdapter):
             )
 
     def _resolve_working_dir(self) -> str:
-        # ``BaseConfig.OPENPA_WORKING_DIR`` already expands ``~`` and
+        # ``BaseConfig.OPENPA_SYSTEM_DIR`` already expands ``~`` and
         # normalises path separators (the codebase's canonical accessor —
         # don't re-roll). The sidecar also re-expands ``~`` defensively in
         # case a non-canonical value ever flows through.
-        return BaseConfig.OPENPA_WORKING_DIR
+        return BaseConfig.OPENPA_SYSTEM_DIR
 
     async def _spawn_sidecar(self) -> None:
         try:

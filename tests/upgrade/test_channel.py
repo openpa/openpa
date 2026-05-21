@@ -557,7 +557,7 @@ def test_pip_install_prod_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runner, "_have_pip", lambda: True)
     from app.config.settings import BaseConfig
 
-    monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
+    monkeypatch.setattr(BaseConfig, "OPENPA_SYSTEM_DIR", "/tmp/openpa-test")
 
     runner._pip_install("openpa==0.1.5", None, channel="production")
 
@@ -581,7 +581,7 @@ def test_pip_install_test_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runner, "_have_pip", lambda: True)
     from app.config.settings import BaseConfig
 
-    monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
+    monkeypatch.setattr(BaseConfig, "OPENPA_SYSTEM_DIR", "/tmp/openpa-test")
     monkeypatch.setenv("OPENPA_PIP_INDEX_URL", "https://test.pypi.org/simple/")
     monkeypatch.setenv("OPENPA_PIP_EXTRA_INDEX_URL", "https://pypi.org/simple/")
 
@@ -611,7 +611,7 @@ def test_pip_install_test_falls_back_to_default_indexes(
     monkeypatch.setattr(runner, "_run", fake_run)
     from app.config.settings import BaseConfig
 
-    monkeypatch.setattr(BaseConfig, "OPENPA_WORKING_DIR", "/tmp/openpa-test")
+    monkeypatch.setattr(BaseConfig, "OPENPA_SYSTEM_DIR", "/tmp/openpa-test")
     monkeypatch.delenv("OPENPA_PIP_INDEX_URL", raising=False)
     monkeypatch.delenv("OPENPA_PIP_EXTRA_INDEX_URL", raising=False)
 

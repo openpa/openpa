@@ -32,7 +32,7 @@ def _default_backup_root() -> Path:
     invocations against a non-existent install).
     """
     from app.config.settings import BaseConfig
-    return Path(BaseConfig.OPENPA_WORKING_DIR) / "backups"
+    return Path(BaseConfig.OPENPA_SYSTEM_DIR) / "backups"
 
 
 def _timestamp() -> str:

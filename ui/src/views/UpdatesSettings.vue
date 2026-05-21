@@ -9,10 +9,10 @@
  * only; under the web build they're grayed out.
  */
 
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  ElButton, ElCard, ElSwitch, ElTag,
+  ElButton, ElCard, ElDialog, ElMessageBox, ElSwitch, ElTag, ElRadio, ElRadioGroup,
 } from 'element-plus';
 import { Icon } from '@iconify/vue';
 
@@ -117,11 +117,130 @@ const primaryButtonLabel = computed(() => {
   }
 });
 
+// ── Uninstall (Electron-only) ────────────────────────────────────────────
+//
+// Settings → Updates is the natural home for app lifecycle, so the
+// "Danger zone" Uninstall card lives here too. The flow is:
+//   1. User clicks Uninstall — modal prompts keep vs purge.
+//   2. We confirm with a second prompt (purge is destructive).
+//   3. Main process spawns install/uninstall.{sh,ps1} via the IPC bridge.
+//   4. Log lines stream into a modal so the user can watch progress.
+//   5. On exit 0, we drop the cached agentUrl and relaunch into the
+//      first-run installer (or just close — main also resets the config).
+
+const uninstallDialogOpen = ref(false);
+const uninstallMode = ref<'keep' | 'purge'>('keep');
+const uninstallRunning = ref(false);
+const uninstallLogOpen = ref(false);
+const uninstallLogLines = ref<string[]>([]);
+const uninstallFinished = ref<{ exitCode: number; mode?: 'keep' | 'purge' } | null>(null);
+
+function appendUninstallLog(entry: { stream: string; line: string }) {
+  // The script writes whole-line chunks but spawn sometimes coalesces
+  // multiple lines into one ``data`` event. Split on newlines so the
+  // log view scrolls one row per script line.
+  const text = entry.line ?? '';
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw === '' && uninstallLogLines.value.length === 0) continue;
+    uninstallLogLines.value.push(raw);
+  }
+}
+
+function handleUninstallDone(result: { exitCode: number; mode?: 'keep' | 'purge'; error?: string }) {
+  uninstallRunning.value = false;
+  uninstallFinished.value = { exitCode: result.exitCode, mode: result.mode };
+  if (result.error) {
+    uninstallLogLines.value.push(`[error] ${result.error}`);
+  }
+  // Detach the listeners now that we're done so they don't survive into
+  // a later run on the same view instance.
+  if (window.openpa?.installer?.offUninstallLog) {
+    window.openpa.installer.offUninstallLog(appendUninstallLog);
+  }
+  if (window.openpa?.installer?.offUninstallDone) {
+    window.openpa.installer.offUninstallDone(handleUninstallDone);
+  }
+}
+
+async function openUninstallDialog() {
+  if (!isElectron() || !window.openpa?.installer?.uninstall) {
+    return;
+  }
+  uninstallMode.value = 'keep';
+  uninstallDialogOpen.value = true;
+}
+
+async function confirmAndRunUninstall() {
+  const mode = uninstallMode.value;
+  const action = mode === 'purge' ? 'permanently delete all OpenPA data' : 'uninstall OpenPA (data preserved)';
+  try {
+    await ElMessageBox.confirm(
+      `This will ${action}. Continue?`,
+      'Uninstall OpenPA',
+      {
+        type: mode === 'purge' ? 'error' : 'warning',
+        confirmButtonText: mode === 'purge' ? 'Remove all data' : 'Uninstall',
+        cancelButtonText: 'Cancel',
+        confirmButtonClass: mode === 'purge' ? 'el-button--danger' : '',
+      },
+    );
+  } catch {
+    return; // user cancelled
+  }
+  uninstallDialogOpen.value = false;
+  uninstallLogLines.value = [];
+  uninstallFinished.value = null;
+  uninstallLogOpen.value = true;
+  uninstallRunning.value = true;
+
+  if (window.openpa?.installer?.onUninstallLog) {
+    window.openpa.installer.onUninstallLog(appendUninstallLog);
+  }
+  if (window.openpa?.installer?.onUninstallDone) {
+    window.openpa.installer.onUninstallDone(handleUninstallDone);
+  }
+
+  try {
+    await window.openpa!.installer!.uninstall!(mode);
+  } catch (err: any) {
+    uninstallRunning.value = false;
+    uninstallFinished.value = { exitCode: -1, mode };
+    uninstallLogLines.value.push(`[error] ${err?.message ?? String(err)}`);
+  }
+}
+
+function closeUninstallLog() {
+  // While the script is running we won't let the user close — once it
+  // finishes we drop the listeners and either relaunch (purge) or just
+  // close the dialog (keep).
+  if (uninstallRunning.value) return;
+  uninstallLogOpen.value = false;
+
+  if (uninstallFinished.value && uninstallFinished.value.exitCode === 0) {
+    // Main process also resets the config; we relay so the next route
+    // navigation hits the first-run installer.
+    void window.openpa?.setConfig({ agentUrl: '', deploymentType: '' });
+    // A relaunch isn't strictly necessary — navigating to /setup achieves
+    // the same UI state — but it also clears any cached subprocess
+    // handles and forces the install-marker re-check.
+    void router.push('/setup');
+  }
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────
 
 onMounted(() => {
   void doCheck();
   setInterval(() => { now.value = Date.now(); }, 10_000);
+});
+
+onBeforeUnmount(() => {
+  if (window.openpa?.installer?.offUninstallLog) {
+    window.openpa.installer.offUninstallLog(appendUninstallLog);
+  }
+  if (window.openpa?.installer?.offUninstallDone) {
+    window.openpa.installer.offUninstallDone(handleUninstallDone);
+  }
 });
 
 function goBack() {
@@ -264,7 +383,116 @@ function goBack() {
           users still get the one-click Update button above.
         </p>
       </ElCard>
+
+      <!-- ── Danger zone: Uninstall (Electron only) ─────────────────── -->
+      <ElCard
+        v-if="isElectron()"
+        class="section-card danger-card"
+        shadow="never"
+      >
+        <h3 class="section-title danger-title">
+          <Icon icon="mdi:alert-octagon-outline" />
+          <span style="margin-left: 6px">Uninstall OpenPA</span>
+        </h3>
+        <p class="section-body">
+          Remove OpenPA from this machine. Choose <strong>Keep data</strong>
+          to preserve your conversations and settings (a future reinstall
+          will pick up where you left off), or <strong>Remove all data</strong>
+          to wipe everything OpenPA stored on this machine. Your User
+          Working Directory (documents you've created) is never touched.
+        </p>
+        <div class="action-row">
+          <ElButton type="danger" plain @click="openUninstallDialog">
+            <Icon icon="mdi:delete-outline" />
+            <span style="margin-left: 6px">Uninstall…</span>
+          </ElButton>
+        </div>
+      </ElCard>
     </div>
+
+    <!-- ── Uninstall mode picker dialog ─────────────────────────────── -->
+    <ElDialog
+      v-model="uninstallDialogOpen"
+      title="Uninstall OpenPA"
+      width="480px"
+      :close-on-click-modal="false"
+    >
+      <p class="section-body">
+        Choose what happens to the data OpenPA has stored on this machine.
+        The User Working Directory (your documents) is preserved either way.
+      </p>
+      <ElRadioGroup v-model="uninstallMode" class="uninstall-options">
+        <ElRadio value="keep" size="large">
+          <div class="uninstall-option">
+            <div class="uninstall-option-title">Keep existing data</div>
+            <div class="uninstall-option-hint">
+              Remove the binaries but preserve <code>.env</code>,
+              <code>bootstrap.toml</code>, <code>storage/</code>, and tokens.
+              A future install reuses them.
+            </div>
+          </div>
+        </ElRadio>
+        <ElRadio value="purge" size="large">
+          <div class="uninstall-option">
+            <div class="uninstall-option-title">Remove all data</div>
+            <div class="uninstall-option-hint">
+              Delete the entire System Directory. For Docker installs,
+              also runs <code>docker compose down -v</code> to remove
+              named volumes. Cannot be undone.
+            </div>
+          </div>
+        </ElRadio>
+      </ElRadioGroup>
+      <template #footer>
+        <ElButton @click="uninstallDialogOpen = false">Cancel</ElButton>
+        <ElButton
+          :type="uninstallMode === 'purge' ? 'danger' : 'primary'"
+          @click="confirmAndRunUninstall"
+        >
+          Continue
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- ── Uninstall progress / log dialog ─────────────────────────── -->
+    <ElDialog
+      v-model="uninstallLogOpen"
+      :title="uninstallRunning ? 'Uninstalling…' : 'Uninstall finished'"
+      width="640px"
+      :close-on-click-modal="false"
+      :show-close="!uninstallRunning"
+      :before-close="(done: () => void) => { if (!uninstallRunning) done(); }"
+    >
+      <div class="uninstall-log">
+        <div v-for="(line, idx) in uninstallLogLines" :key="idx" class="uninstall-log-line">{{ line }}</div>
+      </div>
+      <div v-if="uninstallFinished" class="uninstall-finished-line">
+        <template v-if="uninstallFinished.exitCode === 0">
+          <Icon icon="mdi:check-circle" class="finished-ok" />
+          <span style="margin-left: 6px">
+            OpenPA has been
+            {{ uninstallFinished.mode === 'purge' ? 'uninstalled and all data removed' : 'uninstalled (data preserved)' }}.
+          </span>
+        </template>
+        <template v-else>
+          <Icon icon="mdi:alert-circle" class="finished-fail" />
+          <span style="margin-left: 6px">Uninstall failed (exit code {{ uninstallFinished.exitCode }}).</span>
+        </template>
+      </div>
+      <template #footer>
+        <ElButton
+          type="primary"
+          :disabled="uninstallRunning"
+          @click="closeUninstallLog"
+        >
+          {{
+            uninstallRunning ? 'Working…'
+              : uninstallFinished?.exitCode === 0 ? 'Continue to Setup'
+              : 'Close'
+          }}
+        </ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -336,4 +564,27 @@ function goBack() {
   margin: 12px 0 0 0;
 }
 .info-only { opacity: 0.9; }
+
+.danger-card {
+  border-left: 3px solid var(--el-color-danger);
+  margin-top: 24px;
+}
+.danger-title { color: var(--el-color-danger); display: flex; align-items: center; }
+.uninstall-options { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.uninstall-option { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+.uninstall-option-title { font-weight: 600; color: var(--text-primary); }
+.uninstall-option-hint { font-size: 0.8rem; color: var(--text-tertiary); line-height: 1.4; }
+.uninstall-log {
+  max-height: 320px; overflow-y: auto; background: var(--bg-color);
+  border: 1px solid var(--border-color); border-radius: 4px;
+  padding: 8px 12px; font-family: var(--font-mono, monospace);
+  font-size: 0.78rem; line-height: 1.5; color: var(--text-primary);
+}
+.uninstall-log-line { white-space: pre-wrap; word-break: break-word; }
+.uninstall-finished-line {
+  display: flex; align-items: center; margin-top: 12px;
+  font-size: 0.875rem; color: var(--text-primary);
+}
+.finished-ok { color: var(--el-color-success); font-size: 20px; }
+.finished-fail { color: var(--el-color-danger); font-size: 20px; }
 </style>

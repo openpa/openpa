@@ -41,7 +41,7 @@ def me(ctx: typer.Context) -> None:
         ("subject", me_info.subject),
         ("issued_at", _format_unix(me_info.issued_at)),
         ("expires_at", _format_unix(me_info.expires_at)),
-        ("working_dir", me_info.working_dir),
+        ("system_dir", me_info.system_dir),
         ("user_working_dir", me_info.user_working_dir),
     ])
 

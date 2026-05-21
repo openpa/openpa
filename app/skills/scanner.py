@@ -1,6 +1,6 @@
 """Agent skills scanner.
 
-Scans ``{OPENPA_WORKING_DIR}/skills/`` for skill directories containing a
+Scans ``{OPENPA_SYSTEM_DIR}/skills/`` for skill directories containing a
 ``SKILL.md`` file. Each valid skill is parsed into a :class:`SkillInfo`.
 
 Skills are pure context injection: their ``SKILL.md`` content is loaded

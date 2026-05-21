@@ -6,7 +6,7 @@ dispatches to the correct handler in code (navigate, snapshot, screenshot,
 click, type, tabs, evaluate).
 
 By default the tool launches the system-installed Google Chrome with a
-persistent profile under ``<OPENPA_WORKING_DIR>/browser-profile`` so cookies
+persistent profile under ``<OPENPA_SYSTEM_DIR>/browser-profile`` so cookies
 and logins survive between sessions. To connect to an already-running browser
 instead, set the ``BROWSER_CDP_URL`` config variable.
 """
@@ -111,7 +111,7 @@ TOOL_CONFIG: ToolConfig = {
         Var.USER_DATA_DIR: {
             "description": (
                 "Directory for the persistent browser profile (cookies, "
-                "logins, history). Default: <OPENPA_WORKING_DIR>/browser-profile. "
+                "logins, history). Default: <OPENPA_SYSTEM_DIR>/browser-profile. "
                 "Do NOT point this at your real Chrome profile while Chrome "
                 "is already running with that profile."
             ),
@@ -165,7 +165,7 @@ class _BrowserSession:
         self._headless = headless
         self._channel = (channel or "chrome").strip()
         self._user_data_dir = (user_data_dir or "").strip() or os.path.join(
-            BaseConfig.OPENPA_WORKING_DIR, "browser-profile"
+            BaseConfig.OPENPA_SYSTEM_DIR, "browser-profile"
         )
         self._executable_path = (executable_path or "").strip()
         self._playwright: Optional[Playwright] = None
@@ -209,7 +209,7 @@ class _BrowserSession:
                 changed = True
         if user_data_dir is not None:
             new_dir = (user_data_dir or "").strip() or os.path.join(
-                BaseConfig.OPENPA_WORKING_DIR, "browser-profile"
+                BaseConfig.OPENPA_SYSTEM_DIR, "browser-profile"
             )
             if new_dir != self._user_data_dir:
                 self._user_data_dir = new_dir
@@ -396,7 +396,7 @@ def _profile_default_user_data_dir(profile: str) -> str:
     Mirrors the per-profile path convention used elsewhere (e.g. PERSONA.md
     at ``~/.openpa/<profile>/PERSONA.md``).
     """
-    return os.path.join(BaseConfig.OPENPA_WORKING_DIR, profile, "browser-profile")
+    return os.path.join(BaseConfig.OPENPA_SYSTEM_DIR, profile, "browser-profile")
 
 
 def _coerce_headless(value: Optional[str], default: bool = False) -> bool:
@@ -731,7 +731,7 @@ class BrowserTool(BuiltInTool):
         try:
             page = await session.get_page(target_id)
 
-            out_dir = os.path.join(BaseConfig.OPENPA_WORKING_DIR, "browser_screenshots")
+            out_dir = os.path.join(BaseConfig.OPENPA_SYSTEM_DIR, "browser_screenshots")
             os.makedirs(out_dir, exist_ok=True)
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             file_name = f"screenshot_{timestamp}.png"

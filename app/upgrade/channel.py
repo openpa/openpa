@@ -4,7 +4,7 @@ OpenPA ships three release channels: ``production`` (PyPI + GitHub
 ``/releases/latest``), ``test`` (Test PyPI + GitHub prereleases tagged
 ``v*-testN``), and ``dev`` (editable install rooted at the bind-mounted
 source checkout — Docker dev mode and ``uv sync`` native dev mode). The
-channel is decided at install time and written to ``~/.openpa/.env`` as
+channel is decided at install time and written to ``<OPENPA_SYSTEM_DIR>/.env`` as
 ``OPENPA_UPGRADE_CHANNEL``; switching channels is a deliberate reinstall,
 not a runtime toggle.
 

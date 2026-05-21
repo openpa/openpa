@@ -18,7 +18,7 @@ class Me:
     profile: str
     issued_at: int
     expires_at: int
-    working_dir: str
+    system_dir: str
     user_working_dir: str
 
     @classmethod
@@ -28,7 +28,7 @@ class Me:
             profile=str(d.get("profile") or ""),
             issued_at=int(d.get("iat") or 0),
             expires_at=int(d.get("exp") or 0),
-            working_dir=str(d.get("working_dir") or ""),
+            system_dir=str(d.get("system_dir") or ""),
             user_working_dir=str(d.get("user_working_dir") or ""),
         )
 
@@ -38,7 +38,7 @@ class Me:
             "profile": self.profile,
             "issued_at": self.issued_at,
             "expires_at": self.expires_at,
-            "working_dir": self.working_dir,
+            "system_dir": self.system_dir,
             "user_working_dir": self.user_working_dir,
         }
 

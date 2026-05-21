@@ -58,6 +58,9 @@ type OpenPAInstallVersions = {
   htmlUrls: Record<string, string>
 }
 
+type OpenPAUninstallMode = 'keep' | 'purge'
+type OpenPAUninstallDone = { exitCode: number; mode?: OpenPAUninstallMode; error?: string }
+
 type OpenPAInstallerBridge = {
   detect: () => Promise<OpenPAInstallerEnvironment>
   listVersions: () => Promise<OpenPAInstallVersions>
@@ -67,6 +70,14 @@ type OpenPAInstallerBridge = {
   offLog: (cb: (entry: OpenPAInstallerLog) => void) => void
   onDone: (cb: (result: OpenPAInstallerDone) => void) => void
   offDone: (cb: (result: OpenPAInstallerDone) => void) => void
+  // Uninstall flow — mirrors the install side. ``uninstall`` resolves
+  // once the spawned uninstall.{sh,ps1} exits; ``onUninstallLog`` /
+  // ``onUninstallDone`` carry progress + the terminal result.
+  uninstall: (mode: OpenPAUninstallMode) => Promise<{ exitCode: number }>
+  onUninstallLog: (cb: (entry: OpenPAInstallerLog) => void) => void
+  offUninstallLog: (cb: (entry: OpenPAInstallerLog) => void) => void
+  onUninstallDone: (cb: (result: OpenPAUninstallDone) => void) => void
+  offUninstallDone: (cb: (result: OpenPAUninstallDone) => void) => void
 }
 
 // Status events emitted by electron-updater. We mirror the underlying

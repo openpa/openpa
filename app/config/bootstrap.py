@@ -16,7 +16,7 @@ Layout (TOML):
     password = "..."
     sslmode  = "prefer"             # disable | allow | prefer | require | verify-ca | verify-full
 
-The file lives at ``<OPENPA_WORKING_DIR>/bootstrap.toml`` (default
+The file lives at ``<OPENPA_SYSTEM_DIR>/bootstrap.toml`` (default
 ``~/.openpa/bootstrap.toml``) and is created by the setup wizard. If the file
 is missing, the system defaults to SQLite, which is also what a fresh
 installation gets.
@@ -47,7 +47,7 @@ def _bootstrap_path() -> Path:
     # Imported lazily so this module stays import-safe even if settings.py
     # itself wants to read the bootstrap during its own import.
     from app.config.settings import BaseConfig
-    return Path(BaseConfig.OPENPA_WORKING_DIR) / "bootstrap.toml"
+    return Path(BaseConfig.OPENPA_SYSTEM_DIR) / "bootstrap.toml"
 
 
 def bootstrap_exists() -> bool:

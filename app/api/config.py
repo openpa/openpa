@@ -433,7 +433,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         if requested not in ("sqlite", "postgres"):
             return f"Unknown db_provider: {requested!r}"
 
-        bootstrap_path = Path(BaseConfig.OPENPA_WORKING_DIR) / "bootstrap.toml"
+        bootstrap_path = Path(BaseConfig.OPENPA_SYSTEM_DIR) / "bootstrap.toml"
         if bootstrap_path.exists():
             # Choice is locked; silently ignore any disagreement.
             return None
@@ -713,7 +713,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
                     # re-enters deferred mode cleanly. Best-effort —
                     # surface a 500 either way.
                     try:
-                        (Path(BaseConfig.OPENPA_WORKING_DIR) / "bootstrap.toml").unlink()
+                        (Path(BaseConfig.OPENPA_SYSTEM_DIR) / "bootstrap.toml").unlink()
                     except OSError:
                         pass
                     from app.databases import set_database_provider as _sdp
@@ -770,7 +770,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
             # first run, even if the wizard payload didn't include it.
             user_working_dir = server_config.get("user_working_dir")
             if not user_working_dir:
-                user_working_dir = os.path.join(os.path.expanduser("~"), "Documents")
+                user_working_dir = os.path.join(os.path.expanduser("~"), ".openpa")
                 config_storage.set("server_config", "user_working_dir", user_working_dir)
             expanded_uwd = os.path.expanduser(user_working_dir) if user_working_dir.startswith("~") else user_working_dir
             try:
@@ -957,7 +957,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         token, expires_at = _generate_token(jwt_secret, profile_name)
 
         # Persist token to disk for recovery
-        tokens_dir = Path(BaseConfig.OPENPA_WORKING_DIR) / "tokens"
+        tokens_dir = Path(BaseConfig.OPENPA_SYSTEM_DIR) / "tokens"
         tokens_dir.mkdir(parents=True, exist_ok=True)
         token_file = tokens_dir / f"{profile_name}.token"
         token_file.write_text(token, encoding="utf-8")
