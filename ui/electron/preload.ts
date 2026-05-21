@@ -61,6 +61,35 @@ contextBridge.exposeInMainWorld('openpa', {
         installerListeners.delete(callback)
       }
     },
+    // Uninstall flow — keeps the same subscribe/unsubscribe shape as the
+    // install side. ``mode`` is 'keep' (preserve .env/storage/tokens) or
+    // 'purge' (wipe the System Dir; Docker volumes go too).
+    uninstall: (mode: 'keep' | 'purge') =>
+      ipcRenderer.invoke('openpa:installer:uninstall', mode),
+    onUninstallLog(callback: (entry: { stream: string; line: string }) => void) {
+      const wrapper = (_event: any, payload: any) => callback(payload)
+      installerListeners.set(callback, wrapper)
+      ipcRenderer.on('openpa:installer:uninstall:log', wrapper)
+    },
+    offUninstallLog(callback: (entry: { stream: string; line: string }) => void) {
+      const wrapper = installerListeners.get(callback)
+      if (wrapper) {
+        ipcRenderer.off('openpa:installer:uninstall:log', wrapper)
+        installerListeners.delete(callback)
+      }
+    },
+    onUninstallDone(callback: (result: { exitCode: number; mode?: 'keep' | 'purge'; error?: string }) => void) {
+      const wrapper = (_event: any, payload: any) => callback(payload)
+      installerListeners.set(callback, wrapper)
+      ipcRenderer.on('openpa:installer:uninstall:done', wrapper)
+    },
+    offUninstallDone(callback: (result: { exitCode: number; mode?: 'keep' | 'purge'; error?: string }) => void) {
+      const wrapper = installerListeners.get(callback)
+      if (wrapper) {
+        ipcRenderer.off('openpa:installer:uninstall:done', wrapper)
+        installerListeners.delete(callback)
+      }
+    },
   },
 
   // Backend lifecycle bridge. The renderer calls ``server.start()`` on

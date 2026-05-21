@@ -57,8 +57,12 @@ function pickInitialDeploymentMode(saved: string | undefined): DeploymentMode {
 const form = ref({
   service_name: props.config.service_name || 'openpa-agent',
   agent_name: props.config.agent_name || 'OPENPA Agent',
-  working_dir: props.config.working_dir || '~/.openpa',
-  user_working_dir: props.config.user_working_dir || '~/Documents',
+  // The System Directory is no longer user-modifiable — it's resolved
+  // by the install script + Python backend from a platform-conventional
+  // default (or the OPENPA_SYSTEM_DIR env var). The wizard previously
+  // exposed it as an editable field but the backend never persisted the
+  // value, so we drop the field and only display the resolved path.
+  user_working_dir: props.config.user_working_dir || '~/.openpa',
   sqlite_db_path: props.config.sqlite_db_path || 'openpa.db',
   db_provider: ((props.config.db_provider as 'sqlite' | 'postgres') ?? 'sqlite') as 'sqlite' | 'postgres',
   postgres: {
@@ -95,7 +99,6 @@ function buildPayload() {
   const base: Record<string, any> = {
     service_name: form.value.service_name,
     agent_name: form.value.agent_name,
-    working_dir: form.value.working_dir,
     user_working_dir: form.value.user_working_dir,
   };
   if (!isFirstSetup.value || form.value.db_provider === 'sqlite') {
@@ -149,13 +152,15 @@ onMounted(() => {
       <ElFormItem label="Agent Display Name">
         <ElInput v-model="form.agent_name" placeholder="OPENPA Agent" />
       </ElFormItem>
-      <ElFormItem label="OpenPA System Directory">
-        <ElInput v-model="form.working_dir" placeholder="~/.openpa" />
-        <div class="field-hint">Internal storage for profiles, skills, persona, and tool state.</div>
-      </ElFormItem>
       <ElFormItem label="User Working Directory">
-        <ElInput v-model="form.user_working_dir" placeholder="~/Documents" />
-        <div class="field-hint">Default active path for all tools. Created on first run if missing.</div>
+        <ElInput v-model="form.user_working_dir" placeholder="~/.openpa" />
+        <div class="field-hint">
+          Default active path for all tools — where the agent reads and
+          writes the files you ask it to work on. Created on first run if
+          missing. OpenPA's own internal storage (profiles, skills,
+          persona, tool state) lives in a separate, platform-conventional
+          System Directory that is not user-modifiable.
+        </div>
       </ElFormItem>
 
       <template v-if="isFirstSetup">

@@ -63,7 +63,7 @@ def status_path() -> Path:
     """
     from app.config.settings import BaseConfig
 
-    return Path(BaseConfig.OPENPA_WORKING_DIR) / ".upgrade.status.json"
+    return Path(BaseConfig.OPENPA_SYSTEM_DIR) / ".upgrade.status.json"
 
 
 def _empty() -> dict[str, Any]:

@@ -2,7 +2,7 @@
 
 Converts documents (PDF, DOCX, XLSX, PPTX, HTML, CSV, etc.) to Markdown
 using the markitdown library. Output files are written to
-OPENPA_WORKING_DIR/<profile>/markdown_files/ with timestamped names.
+OPENPA_SYSTEM_DIR/<profile>/markdown_files/ with timestamped names.
 """
 
 import os
@@ -302,5 +302,5 @@ class ConvertToMarkdownTool(BuiltInTool):
 
 def get_tools(config: dict) -> list[BuiltInTool]:
     """Return tool instances for this server."""
-    data_dir = config.get("OPENPA_WORKING_DIR", os.path.join(os.path.expanduser("~"), ".openpa"))
+    data_dir = config.get("OPENPA_SYSTEM_DIR", os.path.join(os.path.expanduser("~"), ".openpa"))
     return [ConvertToMarkdownTool(data_dir=data_dir)]

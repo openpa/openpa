@@ -6,7 +6,7 @@ vector store back-end the user picked (Qdrant or Chroma).
 Responsibilities
 ----------------
 - ``seed_shared_from_app(...)``  -- on boot, mirror bundled
-  ``<repo>/documents/*.md`` into ``<OPENPA_WORKING_DIR>/documents/`` exactly:
+  ``<repo>/documents/*.md`` into ``<OPENPA_SYSTEM_DIR>/documents/`` exactly:
   missing files are copied in, divergent files are overwritten, and files
   not present in the bundle are deleted. The bundle is authoritative for
   system documents, so any in-session edits or extras only live until the

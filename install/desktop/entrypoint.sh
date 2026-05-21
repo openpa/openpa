@@ -121,7 +121,7 @@ export DISPLAY=:0
 #
 # For an existing install (volume already has bootstrap.toml), this
 # branch idempotently applies any new migrations on every boot.
-if [ -f "${OPENPA_WORKING_DIR:-/root/.openpa}/bootstrap.toml" ]; then
+if [ -f "${OPENPA_SYSTEM_DIR:-/root/.openpa}/bootstrap.toml" ]; then
     echo "[entrypoint] running db migrations..."
     openpa db upgrade
 else

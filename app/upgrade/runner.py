@@ -51,7 +51,7 @@ from app.upgrade.channel import Channel, get_channel
 def _lock_path() -> Path:
     from app.config.settings import BaseConfig
 
-    return Path(BaseConfig.OPENPA_WORKING_DIR) / ".upgrade.lock"
+    return Path(BaseConfig.OPENPA_SYSTEM_DIR) / ".upgrade.lock"
 
 
 # ── progress events ──────────────────────────────────────────────────────
@@ -412,7 +412,7 @@ def _apply_locked(release: manifest.ReleaseInfo, callback: ProgressCallback | No
 def _check_disk_space(*, min_free_mb: int) -> None:
     from app.config.settings import BaseConfig
 
-    target = Path(BaseConfig.OPENPA_WORKING_DIR)
+    target = Path(BaseConfig.OPENPA_SYSTEM_DIR)
     target.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(target)
     free_mb = usage.free // (1024 * 1024)
@@ -518,7 +518,7 @@ def _pip_install(
     # uv ignores ``PIP_CACHE_DIR`` so we set both to be explicit.
     from app.config.settings import BaseConfig
 
-    cache_dir = str(Path(BaseConfig.OPENPA_WORKING_DIR) / "pip-cache")
+    cache_dir = str(Path(BaseConfig.OPENPA_SYSTEM_DIR) / "pip-cache")
     env["PIP_CACHE_DIR"] = cache_dir
     env["UV_CACHE_DIR"] = cache_dir
 
@@ -633,7 +633,7 @@ def _open_run_log(label: str):
     try:
         from app.config.settings import BaseConfig
 
-        log_path = Path(BaseConfig.OPENPA_WORKING_DIR) / "upgrade.log"
+        log_path = Path(BaseConfig.OPENPA_SYSTEM_DIR) / "upgrade.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists() and log_path.stat().st_size > 5 * 1024 * 1024:
             tail_bytes = log_path.read_bytes()[-2 * 1024 * 1024 :]

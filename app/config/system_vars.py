@@ -25,7 +25,7 @@ from app.utils.logger import logger
 
 
 def _load_openpa_token(profile: Optional[str]) -> Optional[str]:
-    """Read the per-profile OPENPA_TOKEN from ``<OPENPA_WORKING_DIR>/tokens/<profile>.token``.
+    """Read the per-profile OPENPA_TOKEN from ``<OPENPA_SYSTEM_DIR>/tokens/<profile>.token``.
 
     Returns the stripped token string, or ``None`` if the profile is unset,
     the file is missing, or it cannot be read. Failure is non-fatal —
@@ -33,7 +33,7 @@ def _load_openpa_token(profile: Optional[str]) -> Optional[str]:
     """
     if not profile:
         return None
-    token_path = os.path.join(BaseConfig.OPENPA_WORKING_DIR, "tokens", f"{profile}.token")
+    token_path = os.path.join(BaseConfig.OPENPA_SYSTEM_DIR, "tokens", f"{profile}.token")
     try:
         with open(token_path, "r", encoding="utf-8") as f:
             token = f.read().strip()
@@ -63,9 +63,9 @@ class SystemVarSpec:
 
 SYSTEM_VARS: list[SystemVarSpec] = [
     SystemVarSpec(
-        name="OPENPA_SYSTEM_WORKING_DIR",
-        resolve=lambda _profile: BaseConfig.OPENPA_WORKING_DIR,
-        description="OpenPA internal working directory (~/.openpa).",
+        name="OPENPA_SYSTEM_DIR",
+        resolve=lambda _profile: BaseConfig.OPENPA_SYSTEM_DIR,
+        description="OpenPA System Directory (install + runtime artifacts root).",
     ),
     SystemVarSpec(
         name="OPENPA_USER_WORKING_DIR",

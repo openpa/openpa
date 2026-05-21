@@ -1,7 +1,7 @@
 """System File built-in tool.
 
 Provides file browsing, reading, and writing capabilities within the
-OPENPA_WORKING_DIR directory. Supports text and binary files with intelligent
+OPENPA_SYSTEM_DIR directory. Supports text and binary files with intelligent
 content handling via markitdown conversion and token-based limits. Write
 operations are restricted to human-readable text files.
 """
@@ -918,7 +918,7 @@ class WriteFileFromReferenceTool(BuiltInTool):
 
 def get_tools(config: dict) -> list[BuiltInTool]:
     """Return tool instances for this server."""
-    data_dir = config.get("OPENPA_WORKING_DIR", os.path.join(os.path.expanduser("~"), ".openpa"))
+    data_dir = config.get("OPENPA_SYSTEM_DIR", os.path.join(os.path.expanduser("~"), ".openpa"))
     return [
         SearchFilesTool(data_dir=data_dir),
         ListFilesTool(data_dir=data_dir),

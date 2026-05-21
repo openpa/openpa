@@ -1,7 +1,7 @@
 """Persona file management utilities.
 
 Handles reading, writing, and ensuring per-profile PERSONA.md files
-within the OPENPA_WORKING_DIR.
+within the OPENPA_SYSTEM_DIR.
 """
 
 import os
@@ -16,11 +16,11 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 def _profile_persona_path(profile: str) -> Path:
     """Return the absolute path to a profile's PERSONA.md."""
-    return Path(BaseConfig.OPENPA_WORKING_DIR) / profile / PERSONA_FILENAME
+    return Path(BaseConfig.OPENPA_SYSTEM_DIR) / profile / PERSONA_FILENAME
 
 
 def ensure_persona_file(profile: str) -> Path:
-    """Ensure ``<OPENPA_WORKING_DIR>/<profile>/PERSONA.md`` exists.
+    """Ensure ``<OPENPA_SYSTEM_DIR>/<profile>/PERSONA.md`` exists.
 
     If the file is missing it is copied from ``app/templates/PERSONA.md``.
     The profile directory is created when necessary.

@@ -39,7 +39,7 @@ class ConversationStorage:
         # can stay agnostic about whether the global has been initialized
         # yet. Engine acquisition is deferred to first access — on SQLite,
         # ``provider.async_engine()`` calls ``_ensure_parent_dir()`` which
-        # would create ``~/.openpa/storage/`` before the Setup Wizard has
+        # would create ``<OPENPA_SYSTEM_DIR>/storage/`` before the Setup Wizard has
         # picked a backend. The wizard's hot-swap path still relies on
         # ``invalidate_storage_singletons()`` to rebuild this instance.
         self.provider = provider or get_database_provider()

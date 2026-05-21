@@ -122,7 +122,7 @@ async def spawn_from_autostart(
     if not command:
         return None, "Empty command"
 
-    working_dir = row.get("working_dir") or BaseConfig.OPENPA_WORKING_DIR
+    working_dir = row.get("working_dir") or BaseConfig.OPENPA_SYSTEM_DIR
     is_pty = bool(row.get("is_pty"))
     system = platform.system()
     shell, shell_flag = _shell_for(system)
@@ -203,10 +203,10 @@ async def spawn_from_autostart(
         # picks it up.
         process_id = _uuid.uuid4().hex[:8]
         # Stdout/state files are OpenPA-internal storage and live under
-        # OPENPA_WORKING_DIR/<profile>, not under the spawned process's cwd.
+        # OPENPA_SYSTEM_DIR/<profile>, not under the spawned process's cwd.
         profile_for_logs = row.get("profile") or "admin"
         log_dir = os.path.join(
-            BaseConfig.OPENPA_WORKING_DIR, profile_for_logs,
+            BaseConfig.OPENPA_SYSTEM_DIR, profile_for_logs,
             "tools", "builtin", "exec_shell", "stdout", process_id,
         )
         os.makedirs(log_dir, exist_ok=True)

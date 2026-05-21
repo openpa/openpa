@@ -1,6 +1,6 @@
 """Filesystem watcher for the agent skills directory.
 
-Uses the ``watchdog`` library to monitor ``{OPENPA_WORKING_DIR}/skills/``
+Uses the ``watchdog`` library to monitor ``{OPENPA_SYSTEM_DIR}/skills/``
 for directory and file changes.  When a relevant change is detected (new
 skill added, SKILL.md modified, skill directory deleted) it debounces
 for a short window and then re-scans the entire directory, invoking the

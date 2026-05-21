@@ -735,7 +735,7 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
             document_service = None
             try:
                 document_service = DocumentSyncService(
-                    working_dir=Path(BaseConfig.OPENPA_WORKING_DIR),
+                    working_dir=Path(BaseConfig.OPENPA_SYSTEM_DIR),
                     vector_store=vector_store,
                     embedding=embedding,
                 )

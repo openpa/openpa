@@ -10,8 +10,8 @@ Allowed targets:
 - ``user_working`` -- the profile-global default (``get_user_working_directory()``).
   Selecting this clears any prior override so the conversation tracks the live
   default again.
-- ``skills``       -- ``<OPENPA_WORKING_DIR>/<profile>/skills``.
-- ``documents``    -- ``<OPENPA_WORKING_DIR>/<profile>/documents``.
+- ``skills``       -- ``<OPENPA_SYSTEM_DIR>/<profile>/skills``.
+- ``documents``    -- ``<OPENPA_SYSTEM_DIR>/<profile>/documents``.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def _resolve_target(
     if target == "skills":
         return profile_skills_dir(profile)
     if target == "documents":
-        return Path(BaseConfig.OPENPA_WORKING_DIR) / profile / "documents"
+        return Path(BaseConfig.OPENPA_SYSTEM_DIR) / profile / "documents"
     if target == "user_working":
         return Path(get_user_working_directory())
     if target == "custom":

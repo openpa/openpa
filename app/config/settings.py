@@ -5,6 +5,7 @@ All other configuration reads from Dynaconf TOML defaults, overridable via SQLit
 """
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -67,7 +68,41 @@ def get_dynamic(table: str, key: str, default=None, profile: str | None = None):
     return default
 
 
-DEFAULT_USER_WORKING_DIR = os.path.join(os.path.expanduser("~"), "Documents")
+DEFAULT_USER_WORKING_DIR = os.path.join(os.path.expanduser("~"), ".openpa")
+
+
+def _default_system_dir() -> str:
+    """Platform-conventional default for the OpenPA System Directory.
+
+    Linux:   ``$XDG_DATA_HOME/openpa`` (falls back to ``~/.local/share/openpa``)
+    macOS:   ``~/Library/Application Support/OpenPA``
+    Windows: ``%LOCALAPPDATA%\\OpenPA``
+    """
+    home = Path.home()
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
+        return str(Path(base) / "OpenPA")
+    if sys.platform == "darwin":
+        return str(home / "Library" / "Application Support" / "OpenPA")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else home / ".local" / "share"
+    return str(base / "openpa")
+
+
+def get_system_directory() -> str:
+    """Resolve the OpenPA System Directory — install + runtime artifacts root.
+
+    Holds: ``.env``, ``bootstrap.toml``, ``storage/openpa.db``, ``venv/``,
+    ``bin/``, ``docker/``, ``tokens/``, install/server/upgrade logs and PID
+    files, ``pip-cache/``, per-profile state (``<profile>/PERSONA.md``,
+    ``<profile>/skills/``, ``<profile>/browser-profile/``, ...).
+
+    Override via ``OPENPA_SYSTEM_DIR`` env var; otherwise platform default.
+    """
+    raw = os.environ.get("OPENPA_SYSTEM_DIR") or _default_system_dir()
+    if raw.startswith("~"):
+        raw = os.path.expanduser(raw)
+    return os.path.normpath(raw)
 
 
 def get_user_working_directory() -> str:
@@ -75,12 +110,12 @@ def get_user_working_directory() -> str:
     into built-in tools as ``_working_directory`` and shown to the LLM as the
     ``Current User Working Directory``.
 
-    Distinct from ``BaseConfig.OPENPA_WORKING_DIR``, which is reserved for
+    Distinct from ``BaseConfig.OPENPA_SYSTEM_DIR``, which is reserved for
     OpenPA-internal paths (skills, PERSONA.md, exec_shell stdout).
 
     Resolution order:
       1. ``server_config.user_working_dir`` (set via setup wizard)
-      2. ``~/Documents`` fallback
+      2. ``~/.openpa`` fallback
 
     The returned directory is created if it does not exist.
     """
@@ -121,14 +156,10 @@ class BaseConfig:
     JWT_EXPIRATION_HOURS = int(_dynaconf_get("general.jwt_expiration_hours", 720))
     SESSION_TOKEN_DEFAULT_TTL = int(_dynaconf_get("general.session_token_default_ttl", 3600))
     MCP_TOOL_CALL_TIMEOUT = int(_dynaconf_get("general.mcp_tool_call_timeout", 300))
-    OPENPA_WORKING_DIR = _dynaconf_get("general.working_dir", os.path.join(os.path.expanduser("~"), ".openpa"))
-    # Expand ~ and normalize path separators (avoids mixed \ and / on Windows)
-    if OPENPA_WORKING_DIR.startswith("~"):
-        OPENPA_WORKING_DIR = os.path.expanduser(OPENPA_WORKING_DIR)
-    OPENPA_WORKING_DIR = os.path.normpath(OPENPA_WORKING_DIR)
+    OPENPA_SYSTEM_DIR = get_system_directory()
 
     SQLITE_DB_PATH = os.path.join(
-        OPENPA_WORKING_DIR, "storage",
+        OPENPA_SYSTEM_DIR, "storage",
         _dynaconf_get("general.sqlite_db_path", "openpa.db"),
     )
 
@@ -156,7 +187,7 @@ class BaseConfig:
     CHROMA_PERSIST_PATH = (
         os.path.normpath(os.path.expanduser(_chroma_persist_raw))
         if _chroma_persist_raw
-        else os.path.join(OPENPA_WORKING_DIR, "storage", "chroma")
+        else os.path.join(OPENPA_SYSTEM_DIR, "storage", "chroma")
     )
 
     # ── LLM (configured via setup wizard, stored in SQLite) ──

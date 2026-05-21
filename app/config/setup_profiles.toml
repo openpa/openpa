@@ -28,8 +28,7 @@ db_provider = "sqlite"
 sqlite_db_path = "openpa.db"
 service_name = "openpa-agent"
 agent_name = "OPENPA Agent"
-working_dir = "~/.openpa"
-user_working_dir = "~/Documents"
+user_working_dir = "~/.openpa"
 
 [local.embedding_config]
 enabled = false
@@ -66,8 +65,7 @@ db_provider = "postgres"
 sqlite_db_path = "openpa.db"
 service_name = "openpa-agent"
 agent_name = "OPENPA Agent"
-working_dir = "~/.openpa"
-user_working_dir = "~/Documents"
+user_working_dir = "~/.openpa"
 
 [docker.server_config.postgres]
 host = "postgres"
@@ -112,8 +110,7 @@ db_provider = "postgres"
 sqlite_db_path = "openpa.db"
 service_name = "openpa-agent"
 agent_name = "OPENPA Agent"
-working_dir = "~/.openpa"
-user_working_dir = "~/Documents"
+user_working_dir = "~/.openpa"
 
 [server.server_config.postgres]
 host = ""

@@ -22,7 +22,7 @@
 #   --no-launch                 Skip opening the setup wizard at the end.
 #   --unattended                Use defaults; never prompt. Implies --no-launch
 #                               unless deployment+host are also provided.
-#   --reinstall                 Wipe any existing ~/.openpa/venv before installing.
+#   --reinstall                 Wipe any existing $OPENPA_SYSTEM_DIR/venv before installing.
 #   --auto-install-python       Auto-install isolated Python 3.13 if missing
 #                               (default: prompt; --unattended installs silently).
 #   --no-auto-install-python    Never auto-install; print manual hints and exit.
@@ -280,21 +280,35 @@ fi
 
 # ── paths ─────────────────────────────────────────────────────────────────
 
-# Honour OPENPA_WORKING_DIR so power users can install side-by-side
-# (e.g., a staging copy under ~/.openpa-staging).
-OPENPA_HOME="${OPENPA_WORKING_DIR:-$HOME/.openpa}"
-VENV_DIR="$OPENPA_HOME/venv"
-ENV_FILE="$OPENPA_HOME/.env"
-BOOTSTRAP_FILE="$OPENPA_HOME/bootstrap.toml"
-LOG_FILE="$OPENPA_HOME/install.log"
-BIN_DIR="$OPENPA_HOME/bin"
+# OpenPA System Directory — install + runtime artifacts root. Platform-
+# conventional default: ~/.local/share/openpa on Linux, ~/Library/Application
+# Support/OpenPA on macOS. Override via OPENPA_SYSTEM_DIR so power users can
+# install side-by-side (e.g., a staging copy at /tmp/openpa-staging).
+if [ -z "$OPENPA_SYSTEM_DIR" ]; then
+    case "$(uname -s)" in
+        Darwin) OPENPA_SYSTEM_DIR="$HOME/Library/Application Support/OpenPA" ;;
+        *)      OPENPA_SYSTEM_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openpa" ;;
+    esac
+fi
+VENV_DIR="$OPENPA_SYSTEM_DIR/venv"
+ENV_FILE="$OPENPA_SYSTEM_DIR/.env"
+BOOTSTRAP_FILE="$OPENPA_SYSTEM_DIR/bootstrap.toml"
+LOG_FILE="$OPENPA_SYSTEM_DIR/install.log"
+BIN_DIR="$OPENPA_SYSTEM_DIR/bin"
 UV_BIN="$BIN_DIR/uv"
 
+# Resolve the canonical platform default so MODIFY_PATH only fires for it
+# (staging installs at custom OPENPA_SYSTEM_DIR don't clobber the prod PATH).
+case "$(uname -s)" in
+    Darwin) _DEFAULT_OPENPA_SYSTEM_DIR="$HOME/Library/Application Support/OpenPA" ;;
+    *)      _DEFAULT_OPENPA_SYSTEM_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openpa" ;;
+esac
+
 # Default MODIFY_PATH: only modify shell rc for the canonical install dir,
-# so a staging/test install at OPENPA_WORKING_DIR=~/.openpa-test doesn't
-# clobber the prod PATH entry. --modify-path / --no-modify-path override.
+# so a staging/test install at a custom OPENPA_SYSTEM_DIR doesn't clobber
+# the prod PATH entry. --modify-path / --no-modify-path override.
 if [ -z "$MODIFY_PATH" ]; then
-    if [ "$OPENPA_HOME" = "$HOME/.openpa" ]; then
+    if [ "$OPENPA_SYSTEM_DIR" = "$_DEFAULT_OPENPA_SYSTEM_DIR" ]; then
         MODIFY_PATH=1
     else
         MODIFY_PATH=0
@@ -302,13 +316,17 @@ if [ -z "$MODIFY_PATH" ]; then
 fi
 
 # Scope pip's HTTP + wheel cache under our install dir so a user-driven
-# `rm -rf ~/.openpa` (or --reinstall) can't leave behind a stale index
+# wipe of the System Dir (or --reinstall) can't leave behind a stale index
 # response that makes pip pin an old version. Without this, pip uses
 # ~/.cache/pip/, which persists across openpa reinstalls and has bitten
 # us when re-resolving the latest pre-release.
-export PIP_CACHE_DIR="$OPENPA_HOME/pip-cache"
+export PIP_CACHE_DIR="$OPENPA_SYSTEM_DIR/pip-cache"
 
-mkdir -p "$OPENPA_HOME"
+mkdir -p "$OPENPA_SYSTEM_DIR"
+
+# Forward to the Python backend so its settings layer agrees with the
+# install script on the System Dir location (subprocess inherits this).
+export OPENPA_SYSTEM_DIR
 
 # Templates are fetched at install time so we don't need to ship them
 # alongside the script. Production/test fetch from GitHub; dev reads from
@@ -339,7 +357,7 @@ if [ "$CHANNEL" = "dev" ]; then
     . "$CATALOG_BASE/_catalog.sh"
 else
     CATALOG_BASE="${OPENPA_CATALOG_BASE:-https://raw.githubusercontent.com/openpa/openpa/main/install}"
-    CATALOG_TMP="$(mktemp 2>/dev/null || echo "$OPENPA_HOME/_catalog.sh")"
+    CATALOG_TMP="$(mktemp 2>/dev/null || echo "$OPENPA_SYSTEM_DIR/_catalog.sh")"
     if ! curl -fsSL "$CATALOG_BASE/_catalog.sh" -o "$CATALOG_TMP"; then
         err "Failed to fetch install catalog from $CATALOG_BASE/_catalog.sh"
         exit 1
@@ -771,7 +789,7 @@ resolve_version() {
 if [ "$MODE" = "docker" ]; then
     step "Docker install"
 
-    DOCKER_DIR="$OPENPA_HOME/docker"
+    DOCKER_DIR="$OPENPA_SYSTEM_DIR/docker"
     mkdir -p "$DOCKER_DIR"
 
     # Sidecar services (postgres / qdrant / chroma) are no longer
@@ -1011,7 +1029,7 @@ prompt_for_python_install() {
     cat <<EOF
 
 OpenPA can install an isolated Python 3.13 just for itself
-(~70 MB downloaded into $OPENPA_HOME/python, no admin needed; system
+(~70 MB downloaded into $OPENPA_SYSTEM_DIR/python, no admin needed; system
 Python is left untouched).
 
 EOF
@@ -1029,7 +1047,7 @@ EOF
     done
 }
 
-# Download a private copy of `uv` into $OPENPA_HOME/bin so we can manage
+# Download a private copy of `uv` into $OPENPA_SYSTEM_DIR/bin so we can manage
 # Python and venv installs without touching system tools. Pinned to a
 # tested major.minor.
 install_uv_locally() {
@@ -1060,12 +1078,12 @@ EOF
     ok "Installed uv at $UV_BIN"
 }
 
-# Use uv to download an isolated Python 3.13 into $OPENPA_HOME/python and
+# Use uv to download an isolated Python 3.13 into $OPENPA_SYSTEM_DIR/python and
 # return its absolute path via $PYTHON. The cache and install dir are
-# scoped to OPENPA_HOME so `rm -rf ~/.openpa` removes everything.
+# scoped to OPENPA_SYSTEM_DIR so a System Dir wipe removes everything.
 install_python_via_uv() {
-    export UV_PYTHON_INSTALL_DIR="$OPENPA_HOME/python"
-    export UV_CACHE_DIR="$OPENPA_HOME/uv-cache"
+    export UV_PYTHON_INSTALL_DIR="$OPENPA_SYSTEM_DIR/python"
+    export UV_CACHE_DIR="$OPENPA_SYSTEM_DIR/uv-cache"
     info "Downloading isolated Python 3.13 (this may take a minute)"
     if ! "$UV_BIN" python install 3.13 >>"$LOG_FILE" 2>&1; then
         err "uv failed to install Python 3.13 — see $LOG_FILE."
@@ -1095,7 +1113,7 @@ step "Install"
 if [ "$CHANNEL" = "dev" ]; then
     # Dev channel: reuse the developer's local .venv (managed by ``uv
     # sync`` from <repo>/pyproject.toml) instead of building a parallel
-    # venv at $OPENPA_HOME/venv. The dev already has openpa + every
+    # venv at $OPENPA_SYSTEM_DIR/venv. The dev already has openpa + every
     # transitive dep installed in editable mode; reinstalling them into
     # a separate venv takes minutes for no benefit.
     if [ "$REINSTALL" -eq 1 ]; then
@@ -1246,8 +1264,8 @@ write_path_block_posix() {
     {
         printf '\n%s\n' "$PATH_MARKER_BEGIN"
         printf 'case ":$PATH:" in\n'
-        printf '    *":$HOME/.openpa/bin:"*) ;;\n'
-        printf '    *) export PATH="$HOME/.openpa/bin:$PATH" ;;\n'
+        printf '    *":%s:"*) ;;\n' "$BIN_DIR"
+        printf '    *) export PATH="%s:$PATH" ;;\n' "$BIN_DIR"
         printf 'esac\n'
         printf '%s\n' "$PATH_MARKER_END"
     } >> "$rcfile" 2>/dev/null
@@ -1261,8 +1279,8 @@ write_path_block_fish() {
     mkdir -p "$(dirname "$rcfile")"
     {
         printf '\n%s\n' "$PATH_MARKER_BEGIN"
-        printf 'if not contains $HOME/.openpa/bin $fish_user_paths\n'
-        printf '    set -Ux fish_user_paths $HOME/.openpa/bin $fish_user_paths\n'
+        printf 'if not contains %s $fish_user_paths\n' "$BIN_DIR"
+        printf '    set -Ux fish_user_paths %s $fish_user_paths\n' "$BIN_DIR"
         printf 'end\n'
         printf '%s\n' "$PATH_MARKER_END"
     } >> "$rcfile" 2>/dev/null
@@ -1404,7 +1422,7 @@ esac
 # Skip the default-SQLite bootstrap.toml when the Electron app is driving
 # — the Setup Wizard will write the file once the user picks a backend,
 # and the backend boots in deferred-storage mode until then so no DB is
-# materialised under ~/.openpa/storage before the user has chosen.
+# materialised under $OPENPA_SYSTEM_DIR/storage before the user has chosen.
 # Native installs (curl | sh, no Electron) get the SQLite default here,
 # matching the legacy behavior; the wizard can still flip them to
 # Postgres on first setup.
@@ -1427,7 +1445,7 @@ fi
 # file) when the Electron app is driving — the app starts the backend
 # only after the user clicks "Continue to Setup Wizard", and the backend
 # is what eventually creates the DB. Keeping this here means a stray
-# ~/.openpa/storage/openpa.db never shows up between the installer
+# $OPENPA_SYSTEM_DIR/storage/openpa.db never shows up between the installer
 # finishing and the user choosing to continue.
 if [ "${OPENPA_INSTALLER_FRONTEND:-}" != "electron" ]; then
     info "Migrating database to current schema"
@@ -1442,13 +1460,13 @@ fi
 # the app spawns the backend itself once the user clicks "Continue to
 # Setup Wizard", and that's also the point at which the SQLite DB is
 # created (via the backend's own initialize() call).
-SERVER_PID_FILE="$OPENPA_HOME/install.pid"
+SERVER_PID_FILE="$OPENPA_SYSTEM_DIR/install.pid"
 if [ "${OPENPA_INSTALLER_FRONTEND:-}" != "electron" ]; then
     step "Starting OpenPA"
 
     # We start the server in the background so the wizard URL works as
     # soon as we open the browser. The PID is recorded so the user can
-    # stop it with `kill $(cat ~/.openpa/install.pid)`. Future Phase:
+    # stop it with `kill $(cat $OPENPA_SYSTEM_DIR/install.pid)`. Future Phase:
     # install a real service unit (systemd / launchd) so it survives
     # logout.
 
@@ -1475,9 +1493,9 @@ if [ "${OPENPA_INSTALLER_FRONTEND:-}" != "electron" ]; then
     fi
 
     if [ "$SERVER_RUNNING" -eq 0 ]; then
-        nohup "$VENV_DIR/bin/openpa" serve >>"$OPENPA_HOME/server.log" 2>&1 &
+        nohup "$VENV_DIR/bin/openpa" serve >>"$OPENPA_SYSTEM_DIR/server.log" 2>&1 &
         echo $! > "$SERVER_PID_FILE"
-        ok "OpenPA started (pid $(cat "$SERVER_PID_FILE"), logs: $OPENPA_HOME/server.log)"
+        ok "OpenPA started (pid $(cat "$SERVER_PID_FILE"), logs: $OPENPA_SYSTEM_DIR/server.log)"
     fi
 fi
 

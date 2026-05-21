@@ -1,7 +1,7 @@
 """Per-profile skill orchestration.
 
 Every profile gets its own skills directory at
-``<OPENPA_WORKING_DIR>/<profile>/skills/``. The built-in skills shipped in
+``<OPENPA_SYSTEM_DIR>/<profile>/skills/``. The built-in skills shipped in
 ``app/skills/builtin/`` are copied into each profile's directory on profile
 creation and re-synced on every server boot so that deleted built-ins are
 restored (user-authored skills are left untouched).
@@ -37,8 +37,8 @@ _watchers_lock = threading.Lock()
 
 
 def profile_skills_dir(profile: str) -> Path:
-    """Return ``<OPENPA_WORKING_DIR>/<profile>/skills``."""
-    return Path(BaseConfig.OPENPA_WORKING_DIR) / profile / "skills"
+    """Return ``<OPENPA_SYSTEM_DIR>/<profile>/skills``."""
+    return Path(BaseConfig.OPENPA_SYSTEM_DIR) / profile / "skills"
 
 
 def sync_builtin_skills_into_profile(profile: str) -> list[str]:

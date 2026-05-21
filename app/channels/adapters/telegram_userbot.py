@@ -76,7 +76,7 @@ class TelegramUserbotAdapter(BaseChannelAdapter):
         return str(raw).strip()
 
     def _session_path(self) -> Path:
-        base = Path(BaseConfig.OPENPA_WORKING_DIR)
+        base = Path(BaseConfig.OPENPA_SYSTEM_DIR)
         d = base / self.profile / "telegram" / self.channel_id
         d.mkdir(parents=True, exist_ok=True)
         return d / "session"

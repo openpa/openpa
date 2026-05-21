@@ -11,6 +11,30 @@ type AutoUpdaterModule = typeof import('electron-updater')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// On Windows, Electron's app.getPath('userData') resolves to %APPDATA%\OpenPA
+// by default, but the install script writes to %LOCALAPPDATA%\OpenPA. Override
+// before any other getPath() call so both surfaces converge on the same dir
+// (and we don't have to maintain two locations).
+if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+  app.setPath('userData', path.join(process.env.LOCALAPPDATA, 'OpenPA'))
+}
+
+// OpenPA System Directory — install + runtime artifacts root. Must match the
+// default resolved by install.sh / install.ps1 / app/config/settings.py so all
+// three surfaces agree on where .env, storage/, venv/, etc. live.
+//   Linux:   $XDG_DATA_HOME/openpa (or ~/.local/share/openpa)
+//   macOS:   ~/Library/Application Support/OpenPA  (== app.getPath('userData'))
+//   Windows: %LOCALAPPDATA%\OpenPA                 (== overridden userData above)
+// Override via $OPENPA_SYSTEM_DIR for staging/test installs.
+function systemDirPath(): string {
+  if (process.env.OPENPA_SYSTEM_DIR) return process.env.OPENPA_SYSTEM_DIR
+  if (process.platform === 'linux') {
+    const xdg = process.env.XDG_DATA_HOME || path.join(app.getPath('home'), '.local', 'share')
+    return path.join(xdg, 'openpa')
+  }
+  return app.getPath('userData')
+}
+
 // Build-time install channel — baked in by Vite at compile time. Used as
 // the value of ``runtimeConfig.channel`` (force-applied on each launch
 // regardless of what's on disk) and also as the flag passed to the
@@ -22,14 +46,15 @@ const INSTALL_CHANNEL: 'production' | 'test' | 'dev' = __OPENPA_INSTALL_CHANNEL_
 
 // Env overlay for openpa subprocesses (``serve`` and ``upgrade apply``).
 // On non-production builds we hand the channel to the child explicitly —
-// the openpa CLI does not auto-load ``~/.openpa/.env``, and Electron's
-// CWD on launch is not reliably the home dir, so dotenv discovery there
-// is fragile. The installer spawn at ~line 708 already follows the same
-// pattern via ``--channel``; this keeps backend serve and upgrade apply
-// consistent with it.
+// the openpa CLI does not auto-load ``<OPENPA_SYSTEM_DIR>/.env``, and
+// Electron's CWD on launch is not reliably the home dir, so dotenv
+// discovery there is fragile. The installer spawn at ~line 708 already
+// follows the same pattern via ``--channel``; this keeps backend serve
+// and upgrade apply consistent with it.
 function openpaSubprocessEnv(): NodeJS.ProcessEnv {
-  if (INSTALL_CHANNEL === 'production') return process.env
-  return { ...process.env, OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL }
+  const base = { ...process.env, OPENPA_SYSTEM_DIR: systemDirPath() }
+  if (INSTALL_CHANNEL === 'production') return base
+  return { ...base, OPENPA_UPGRADE_CHANNEL: INSTALL_CHANNEL }
 }
 
 // Test installers are prereleases for testers; DevTools is a feature there.
@@ -113,23 +138,23 @@ function updateConfig(patch: Partial<OpenPAConfig>): OpenPAConfig {
 // The install script's ``.env`` is the canonical "OpenPA is installed
 // on this machine" marker. We reconcile runtimeConfig.agentUrl against
 // it on each launch so the user can re-trigger the first-run installer
-// by deleting ~/.openpa (or wiping the contents).
+// by wiping the System Dir (or its contents).
 //
-// Docker installs also stamp a marker into ~/.openpa/docker/.env (the
-// compose env file). We treat that as a fallback so users whose Docker
-// install predates the top-level marker fix don't get bounced back to
-// the wizard on app upgrade.
+// Docker installs also stamp a marker into <OPENPA_SYSTEM_DIR>/docker/.env
+// (the compose env file). We treat that as a fallback so users whose
+// Docker install predates the top-level marker fix don't get bounced back
+// to the wizard on app upgrade.
 function installMarkerExists(): boolean {
-  const home = app.getPath('home')
+  const sys = systemDirPath()
   return (
-    fs.existsSync(path.join(home, '.openpa', '.env')) ||
-    fs.existsSync(path.join(home, '.openpa', 'docker', '.env'))
+    fs.existsSync(path.join(sys, '.env')) ||
+    fs.existsSync(path.join(sys, 'docker', '.env'))
   )
 }
 function reconcileInstallStateWithDisk(): void {
   const installed = installMarkerExists()
   if (!installed && runtimeConfig.agentUrl) {
-    // User wiped ~/.openpa to re-run the first-run installer.
+    // User wiped the System Dir to re-run the first-run installer.
     updateConfig({ agentUrl: '', deploymentType: '' })
   } else if (installed && !runtimeConfig.agentUrl) {
     // The script was run outside the Electron app (e.g., via the CLI)
@@ -237,6 +262,9 @@ let backendProcess: ChildProcess | null = null
 // upgrade flow. At most one in flight; tracked so before-quit can kill
 // it (the runner's lock-file recovery will roll back on next launch).
 let upgradeProcess: ChildProcess | null = null
+// Short-lived uninstall script. Like ``installerProcess`` but driven by
+// the Settings → Uninstall flow; the renderer chooses keep vs purge.
+let uninstallerProcess: ChildProcess | null = null
 
 // ── Backend (``openpa serve``) lifecycle ──────────────────────────────────
 //
@@ -248,7 +276,7 @@ let upgradeProcess: ChildProcess | null = null
 // install has already completed.
 
 function backendPidFilePath(): string {
-  return path.join(app.getPath('home'), '.openpa', 'install.pid')
+  return path.join(systemDirPath(), 'install.pid')
 }
 
 // Resolve the actual openpa executable, bypassing the user-facing shim.
@@ -256,12 +284,12 @@ function backendPidFilePath(): string {
 // Node ≥18.20 / ≥20.12 / ≥21.7 refuses to ``spawn`` ``.cmd`` / ``.bat``
 // files directly without ``shell: true`` — the CVE-2024-27980 mitigation
 // surfaces as ``Error: spawn EINVAL``. We dodge it by reading the
-// install-time shim (``~/.openpa/bin/openpa.cmd``), pulling the
+// install-time shim (``<SYSTEM_DIR>/bin/openpa.cmd``), pulling the
 // underlying ``openpa.exe`` path out of it, and spawning that instead.
 // On POSIX the shim is a symlink, which ``spawn`` follows transparently.
 function openpaExePath(): string {
-  const home = app.getPath('home')
-  const bin = path.join(home, '.openpa', 'bin')
+  const sys = systemDirPath()
+  const bin = path.join(sys, 'bin')
   if (process.platform === 'win32') {
     const shim = path.join(bin, 'openpa.cmd')
     try {
@@ -273,7 +301,7 @@ function openpaExePath(): string {
       if (m && m[1]) return m[1]
     } catch { /* fall through to default below */ }
     // Default install location when the shim is missing or unparseable.
-    return path.join(home, '.openpa', 'venv', 'Scripts', 'openpa.exe')
+    return path.join(sys, 'venv', 'Scripts', 'openpa.exe')
   }
   return path.join(bin, 'openpa')
 }
@@ -452,14 +480,14 @@ async function startBackend(): Promise<{ ok: boolean; error?: string }> {
     return { ok: false, error: `venv python missing at ${py} — installer didn't finish?` }
   }
 
-  const openpaHome = path.join(app.getPath('home'), '.openpa')
-  const serverLog = path.join(openpaHome, 'server.log')
-  const serverErr = path.join(openpaHome, 'server.err.log')
+  const sys = systemDirPath()
+  const serverLog = path.join(sys, 'server.log')
+  const serverErr = path.join(sys, 'server.err.log')
 
   let stdoutFd: number | undefined
   let stderrFd: number | undefined
   try {
-    fs.mkdirSync(openpaHome, { recursive: true })
+    fs.mkdirSync(sys, { recursive: true })
     stdoutFd = fs.openSync(serverLog, 'a')
     stderrFd = fs.openSync(serverErr, 'a')
   } catch (err) {
@@ -565,6 +593,16 @@ ipcMain.handle('openpa:installer:cancel', () => {
   // Node will SIGKILL the orphan when the Electron app exits.
   try { installerProcess.kill('SIGTERM') } catch { /* already gone */ }
   return true
+})
+
+ipcMain.handle('openpa:installer:uninstall', async (event, mode: 'keep' | 'purge') => {
+  if (uninstallerProcess) {
+    throw new Error('An uninstall is already running.')
+  }
+  if (mode !== 'keep' && mode !== 'purge') {
+    throw new Error(`Invalid uninstall mode: ${mode}`)
+  }
+  return runUninstaller(event.sender, mode)
 })
 
 type InstallerEnvironment = {
@@ -936,6 +974,9 @@ async function runInstaller(
     const child = spawn(cmd, cmdArgs, {
       env: {
         ...process.env,
+        // Hand the spawned install script the same System Dir the
+        // Electron app resolves, so both surfaces write to one location.
+        OPENPA_SYSTEM_DIR: systemDirPath(),
         // Preserve any custom template/script base the user set, so
         // staging installs can be tested end-to-end from the GUI.
         OPENPA_TEMPLATE_BASE: process.env.OPENPA_TEMPLATE_BASE ?? `${INSTALLER_SCRIPT_BASE}/templates`,
@@ -1013,6 +1054,106 @@ async function runInstaller(
         })
       }
       send('openpa:installer:done', { exitCode })
+      resolve({ exitCode })
+    }
+    child.on('error', (err) => finish(null, err))
+    child.on('exit', (code) => finish(code))
+  })
+}
+
+async function runUninstaller(
+  sender: Electron.WebContents,
+  mode: 'keep' | 'purge',
+): Promise<{ exitCode: number }> {
+  const send = (channel: string, message: unknown) => {
+    if (!sender.isDestroyed()) sender.send(channel, message)
+  }
+
+  // Stop any backend we're tracking before yanking files. The uninstall
+  // script also kills the PID file's process, but doing this here first
+  // closes any file handles the Electron process owns (server.log fds in
+  // startBackend), which Windows is fussy about.
+  if (backendProcess && backendProcess.pid) {
+    try { backendProcess.kill('SIGTERM') } catch { /* ignore */ }
+    backendProcess = null
+  }
+
+  const isWindows = process.platform === 'win32'
+  const scriptName = isWindows ? 'uninstall.ps1' : 'uninstall.sh'
+
+  // Same script-resolution pattern as ``runInstaller`` — local checkout in
+  // dev, download into userData/installer/ for test/production.
+  let scriptPath: string
+  if (INSTALL_CHANNEL === 'dev') {
+    scriptPath = path.resolve(__dirname, '..', '..', 'install', scriptName)
+    if (!fs.existsSync(scriptPath)) {
+      throw new Error(
+        `Dev-channel uninstall requires the local script at ${scriptPath}, ` +
+        `but the file is missing.`,
+      )
+    }
+    send('openpa:installer:uninstall:log', { stream: 'info', line: `Using local uninstall script: ${scriptPath}` })
+  } else {
+    const scriptUrl = `${INSTALLER_SCRIPT_BASE}/${scriptName}`
+    const scriptDir = path.join(app.getPath('userData'), 'installer')
+    fs.mkdirSync(scriptDir, { recursive: true })
+    scriptPath = path.join(scriptDir, scriptName)
+    send('openpa:installer:uninstall:log', { stream: 'info', line: `Downloading ${scriptUrl}...` })
+    await downloadFile(scriptUrl, scriptPath)
+    if (!isWindows) fs.chmodSync(scriptPath, 0o755)
+  }
+
+  const flag = isWindows
+    ? (mode === 'purge' ? '-Purge' : '-Keep')
+    : (mode === 'purge' ? '--purge' : '--keep')
+
+  let cmd: string
+  let cmdArgs: string[]
+  if (isWindows) {
+    cmd = 'powershell.exe'
+    cmdArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, flag]
+  } else {
+    cmd = 'bash'
+    cmdArgs = [scriptPath, flag]
+  }
+
+  send('openpa:installer:uninstall:log', {
+    stream: 'info',
+    line: `Running ${cmd} ${cmdArgs.join(' ')} (mode: ${mode})`,
+  })
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, cmdArgs, {
+      env: { ...process.env, OPENPA_SYSTEM_DIR: systemDirPath() },
+    })
+    uninstallerProcess = child
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      send('openpa:installer:uninstall:log', { stream: 'stdout', line: chunk.toString() })
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      send('openpa:installer:uninstall:log', { stream: 'stderr', line: chunk.toString() })
+    })
+
+    let settled = false
+    const finish = (code: number | null, err?: Error) => {
+      if (settled) return
+      settled = true
+      uninstallerProcess = null
+      if (err) {
+        send('openpa:installer:uninstall:done', { exitCode: -1, error: err.message })
+        reject(err)
+        return
+      }
+      const exitCode = code ?? -1
+      if (exitCode === 0) {
+        // After a clean uninstall, drop our cached agentUrl so the next
+        // launch shows the first-run installer again. The renderer is
+        // expected to also call updateConfig from its end, but doing it
+        // here covers the case where the renderer crashes mid-flow.
+        updateConfig({ agentUrl: '', deploymentType: '' })
+      }
+      send('openpa:installer:uninstall:done', { exitCode, mode })
       resolve({ exitCode })
     }
     child.on('error', (err) => finish(null, err))
@@ -1578,7 +1719,7 @@ function createAppWindow(target: WindowKind): BrowserWindow {
 // ── Process tree cleanup on quit ────────────────────────────────────────
 //
 // The install script spawns the openpa backend in the background and
-// writes the backend PID to ~/.openpa/install.pid. We track:
+// writes the backend PID to <SYSTEM_DIR>/install.pid. We track:
 //   - the install script's own process (``installerProcess``)
 //   - the backend PID from the pidfile
 // and synchronously kill both trees on ``before-quit`` so closing the
@@ -1614,9 +1755,9 @@ function killTrackedProcessesSync(): void {
 
   // 2. Fallback: the PID file (written by either the install script or
   //    ``startBackend``). Kills any backend we might have lost the
-  //    in-memory reference to (e.g., the user wiped/restored
-  //    ~/.openpa between launches).
-  const serverPidFile = path.join(app.getPath('home'), '.openpa', 'install.pid')
+  //    in-memory reference to (e.g., the user wiped/restored the
+  //    System Dir between launches).
+  const serverPidFile = path.join(systemDirPath(), 'install.pid')
   try {
     const pid = parseInt(fs.readFileSync(serverPidFile, 'utf8').trim(), 10)
     if (pid > 0) killProcessTreeSync(pid)
@@ -1630,7 +1771,7 @@ function killTrackedProcessesSync(): void {
   }
 
   // 4. An in-flight ``openpa upgrade`` child, if the user quit mid-
-  //    upgrade. Killing it leaves ``~/.openpa/.upgrade.lock`` behind;
+  //    upgrade. Killing it leaves ``<SYSTEM_DIR>/.upgrade.lock`` behind;
   //    the runner's ``acquire_lock_or_recover`` rolls back from the
   //    captured backup on the next backend boot.
   if (upgradeProcess && upgradeProcess.pid) {
@@ -1767,7 +1908,7 @@ if (process.platform === 'win32') {
 // second instance calls ``app.quit()`` below, which fires ``before-quit``;
 // if that handler were wired up at module top level it would run inside
 // the secondary process and ``killTrackedProcessesSync()`` would read
-// ``~/.openpa/install.pid`` (written by the primary) and force-kill the
+// ``<SYSTEM_DIR>/install.pid`` (written by the primary) and force-kill the
 // primary's backend tree. Registering lifecycle handlers only inside the
 // primary branch closes that hole.
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
@@ -1805,7 +1946,7 @@ if (!gotSingleInstanceLock) {
     // Load the persisted config before the window opens so the preload's
     // sync IPC returns a populated value on the very first request.
     runtimeConfig = loadConfig();
-    // Reconcile with ~/.openpa/.env so a deleted install dir re-triggers
+    // Reconcile with <SYSTEM_DIR>/.env so a deleted install dir re-triggers
     // the first-run installer instead of falling through to a broken UI.
     reconcileInstallStateWithDisk();
     // First-run / re-install detection. ``userData`` (which holds

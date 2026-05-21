@@ -273,7 +273,7 @@ def _spawn_log_path() -> Path:
     """Where the detached subprocess's raw stdout/stderr lands."""
     from app.config.settings import BaseConfig
 
-    return Path(BaseConfig.OPENPA_WORKING_DIR) / "upgrade-detached.log"
+    return Path(BaseConfig.OPENPA_SYSTEM_DIR) / "upgrade-detached.log"
 
 
 def get_upgrade_routes() -> list[Route]:

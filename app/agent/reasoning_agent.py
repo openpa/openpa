@@ -190,7 +190,7 @@ class ReasoningAgent:
         self.registry = registry
         self.profile = profile
         self.reasoning = reasoning
-        self.current_skills_directory = os.path.join(BaseConfig.OPENPA_WORKING_DIR, self.profile, "skills")
+        self.current_skills_directory = os.path.join(BaseConfig.OPENPA_SYSTEM_DIR, self.profile, "skills")
 
         cfg = resolve_agent_config(profile)
         self._runtime_cfg = cfg
@@ -413,7 +413,7 @@ class ReasoningAgent:
             persona_description=persona,
             current_time=f"{datetime.now().isoformat()}",
             current_os=platform.system(),
-            current_working_directory=BaseConfig.OPENPA_WORKING_DIR,
+            current_working_directory=BaseConfig.OPENPA_SYSTEM_DIR,
             current_user_working_directory=current_user_working_directory,
             tools=self._build_tools_block(),
             loaded_skills=self._build_loaded_skills_block(),
@@ -527,8 +527,8 @@ class ReasoningAgent:
         # appended (and re-invoked skills are filtered out of the Tools block).
         self.instruction = self._build_instruction()
 
-        # logger.info(f"=== Instruction ===\n{self.instruction}")
-        # logger.info(f"=== Reasoning Step ===\n{input_section}")
+        logger.debug(f"=== Instruction ===\n{self.instruction}")
+        logger.debug(f"=== Reasoning Step ===\n{input_section}")
 
         # Action enum is the set of tool_ids, minus skills already folded into
         # the system prompt — this prevents the LLM from re-loading them.

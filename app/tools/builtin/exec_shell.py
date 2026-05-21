@@ -1197,7 +1197,7 @@ def cleanup_stdout_on_startup() -> int:
     directories they leave behind are orphaned — clear them on startup.
     Returns the number of directories removed.
     """
-    base = BaseConfig.OPENPA_WORKING_DIR
+    base = BaseConfig.OPENPA_SYSTEM_DIR
     if not base or not os.path.isdir(base):
         return 0
     pattern = os.path.join(
@@ -1329,7 +1329,7 @@ class ExecShellTool(BuiltInTool):
         logger.debug(f"exec_shell called with command={command!r}")
         user_working_directory = (
             arguments.get("_working_directory", None)
-            or BaseConfig.OPENPA_WORKING_DIR
+            or BaseConfig.OPENPA_SYSTEM_DIR
         )
 
         # current_shell_directory: explicit arg wins and is persisted to the
@@ -1384,7 +1384,7 @@ class ExecShellTool(BuiltInTool):
 
         # Inject the system-variables env block (OPENPA_SERVER + OPENPA_TOKEN so the
         # spawned shell can invoke the `openpa` CLI against this server, plus the
-        # _OPENPA_WORKING_DIR_ / _USER_WORKING_DIR_ / _SKILL_DIR_ sentinels).
+        # _OPENPA_SYSTEM_DIR_ / _USER_WORKING_DIR_ / _SKILL_DIR_ sentinels).
         # 127.0.0.1:PORT bypasses any external APP_URL / reverse proxy — the
         # CLI runs on the same box as the server. See app/config/system_vars.py.
         profile = arguments.get("_profile")
@@ -1544,11 +1544,11 @@ class ExecShellTool(BuiltInTool):
             # --- LONG_RUNNING: keep subprocess alive, start log writer ---
             process_id = _uuid.uuid4().hex[:8]
             # Stdout/state files are OpenPA-internal storage and live under
-            # OPENPA_WORKING_DIR/<profile>, NOT under the User Working
+            # OPENPA_SYSTEM_DIR/<profile>, NOT under the User Working
             # Directory (which is a user-facing path like ~/Documents).
             profile_for_logs = arguments.get("_profile") or "admin"
             log_dir = os.path.join(
-                BaseConfig.OPENPA_WORKING_DIR, profile_for_logs,
+                BaseConfig.OPENPA_SYSTEM_DIR, profile_for_logs,
                 "tools", "builtin", "exec_shell", "stdout", process_id,
             )
             logger.debug(f"exec_shell: creating log directory {log_dir!r} for process {process_id}")
