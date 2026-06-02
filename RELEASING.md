@@ -179,22 +179,7 @@ that commit — *not* at any of the dev-release commits. Gate 4 doesn't
 require same-commit matching anymore; it just needs at least one
 validated `v0.0.2-rc.*` dev tag reachable from main.
 
-### 7. CHANGELOG.md and UPGRADING.md
-
-Add a `## [0.0.2] — TBD` section to [`CHANGELOG.md`](CHANGELOG.md)
-with bullets grouped under Added / Changed / Fixed / Schema /
-Compatibility, pulling from the PRs that landed. Move bullets out of
-`[Unreleased]` into it if any sit there.
-
-Add a `### Upgrading to 0.0.2 (from 0.0.1)` subsection to
-[`UPGRADING.md`](UPGRADING.md)'s *Per-version notes*, even if the body
-is just "No manual steps required" — operators read it as a checklist.
-
-Commit both with the version bump. (Either fold them into the same
-"Bump to 0.0.2" commit, or push a follow-up commit before tagging —
-the prod tag must include them.)
-
-### 8. Approve the prod-release run in the Actions UI
+### 7. Approve the prod-release run in the Actions UI
 
 [`release-prod.yml`](.github/workflows/release-prod.yml) triggers on
 `v0.0.2`. The first job (`verify`) runs the four mechanical gates; if
@@ -213,7 +198,7 @@ The reviewer roster lives in **repo Settings → Environments →
 prod-release → Required reviewers**. Only listed users see the
 Approve button.
 
-### 9. Watch the prod workflow publish
+### 8. Watch the prod workflow publish
 
 After approval the workflow runs seven jobs:
 
@@ -244,7 +229,7 @@ When `publish` finishes, the release is live at
 `pip install openpa==0.0.2`, `docker pull
 openpa/openpa-desktop:latest`, or download the platform installer.
 
-### 10. Delete the feature branches
+### 9. Delete the feature branches
 
 ```powershell
 git push origin --delete feat/feature-x
@@ -266,7 +251,7 @@ That's the whole cycle.
 checks and refuses to start the rest of the workflow unless every one
 passes. No draft, no PyPI upload, no Electron build until the gate
 accepts the tag — and after the four pass, the `approve` job adds the
-human-validation gate (step 8 above).
+human-validation gate (step 7 above).
 
 1. **Tag format.** `vX.Y.Z` or `vX.Y.Z.N` (the hotfix form). A tag
    with an `-rc.` suffix is handed off to `release-rc.yml` instead.
@@ -325,8 +310,7 @@ anything else with no effect on the installed binary.
    `smoke-build`). They should all be green because nothing in the
    runtime behaviour changed.
 3. Merge with **merge-commit** (no RC index assignment, no dev
-   release, no version bump, no CHANGELOG or UPGRADING entry — there
-   is nothing operator-facing).
+   release, no version bump — there is nothing operator-facing).
 4. Done.
 
 The next feature release picks the doc change up automatically. The
@@ -336,9 +320,9 @@ without you doing anything extra.
 
 ### When a docs-only PR *does* want its own release
 
-Rare, but possible — e.g. a critical correction to `UPGRADING.md` that
-operators need before the next feature release ships. Treat it as a
-single-PR release:
+Rare, but possible — e.g. a critical correction to operator-facing
+docs that they need before the next feature release ships. Treat it
+as a single-PR release:
 
 1. Core Maintainer assigns the PR `rc.1` for the next patch version
    (`v0.0.3`).
@@ -406,9 +390,6 @@ When the PR touches [`app/storage/models.py`](app/storage/models.py):
    N+1 drops the old shape) so rollback works.
 4. Backfill **inside** the migration, not in application code.
 5. Test the upgrade from a real older install, not just a fresh DB.
-6. Add a `Schema` bullet to CHANGELOG.md and an UPGRADING.md note if
-   the migration takes meaningful downtime or has a non-obvious
-   failure mode.
 
 ### A release fails partway through
 
@@ -539,9 +520,8 @@ gh pr merge <PR#> --merge
 git checkout main
 git pull --ff-only
 # Edit app/__version__.py: __version__ = "<X.Y.Z>"
-# Update CHANGELOG.md and UPGRADING.md.
 python scripts/sync_ui_version.py
-git add app/__version__.py ui/package.json CHANGELOG.md UPGRADING.md
+git add app/__version__.py ui/package.json
 git commit -m "Bump to <X.Y.Z>"
 git push origin main
 git tag v<X.Y.Z>
