@@ -94,6 +94,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "change_working_directory",
     "display_name": "Change Working Directory",
     "default_model_group": "low",
+    "hidden": True,
     "llm_parameters": {
         "tool_instructions": (
             "Always switch the active working directory before executing any "

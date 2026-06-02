@@ -32,7 +32,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "gg_places",
     "display_name": "Google Places",
     "default_model_group": "low",
-    "visible": True,
+    "visible": False,
     # Requires the ``google`` feature (googleapiclient + google-auth). See
     # app.features.manifest.FEATURES.
     "requires_feature": "google",

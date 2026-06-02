@@ -201,6 +201,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "exec_shell",
     "display_name": "Shell Executor",
     "default_model_group": "low",
+    "hidden": True,
     "llm_parameters": {
         "tool_instructions": (
             "Execute command-line instructions on the terminal. Supports Linux, Windows, and macOS.\n"

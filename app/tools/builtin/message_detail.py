@@ -20,7 +20,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "message_detail",
     "display_name": "Message Detail",
     "default_model_group": "low",
-    "visible": True,
+    "visible": False,
     "llm_parameters": {
         "tool_instructions": "Retrieve the full details of conversation messages by their IDs.",
     },

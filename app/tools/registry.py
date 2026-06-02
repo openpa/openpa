@@ -151,6 +151,12 @@ class ToolRegistry:
             if tool.tool_type is ToolType.INTRINSIC:
                 out.append(tool)
                 continue
+            # Hidden system built-ins are always-on for every profile —
+            # their lifecycle is the runtime's, not the user's, so a stale
+            # ``profile_tools`` row must not be able to suppress them.
+            if tool.hidden:
+                out.append(tool)
+                continue
             if tool.tool_type is ToolType.SKILL:
                 if self._skill_belongs_to_profile(tool, profile):
                     out.append(tool)
@@ -578,7 +584,10 @@ class ToolRegistry:
     ) -> None:
         """Set the per-profile enabled flag for a tool.
 
-        Refuses intrinsic tools (they're hidden and always-on by definition).
+        Refuses intrinsic tools (they're hidden and always-on by definition)
+        and any built-in marked ``hidden`` via ``TOOL_CONFIG`` — those are
+        system tools whose lifecycle is controlled by the runtime, and
+        disabling them would break internal flows (e.g. skill-event routing).
         Every other type accepts the toggle; the row in ``profile_tools``
         overrides the per-type default returned by :meth:`_default_enabled`.
         """
@@ -588,6 +597,11 @@ class ToolRegistry:
         if tool.tool_type is ToolType.INTRINSIC:
             raise ValueError(
                 f"Tool '{tool_id}' is intrinsic and cannot be disabled."
+            )
+        if tool.hidden:
+            raise ValueError(
+                f"Tool '{tool_id}' is a hidden system tool and cannot be "
+                f"toggled from the Settings UI."
             )
         self._storage.set_profile_tool(profile, tool_id, enabled)
 

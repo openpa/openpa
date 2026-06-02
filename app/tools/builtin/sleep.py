@@ -23,6 +23,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "sleep",
     "display_name": "Sleep",
     "default_model_group": "low",
+    "hidden": True,
     "llm_parameters": {
         "tool_instructions": "Pause execution for a specified number of seconds.",
         "system_prompt": ("Don't answer any questions or provide any information.\n"

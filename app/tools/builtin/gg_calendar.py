@@ -24,6 +24,7 @@ class Var:
 
 TOOL_CONFIG: ToolConfig = {
     "name": "gg_calendar",
+    "visible": False,
     "display_name": "Google Calendar",
     "default_model_group": "low",
     # Requires the ``google`` feature (googleapiclient + google-auth). See

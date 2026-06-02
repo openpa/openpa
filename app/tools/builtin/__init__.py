@@ -103,6 +103,10 @@ def list_builtin_tool_catalog() -> list[dict]:
             continue
         if not tool_info.get("visible", True):
             continue
+        # ``hidden`` tools are registered at runtime but suppressed from the
+        # Settings UI and the Setup Wizard catalog — see ToolConfig.hidden.
+        if tool_info.get("hidden", False):
+            continue
 
         server_name = getattr(module, "SERVER_NAME", module_name)
         tool_id = slugify(server_name)
@@ -502,6 +506,11 @@ async def register_builtin_tools(
             llm_factory=llm_factory,
             direct_dispatch=bool(tool_info.get("direct_dispatch", False)),
         )
+        # ``hidden`` keeps the tool out of ``visible_for_profile`` (Settings UI
+        # / GET /api/tools) while ``tools_for_profile`` still exposes it to the
+        # reasoning agent — see ToolConfig.hidden.
+        if tool_info.get("hidden", False):
+            group.hidden = True
         registry.register_builtin(group, source=module_name)
 
 

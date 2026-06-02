@@ -70,6 +70,11 @@ TOOL_CONFIG: ToolConfig = {
     "name": "register_skill_event",
     "display_name": "Register Skill Event",
     "default_model_group": "low",
+    # System tool: registered at runtime so the reasoning agent can auto-route
+    # skill-event subscriptions through it, but suppressed from the Settings
+    # UI / Setup Wizard so users can't disable it (disabling would break the
+    # event-subscription flow).
+    "hidden": True,
     "llm_parameters": {
         "tool_instructions": (
             "This tool is for subscribing the current conversation to events emitted by a loaded skill."

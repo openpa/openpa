@@ -34,6 +34,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "register_file_watcher",
     "display_name": "Register File Watcher",
     "default_model_group": "low",
+    "hidden": True,
     "llm_parameters": {
         "tool_instructions": (
             "Use 'Register File Watcher' when the user asks to be notified or "

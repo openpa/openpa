@@ -101,6 +101,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "documentation_search",
     "display_name": SERVER_NAME,
     "default_model_group": "low",
+    "hidden": True,
     "llm_parameters": {
         "tool_instructions": _DOC_TOOL_INSTRUCTIONS,
         # Locked off: the relevance ranking happens INSIDE run() via the

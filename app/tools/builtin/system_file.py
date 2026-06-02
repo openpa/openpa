@@ -964,6 +964,7 @@ TOOL_CONFIG: ToolConfig = {
     "name": "system_file",
     "display_name": "System File",
     "default_model_group": "low",
+    "hidden": True,
     "llm_parameters": {
         "tool_instructions": (
             "A file management assistant. Operates inside the conversation's "
