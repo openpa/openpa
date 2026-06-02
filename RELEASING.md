@@ -284,7 +284,9 @@ human-validation gate (step 8 above).
 4. **At least one validated dev release on main.** Some
    `v<X.Y.Z>-rc.*` tag must exist in the repo whose `release-rc.yml`
    run concluded with `success` AND whose commit is reachable from
-   `origin/main`. The dev tag does *not* have to live at the same
+   `origin/main` — either the canonical `.dev.<M>` form or the
+   legacy `-rc.<N>` shape satisfies the glob. The dev tag does *not*
+   have to live at the same
    commit as the prod tag — the prod commit is the version-bump
    commit, which by design has no dev tag of its own. What this gate
    catches: shipping `v0.0.2` when no PR for `0.0.2` ever went through
@@ -435,6 +437,9 @@ release.
 
 ### Tag conventions
 
+The first row is the canonical form for new work; the second is
+documented only for compatibility with pre-existing tags.
+
 | Tag pattern                | PEP 440           | npm / installer       | Docker tag                            | PyPI     | Channel      |
 |----------------------------|-------------------|-----------------------|---------------------------------------|----------|--------------|
 | `v0.0.2-rc.1.dev.1`        | `0.0.2rc1.dev1`   | `0.0.2-rc.1.dev.1`    | `openpa-desktop:0.0.2rc1.dev1`        | TestPyPI | `test`       |
@@ -451,9 +456,9 @@ Hotfixes use the four-segment form: `v0.0.2.1` (production) is built
 from `v0.0.2.1-rc.<N>.dev.<M>` (dev release).
 
 The legacy `v<X.Y.Z>-rc.<N>` shape (no `.dev.M`) is still accepted by
-`release-rc.yml` so in-flight runbooks and older hotfix workflows
-continue to work. It requires `app/__version__.py` to already be at
-`<X.Y.Z>` on the tagged commit. New work should use the
+`release-rc.yml` so older in-flight runbooks continue to work. It
+requires `app/__version__.py` to already be at `<X.Y.Z>` on the tagged
+commit. New work — including hotfixes — should use the
 `.dev.<M>`-suffixed shape.
 
 ### Version source
@@ -468,8 +473,9 @@ the single source of truth.
   into the `predev` / `prebuild` / `preweb:dev` / `preweb:build` npm
   hooks. Never edit it by hand.
 - `release-rc.yml` rewrites `app/__version__.py` in-CI to the
-  `rcN.devM` (or `rcN`) form before building. The rewrite is never
-  committed; the prod workflow uses the value as-committed.
+  `rcN.devM` form (or bare `rcN` for legacy `-rc.<N>` tags) before
+  building. The rewrite is never committed; the prod workflow uses
+  the value as-committed.
 
 `MIN_SUPPORTED_UPGRADE_FROM` in the same file is the oldest version
 this build knows how to migrate from. The upgrader refuses to proceed
