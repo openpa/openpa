@@ -1396,6 +1396,22 @@ def get_config_routes(state: BootedState) -> list[Route]:
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
+        # ``defer_apply`` is set by the Settings page after a feature
+        # install that needs a process restart (sentence-transformers +
+        # torch can't be hot-loaded). The config is persisted as
+        # enabled=true so the boot path's ``initialize_embedding_subsystem``
+        # picks it up on next start; trying to apply now would just fail
+        # with ModuleNotFoundError and leave the state FAILED.
+        if bool(body.get("defer_apply")):
+            return JSONResponse(
+                {
+                    "success": True,
+                    "deferred": True,
+                    **embedding_state.to_dict(),
+                },
+                status_code=200,
+            )
+
         profile_names = [
             row["name"] for row in await state.conversation_storage.list_profiles() if not row["name"].startswith("__")
         ]

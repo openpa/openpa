@@ -272,8 +272,24 @@ async function confirmFeatureInstall() {
     }
     if (result.restart_required) {
       // Heavy-init features (sentence-transformers + torch) can't be
-      // hot-loaded in the live process. Tell the user to restart and
-      // let them re-open Settings to apply once it's back up.
+      // hot-loaded in the live process. Persist the new config with
+      // ``defer_apply`` so the boot path's
+      // ``initialize_embedding_subsystem`` picks it up after restart —
+      // otherwise the page would still show "Disabled" because the
+      // enabled flag never made it to SQLite.
+      try {
+        await applyEmbeddingConfig(
+          settingsStore.agentUrl,
+          settingsStore.authToken,
+          form.value,
+          { deferApply: true },
+        );
+      } catch (e) {
+        featureInstallError.value =
+          e instanceof Error ? e.message : 'Failed to save embedding config';
+        featureInstallBusy.value = false;
+        return;
+      }
       featureInstallRestartRequired.value = true;
       featureInstallBusy.value = false;
       return;
@@ -549,8 +565,9 @@ onMounted(() => {
         </p>
 
         <p v-if="featureInstallRestartRequired" class="feature-install-restart">
-          Install complete. Restart the OpenPA server to load the embedding
-          model, then re-open this page and apply your changes again.
+          Install complete. Your settings have been saved. Restart the
+          OpenPA server — the embedding model will load automatically on
+          startup and this page will report "Success" when it's ready.
         </p>
       </div>
       <template #footer>

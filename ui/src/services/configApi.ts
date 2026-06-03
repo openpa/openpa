@@ -260,12 +260,23 @@ export async function applyEmbeddingConfig(
   agentUrl: string,
   token: string,
   config: EmbeddingConfig,
+  // ``deferApply`` persists the new config without scheduling the
+  // worker-thread apply. The Settings page sets it after a feature
+  // install that flagged ``requires_restart`` — torch +
+  // sentence-transformers can't be hot-loaded, so attempting the apply
+  // would just FAIL the embedding state. The persisted enabled flag is
+  // picked up on the next boot by ``initialize_embedding_subsystem``,
+  // which loads the model in a fresh process and marks state READY.
+  options?: { deferApply?: boolean },
 ): Promise<EmbeddingStatusResponse> {
   const base = resolveBaseUrl(agentUrl);
+  const body = options?.deferApply
+    ? { ...config, defer_apply: true }
+    : config;
   const res = await fetch(`${base}/api/config/embedding`, {
     method: 'PUT',
     headers: authHeaders(token),
-    body: JSON.stringify(config),
+    body: JSON.stringify(body),
   });
   if (res.status === 409) {
     // Backend preflight blocked the apply because one or more required

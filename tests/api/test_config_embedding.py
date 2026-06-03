@@ -214,6 +214,117 @@ def test_put_with_enabled_proceeds_when_extras_present(
     assert len(apply_calls) == 1
 
 
+def test_put_with_defer_apply_persists_without_applying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``defer_apply`` flag is set by the Settings page after a
+    feature install whose result.restart_required=True (sentence-
+    transformers + torch). Without this gate, the live process would
+    try to apply, fail with ModuleNotFoundError, and leave the state
+    FAILED — and worse, the user would see the page still report
+    "Disabled" because the persist-but-don't-apply path doesn't exist
+    yet. Contract: persist runs, apply is skipped, response is 200
+    with deferred=True so the frontend knows to show the restart
+    banner instead of polling for status."""
+    _stub_admin_ok(monkeypatch)
+    _stub_embedding_state_idle(monkeypatch)
+    monkeypatch.setattr(
+        "app.features.manifest.is_installed",
+        lambda _key: True,
+    )
+    monkeypatch.setattr(
+        config_api,
+        "_resolve_vectorstore",
+        lambda body: _coro(body),
+    )
+    persist_calls: list[dict] = []
+    monkeypatch.setattr(
+        "app.lib.embedding_lifecycle.persist_embedding_config",
+        lambda body, _cfg: persist_calls.append(body),
+    )
+    apply_calls: list[Any] = []
+    monkeypatch.setattr(
+        "app.lib.embedding_lifecycle.apply_embedding_config_in_background",
+        lambda **kw: apply_calls.append(kw) or True,
+    )
+
+    fake_storage = SimpleNamespace()
+    state = SimpleNamespace(
+        storage_ready=True,
+        config_storage=fake_storage,
+        conversation_storage=SimpleNamespace(
+            list_profiles=_coro_factory([{"name": "admin"}]),
+        ),
+    )
+    routes = config_api.get_config_routes(state)  # type: ignore[arg-type]
+    handler = next(r.endpoint for r in routes if r.path == "/api/config/embedding" and "PUT" in r.methods)
+
+    body = {
+        "enabled": True,
+        "provider": "me5",
+        "vectorstore": {"provider": "qdrant", "qdrant": {"deployment_mode": "external"}},
+        "defer_apply": True,
+    }
+    response = asyncio.run(handler(_make_request(body)))
+    assert response.status_code == 200, response.body
+    payload = json.loads(response.body)
+    assert payload["deferred"] is True
+    assert payload["success"] is True
+    # The whole point of the flag — persist runs, apply does not.
+    assert len(persist_calls) == 1
+    assert persist_calls[0]["enabled"] is True
+    assert apply_calls == []
+
+
+def test_put_without_defer_apply_still_applies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression check: the existing apply path is reached when
+    ``defer_apply`` is missing or false. The wizard's hot-loadable
+    install (vectorstore-only, restart_required=False) and any
+    subsequent re-apply after restart both depend on this path."""
+    _stub_admin_ok(monkeypatch)
+    _stub_embedding_state_idle(monkeypatch)
+    monkeypatch.setattr(
+        "app.features.manifest.is_installed",
+        lambda _key: True,
+    )
+    monkeypatch.setattr(
+        config_api,
+        "_resolve_vectorstore",
+        lambda body: _coro(body),
+    )
+    monkeypatch.setattr(
+        "app.lib.embedding_lifecycle.persist_embedding_config",
+        lambda _body, _cfg: None,
+    )
+    apply_calls: list[Any] = []
+    monkeypatch.setattr(
+        "app.lib.embedding_lifecycle.apply_embedding_config_in_background",
+        lambda **kw: apply_calls.append(kw) or True,
+    )
+
+    state = SimpleNamespace(
+        storage_ready=True,
+        config_storage=SimpleNamespace(),
+        conversation_storage=SimpleNamespace(
+            list_profiles=_coro_factory([{"name": "admin"}]),
+        ),
+    )
+    routes = config_api.get_config_routes(state)  # type: ignore[arg-type]
+    handler = next(r.endpoint for r in routes if r.path == "/api/config/embedding" and "PUT" in r.methods)
+
+    body = {
+        "enabled": True,
+        "provider": "me5",
+        "vectorstore": {"provider": "qdrant", "qdrant": {"deployment_mode": "external"}},
+        # No defer_apply — exercises the existing path.
+    }
+    response = asyncio.run(handler(_make_request(body)))
+    assert response.status_code == 202, response.body
+    assert len(apply_calls) == 1
+
+
 def test_embedding_feature_keys_helper() -> None:
     """The helper that drives the preflight must always include BOTH
     the embedding provider and the vector store provider keys when
