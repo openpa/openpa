@@ -12,7 +12,7 @@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  ElButton, ElCard, ElDialog, ElMessageBox, ElSwitch, ElTag, ElRadio, ElRadioGroup,
+  ElButton, ElCard, ElDialog, ElEmpty, ElMessageBox, ElSwitch, ElTag, ElRadio, ElRadioGroup,
   ElSelect, ElOption,
 } from 'element-plus';
 import { Icon } from '@iconify/vue';
@@ -130,9 +130,12 @@ const primaryButtonLabel = computed(() => {
 const activeChannel = computed<string>(
   () => state.value.channel ?? installChannel.value,
 );
-const showVersionPicker = computed(
-  () => activeChannel.value === 'test' && state.value.availableVersions.length > 0,
-);
+// Always show the picker on the test channel — even when the list is
+// empty — so a maintainer who expects to see it isn't left guessing
+// whether the feature was removed. The empty-state inside the card
+// explains why no versions are listed and points at the likely cause
+// (installed wheel older than the latest RC tag format).
+const showVersionPicker = computed(() => activeChannel.value === 'test');
 
 const selectedVersion = ref<string>('');
 
@@ -404,35 +407,50 @@ function goBack() {
           Install a particular release candidate instead of the latest — handy
           when another PR's RC has appeared and you want to test a specific one.
         </p>
-        <div class="version-picker-row">
-          <ElSelect
-            v-model="selectedVersion"
-            placeholder="Select a test release"
-            :disabled="state.phase === 'applying'"
-            class="version-select"
-            filterable
-          >
-            <ElOption
-              v-for="v in state.availableVersions"
-              :key="v.version"
-              :label="versionLabel(v)"
-              :value="v.version"
-            />
-          </ElSelect>
-          <ElButton
-            type="primary"
-            :disabled="!canInstallSelected"
-            @click="installSelectedVersion"
-          >
-            <Icon icon="mdi:swap-horizontal" />
-            <span style="margin-left: 6px">Install selected version</span>
-          </ElButton>
-        </div>
-        <p class="section-hint">
-          Installing an older build than the one you're on may not run cleanly
-          over a database a newer build already migrated. A backup is taken and
-          rolled back automatically if the switch fails.
-        </p>
+        <template v-if="state.availableVersions.length > 0">
+          <div class="version-picker-row">
+            <ElSelect
+              v-model="selectedVersion"
+              placeholder="Select a test release"
+              :disabled="state.phase === 'applying'"
+              class="version-select"
+              filterable
+            >
+              <ElOption
+                v-for="v in state.availableVersions"
+                :key="v.version"
+                :label="versionLabel(v)"
+                :value="v.version"
+              />
+            </ElSelect>
+            <ElButton
+              type="primary"
+              :disabled="!canInstallSelected"
+              @click="installSelectedVersion"
+            >
+              <Icon icon="mdi:swap-horizontal" />
+              <span style="margin-left: 6px">Install selected version</span>
+            </ElButton>
+          </div>
+          <p class="section-hint">
+            Installing an older build than the one you're on may not run cleanly
+            over a database a newer build already migrated. A backup is taken and
+            rolled back automatically if the switch fails.
+          </p>
+        </template>
+        <ElEmpty
+          v-else
+          description="No test releases available."
+          :image-size="80"
+        >
+          <p class="section-hint version-picker-empty-hint">
+            The backend hasn't reported any matching RC prereleases on GitHub.
+            This usually means the installed <code>openpa</code> wheel is older
+            than the most recent RC and doesn't recognize the current tag
+            format — reinstall from the test channel to refresh, or cut a
+            fresher RC.
+          </p>
+        </ElEmpty>
       </ElCard>
 
       <!-- ── Preferences ───────────────────────────────────────────── -->
@@ -612,6 +630,7 @@ function goBack() {
   flex-wrap: wrap;
 }
 .version-select { flex: 1; min-width: 240px; }
+.version-picker-empty-hint { text-align: center; max-width: 480px; margin: 8px auto 0; }
 
 .detail-card { border-left: 3px solid var(--el-color-warning); }
 .detail-card.blocked { border-left-color: var(--el-color-danger); }
