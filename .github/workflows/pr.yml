@@ -27,6 +27,14 @@ name: pr
 on:
   pull_request:
     branches: [main]
+  # Also run on direct pushes to main so a "bypass PR review" commit
+  # (one that didn't go through pull_request) still gets the same
+  # checks post-hoc — the installer_tui.pyz staleness guard in the
+  # backend job is the load-bearing one. A red main-push run surfaces
+  # the defect immediately on the Actions tab even though it can't
+  # block the push itself.
+  push:
+    branches: [main]
 
 jobs:
   backend:
