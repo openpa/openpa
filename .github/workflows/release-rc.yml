@@ -1,26 +1,25 @@
 # Backend release-candidate workflow.
 #
-# Trigger: push a tag matching ``v*-rc.*``. Two shapes are accepted:
-#   - ``v<X.Y.Z>-rc.<N>.dev.<M>``  — the canonical per-PR dev release
-#                                    (e.g. ``v0.0.2-rc.1.dev.1``). The
-#                                    Core Maintainer assigns ``rc.N`` to
-#                                    a PR; the Component Maintainer
-#                                    tags from the PR branch tip. ``M``
-#                                    increments per bug-fix iteration.
-#                                    ``app/__version__.py`` on the PR
-#                                    branch is NOT bumped — the source
-#                                    of truth is updated on main only
-#                                    by the Core Maintainer at prod time.
-#   - ``v<X.Y.Z>-rc.<N>``           — legacy shape, kept working for
-#                                    in-flight hotfixes / older runbooks.
-#                                    Behaves as before: ``app/__version__.py``
-#                                    must match the tag's base version.
+# Trigger: push a tag matching the canonical RC shape
+# ``v<X.Y.Z>[.<W>]rc<N>.dev<M>`` (e.g. ``v0.0.2rc1.dev1``, or
+# ``v0.0.2.1rc1.dev1`` for a hotfix). The Core Maintainer assigns
+# ``rcN`` to a PR; the Component Maintainer tags from the PR branch
+# tip. ``M`` increments per bug-fix iteration. ``app/__version__.py``
+# on the PR branch is NOT bumped — the source of truth is updated on
+# main only by the Core Maintainer at prod time.
+#
+# The ``.devM`` counter is mandatory and the only accepted shape;
+# bare ``v<X.Y.Z>rc<N>`` and the older hyphenated form
+# ``v<X.Y.Z>-rc.<N>[.dev.<M>]`` are both rejected. The ``Compute rc
+# version`` step below ``sys.exit``s on anything that doesn't match,
+# so the wheel/sdist/Docker/Electron jobs never run for a malformed
+# tag.
 #
 # Unlike the prod ``release-prod.yml`` workflow, this one:
-#   1. Rewrites ``app/__version__.py`` in-place to a PEP 440 rc version
-#      derived from the tag suffix (``v0.0.2-rc.1.dev.1`` → ``0.0.2rc1.dev1``;
-#      ``v0.2.1-rc.1`` → ``0.2.1rc1``). The rewrite is in-CI only, never
-#      committed.
+#   1. Rewrites ``app/__version__.py`` in-place to the PEP 440 form
+#      (strip the leading ``v`` — the tag already carries PEP 440
+#      canonical form, e.g. ``v0.0.2rc1.dev1`` → ``0.0.2rc1.dev1``).
+#      The rewrite is in-CI only, never committed.
 #   2. Builds the SPA + the wheel/sdist exactly like prod.
 #   3. Publishes to **Test PyPI** (``test.pypi.org``), not production PyPI.
 #   4. Uploads the dist as workflow artifacts so we can download and
@@ -59,11 +58,11 @@ name: release-rc
 on:
   push:
     tags:
-      - "v*-rc.*"
+      - "v*rc*.dev*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "RC tag to release (e.g. v0.0.2-rc.1.dev.1)"
+        description: "RC tag to release (e.g. v0.0.2rc1.dev1)"
         required: true
         type: string
 
@@ -102,24 +101,22 @@ jobs:
           python-version: "3.13"
 
       # Map RC tag → PEP 440 version, then rewrite app/__version__.py so
-      # hatch picks it up. Two shapes:
+      # hatch picks it up. One canonical shape:
       #
-      #   ``v<base>-rc.<N>.dev.<M>`` → ``<base>rc<N>.dev<M>``  (canonical)
-      #   ``v<base>-rc.<N>``         → ``<base>rc<N>``          (legacy)
+      #   ``v<base>rc<N>.dev<M>`` → ``<base>rc<N>.dev<M>``  (strip ``v``)
       #
-      # PEP 440 ``rcN`` / ``rcN.devM`` are the canonical pre-release
-      # suffixes; pip needs ``--pre`` to install either (unless explicitly
-      # pinned), which the test installers pass.
+      # The tag already carries the PEP 440 canonical form; the rewrite
+      # is just ``tag[1:]``. The ``.devM`` counter is mandatory and the
+      # only accepted shape — bare ``vX.Y.ZrcN`` and the hyphenated
+      # legacy form ``vX.Y.Z-rc.N[.dev.M]`` are rejected.
       #
-      # Guards:
-      #   1. Tag must match one of the two patterns above.
-      #   2. **Legacy ``-rc.N`` only:** the tag's base version (e.g. 0.2.1)
-      #      must equal app/__version__.py as committed. The new model
-      #      with ``.dev.M`` intentionally tags from a PR branch whose
-      #      app/__version__.py still reads the *previously released*
-      #      production version — the Core Maintainer doesn't bump the
-      #      source until prod time on main. So we skip the source-match
-      #      check whenever ``dev`` is present.
+      # PR-branch dev tags intentionally ship from a branch whose
+      # app/__version__.py still reads the *previously released*
+      # production version — the Core Maintainer doesn't bump the
+      # source until prod time on main. So no source-match check is
+      # performed here; verify-gate-4 on release-prod.yml is what
+      # ensures the version eventually shipped to PyPI/Docker matches
+      # the tag the Core Maintainer cut.
       - name: Compute rc version
         id: version
         env:
@@ -132,16 +129,18 @@ jobs:
 
           tag = os.environ["TAG"]
           m = re.match(
-              r"^v(\d+\.\d+\.\d+(?:\.\d+)?)-rc\.(\d+)(?:\.dev\.(\d+))?$",
+              r"^v(\d+\.\d+\.\d+(?:\.\d+)?)rc(\d+)\.dev(\d+)$",
               tag,
           )
           if not m:
               sys.exit(
-                  f"Tag {tag!r} does not match v<major>.<minor>.<patch>"
-                  "[.<hotfix>]-rc.<N>[.dev.<M>]; refusing to publish."
+                  f"Tag {tag!r} does not match the canonical RC shape "
+                  f"v<major>.<minor>.<patch>[.<hotfix>]rc<N>.dev<M> "
+                  f"(e.g. v0.0.2rc1.dev1). The .dev<M> counter is "
+                  f"mandatory and the legacy v<...>-rc.<N>[.dev.<M>] "
+                  f"shape is no longer accepted. Refusing to publish."
               )
-          base, rc, dev = m.group(1), m.group(2), m.group(3)
-          version = f"{base}rc{rc}.dev{dev}" if dev else f"{base}rc{rc}"
+          version = tag[1:]
 
           path = "app/__version__.py"
           src = open(path).read()
@@ -150,22 +149,10 @@ jobs:
           if not src_m:
               sys.exit(f"Could not find __version__ in {path}")
           src_version = src_m.group(1)
-
-          # Legacy ``-rc.N`` (no ``.dev.M``) keeps the source-version
-          # match. Dev tags ship from PR branches without a version bump,
-          # so the source still reads the prior prod version — skip.
-          if dev is None and src_version != base:
-              sys.exit(
-                  f"Tag {tag!r} implies version {base!r} but app/__version__.py "
-                  f"is {src_version!r}. Bump app/__version__.py to {base} on main "
-                  "and retag, or use the v<base>-rc.<N>.dev.<M> shape if this is "
-                  "a per-PR dev release."
-              )
-          if dev is not None:
-              print(
-                  f"Dev tag {tag!r}: skipping source-version match "
-                  f"(app/__version__.py={src_version!r}, tag base={base!r})"
-              )
+          print(
+              f"Dev tag {tag!r}: skipping source-version match "
+              f"(app/__version__.py={src_version!r}, rewriting to {version!r})"
+          )
 
           new = re.sub(
               r'^__version__\s*=\s*"[^"]*"',
@@ -224,11 +211,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # Create the GitHub prerelease at the original ``v*-rc.N`` tag and
-      # attach the wheel/sdist. ``prerelease: true`` keeps these entries
-      # out of ``/releases/latest`` (which production-channel installs
-      # poll); test-channel installs (``OPENPA_UPGRADE_CHANNEL=test``)
-      # find them via the ``/releases`` listing endpoint — see
+      # Create the GitHub prerelease at the original
+      # ``v<X.Y.Z>rc<N>.dev<M>`` tag and attach the wheel/sdist.
+      # ``prerelease: true`` keeps these entries out of
+      # ``/releases/latest`` (which production-channel installs poll);
+      # test-channel installs (``OPENPA_UPGRADE_CHANNEL=test``) find
+      # them via the ``/releases`` listing endpoint — see
       # ``app/upgrade/manifest.py::_fetch_latest_test``.
       #
       # ``draft: true`` here is the visibility gate. The unauthenticated
@@ -380,12 +368,12 @@ jobs:
       # Reason: sync_ui_version.py converts the wheel's PEP 440 ``rcN``
       # form to semver ``-rc.N`` for ui/package.json (npm refuses the
       # no-separator form as a prerelease identifier). That makes
-      # electron-builder derive a publish tag of ``v0.2.1-rc.N`` —
-      # which matches the original GitHub tag exactly, but historically
-      # the wheel/tag mismatch caused 422s when two matrix runners
-      # raced to create the release. Decoupling the publish below means
-      # electron-builder only builds, and we put the artifacts where
-      # they belong using ``gh release upload``.
+      # electron-builder derive a publish tag of ``v0.2.1-rc.N.dev.M``
+      # — which differs from the original GitHub tag
+      # (``v0.2.1rc<N>.dev<M>``) and historically caused 422s when two
+      # matrix runners raced to create the release. Decoupling the
+      # publish below means electron-builder only builds, and we put
+      # the artifacts where they belong using ``gh release upload``.
       - name: Build (test channel, no publish)
         run: npm run build:test -- --publish never
 
@@ -393,7 +381,7 @@ jobs:
       # prerelease the wheel job already created. electron-updater
       # resolves asset URLs in ``latest-test*.yml`` relative to the
       # release the yml itself lives in, so the tag matches the version
-      # baked into the filenames (``0.2.1-rc.N``).
+      # baked into the filenames (``0.2.1-rc.N.dev.M`` semver form).
       #
       # Globs:
       #   - ``release/*/OpenPA*.*`` catches every installer
@@ -420,12 +408,13 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
-  # Builds openpa/openpa-desktop:X.Y.ZrcN against Test PyPI and pushes
-  # it to Docker Hub. Mirrors release-prod.yml's ``docker`` job; differences:
+  # Builds openpa/openpa-desktop:X.Y.ZrcN.devM against Test PyPI and
+  # pushes it to Docker Hub. Mirrors release-prod.yml's ``docker`` job;
+  # differences:
   #   - Pulls the wheel from Test PyPI (with prod PyPI as fallback index
   #     for transitive deps that only exist there).
-  #   - Tag is the rewritten PEP 440 form (0.2.1rc3), not the GH tag
-  #     (v0.2.1-rc.3).
+  #   - Tag is the PEP 440 form (0.2.1rc3.dev2), i.e. the GH tag
+  #     (v0.2.1rc3.dev2) with the ``v`` stripped.
   #   - Does NOT emit ``:latest``.
   #
   # The wheel job's version rewrite happened on a different runner, so
@@ -433,7 +422,7 @@ jobs:
   # We re-apply the rewrite before the build because Dockerfile.desktop's
   # SPA stage copies app/__version__.py + sync_ui_version.py to bake the
   # version into the UI bundle. Without the rewrite, the wheel from Test
-  # PyPI (0.2.1rc3) and the UI (0.2.1) would disagree.
+  # PyPI (0.2.1rc3.dev2) and the UI (0.2.1) would disagree.
   #
   # cache scope=desktop is shared with release-prod.yml, so a prod or
   # prior RC build's base layers are reused.

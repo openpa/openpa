@@ -17,12 +17,17 @@ the pin in dev to make that explicit.
 This module is the single owner of:
 
   - reading the channel from the environment;
-  - the tag-format regex that distinguishes release candidates,
-    including the per-PR dev form ``v0.2.1-rc.3.dev.2``;
-  - the translation between the GitHub tag (``v0.2.1-rc.3`` /
-    ``v0.2.1-rc.3.dev.2``) and the PEP 440 release-candidate version pip
-    uses (``0.2.1rc3`` / ``0.2.1rc3.dev2``); release-rc.yml applies the
-    same rewrite when building, so we round-trip cleanly.
+  - the tag-format regex that distinguishes release candidates. The
+    canonical RC tag is ``v<X.Y.Z>[.W]rc<N>.dev<M>`` — e.g.
+    ``v0.2.1rc3.dev2`` (or the four-segment hotfix form
+    ``v0.0.2.1rc1.dev1``). The ``.dev<M>`` suffix is mandatory; bare
+    ``v<X.Y.Z>rc<N>`` and the older hyphenated form
+    ``v<X.Y.Z>-rc.<N>[.dev.<M>]`` are both rejected;
+  - the translation between the GitHub tag (``v0.2.1rc3.dev2``) and the
+    PEP 440 release-candidate version pip uses (``0.2.1rc3.dev2``) —
+    which is just stripping the leading ``v``, since the tag already
+    carries PEP 440 canonical form. release-rc.yml uses the same rule
+    when building, so we round-trip trivially.
   - PEP 440 rc-version ordering, since stdlib has no parser for it
     and we don't want to take a runtime dep on ``packaging`` just for
     the upgrader.
@@ -66,31 +71,31 @@ def get_channel() -> Channel:
     return "production"
 
 
-_RC_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)(?:\.dev\.(\d+))?$")
+_RC_TAG = re.compile(r"^v(\d+\.\d+\.\d+(?:\.\d+)?)rc(\d+)\.dev(\d+)$")
 
 
 def is_rc_tag(tag: str) -> bool:
-    """``True`` iff ``tag`` matches ``vMAJOR.MINOR.PATCH-rc.N[.dev.M]``."""
+    """``True`` iff ``tag`` matches the canonical RC shape.
+
+    Canonical shape: ``v<X.Y.Z>[.W]rc<N>.dev<M>``. The ``.dev<M>``
+    counter is mandatory; the legacy hyphen/dot variant
+    ``v<X.Y.Z>-rc.<N>[.dev.<M>]`` and the bare ``v<X.Y.Z>rc<N>`` (no
+    dev) are intentionally rejected.
+    """
     return _RC_TAG.match(tag or "") is not None
 
 
 def tag_to_pep440(tag: str) -> str:
-    """Convert an RC tag to its PEP 440 form.
+    """Convert an RC tag to its PEP 440 form by stripping the leading ``v``.
 
-    ``v0.2.1-rc.3`` → ``0.2.1rc3``; the per-PR dev form
-    ``v0.2.1-rc.3.dev.2`` → ``0.2.1rc3.dev2``. Mirrors the rewrite
-    ``release-rc.yml`` performs in CI. Raises ``ValueError`` for tags
-    that don't match the RC-tag format — callers should gate with
-    :func:`is_rc_tag` first.
+    ``v0.2.1rc3.dev2`` → ``0.2.1rc3.dev2``. The rest of the tag is
+    already PEP 440 canonical, so there is no rewriting to do. Raises
+    ``ValueError`` for tags that don't match the canonical RC shape —
+    callers should gate with :func:`is_rc_tag` first.
     """
-    m = _RC_TAG.match(tag or "")
-    if not m:
+    if not _RC_TAG.match(tag or ""):
         raise ValueError(f"Not an RC tag: {tag!r}")
-    base = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
-    version = f"{base}rc{int(m.group(4))}"
-    if m.group(5) is not None:
-        version += f".dev{int(m.group(5))}"
-    return version
+    return tag[1:]
 
 
 _PEP440 = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:rc(\d+)(?:\.dev(\d+))?)?(?:\+([\w.]+))?$")

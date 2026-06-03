@@ -503,10 +503,10 @@ def _pip_spec_for(release: manifest.ReleaseInfo) -> str:
     """Build the pip requirement spec for ``release``.
 
     For prod, the GitHub tag and the PyPI version match (``0.2.1``).
-    For test, the GitHub tag is ``v0.2.1-rc.3`` but the wheel on Test
-    PyPI is named ``0.2.1rc3``; we install against the PEP 440 form.
-    ``release.version`` already carries the right value because
-    :func:`manifest._parse_release` translated it.
+    For test, the GitHub tag is ``v0.2.1rc3.dev2`` and the wheel on
+    Test PyPI is named ``0.2.1rc3.dev2`` — i.e. the tag with the
+    leading ``v`` stripped. ``release.version`` already carries the
+    PEP 440 form because :func:`manifest._parse_release` stripped it.
     """
     return f"openpa=={release.version}"
 

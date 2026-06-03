@@ -8,7 +8,7 @@ All three artifacts carry the same version number.
 Releases are coordinated by two roles:
 
 - **Core Maintainer.** Owns the version line. Decides which PRs land in
-  the next release, assigns each one an RC index (`rc.1`, `rc.2`, …),
+  the next release, assigns each one an RC index (`rc1`, `rc2`, …),
   and ultimately bumps [`app/__version__.py`](app/__version__.py) and
   cuts the production tag.
 - **Component Maintainer.** Owns the per-PR work. Cuts test releases
@@ -18,7 +18,7 @@ Releases are coordinated by two roles:
 
 The model is still **validate-before-merge** — every production tag
 `vX.Y.Z` points at a commit on main whose contributing PRs each shipped
-a `vX.Y.Z-rc.<PR>.dev.<M>` test release that was installed and
+a `vX.Y.Zrc<PR>.dev<M>` test release that was installed and
 exercised on a real machine. `release-prod.yml` refuses to ship a tag
 unless [the four verify gates](#the-four-verify-gates) all pass, and it
 pauses for a required-reviewer approval in the Actions UI before
@@ -43,11 +43,11 @@ has two PRs slated for `0.0.2`:
 The Core Maintainer leaves a comment on each PR (or pins an issue
 tracking the `0.0.2` slate) assigning the index:
 
-> **PR #41 → `rc.1`** for the upcoming `v0.0.2`. Cut your dev releases
-> as `v0.0.2-rc.1.dev.<M>`.
+> **PR #41 → `rc1`** for the upcoming `v0.0.2`. Cut your dev releases
+> as `v0.0.2rc1.dev<M>`.
 >
-> **PR #42 → `rc.2`** for the upcoming `v0.0.2`. Cut your dev releases
-> as `v0.0.2-rc.2.dev.<M>`.
+> **PR #42 → `rc2`** for the upcoming `v0.0.2`. Cut your dev releases
+> as `v0.0.2rc2.dev<M>`.
 
 This assignment is *communication only*. No code change, no commit.
 The PR branches' `app/__version__.py` stays at `0.0.1` until the final
@@ -77,21 +77,22 @@ PR branch tip** using the index the Core Maintainer assigned:
 ```powershell
 # Alice for PR #41
 git fetch origin
-git tag v0.0.2-rc.1.dev.1 origin/feat/feature-x
-git push origin v0.0.2-rc.1.dev.1
+git tag v0.0.2rc1.dev1 origin/feat/feature-x
+git push origin v0.0.2rc1.dev1
 ```
 
 ```powershell
 # Bob for PR #42
 git fetch origin
-git tag v0.0.2-rc.2.dev.1 origin/feat/feature-y
-git push origin v0.0.2-rc.2.dev.1
+git tag v0.0.2rc2.dev1 origin/feat/feature-y
+git push origin v0.0.2rc2.dev1
 ```
 
 [`release-rc.yml`](.github/workflows/release-rc.yml) triggers for each
 tag. It rewrites `app/__version__.py` in-CI only (never committed) to
-the PEP 440 form `0.0.2rc1.dev1` / `0.0.2rc2.dev1`, builds the wheel,
-uploads it to Test PyPI, builds and pushes
+the PEP 440 form `0.0.2rc1.dev1` / `0.0.2rc2.dev1` (which is just the
+tag with the `v` stripped — the tag already carries PEP 440 canonical
+form), builds the wheel, uploads it to Test PyPI, builds and pushes
 `openpa/openpa-desktop:0.0.2rc1.dev1` (and `:0.0.2rc2.dev1`) to Docker
 Hub, and attaches Windows / macOS / Linux Electron installers to an
 auto-published GitHub prerelease. Test-channel installs see it on the
@@ -123,11 +124,11 @@ If validation surfaces a bug, push the fix to the **same PR branch**
 and cut the next dev iteration:
 
 ```powershell
-git tag v0.0.2-rc.1.dev.2 origin/feat/feature-x
-git push origin v0.0.2-rc.1.dev.2
+git tag v0.0.2rc1.dev2 origin/feat/feature-x
+git push origin v0.0.2rc1.dev2
 ```
 
-Iterate `dev.M+1` per bug. The PR branch's `app/__version__.py` still
+Iterate `dev<M+1>` per bug. The PR branch's `app/__version__.py` still
 stays at `0.0.1` — only the dev counter advances.
 
 ### 5. Merge each PR with **merge-commit**
@@ -177,7 +178,7 @@ git push origin v0.0.2
 The version bump is a fresh commit on main. The prod tag points at
 that commit — *not* at any of the dev-release commits. Gate 4 doesn't
 require same-commit matching anymore; it just needs at least one
-validated `v0.0.2-rc.*` dev tag reachable from main.
+validated `v0.0.2rc<N>.dev<M>` dev tag reachable from main.
 
 ### 7. Approve the prod-release run in the Actions UI
 
@@ -254,7 +255,8 @@ accepts the tag — and after the four pass, the `approve` job adds the
 human-validation gate (step 7 above).
 
 1. **Tag format.** `vX.Y.Z` or `vX.Y.Z.N` (the hotfix form). A tag
-   with an `-rc.` suffix is handed off to `release-rc.yml` instead.
+   containing `rc` is excluded by the workflow trigger and handed off
+   to `release-rc.yml` instead.
 
 2. **Version match.** The tag's bare version equals
    `app/__version__.py:__version__`. This is what forces the Core
@@ -267,27 +269,31 @@ human-validation gate (step 7 above).
    commits that never landed on main.
 
 4. **At least one validated dev release on main.** Some
-   `v<X.Y.Z>-rc.*` tag must exist in the repo whose `release-rc.yml`
-   run concluded with `success` AND whose commit is reachable from
-   `origin/main` — either the canonical `.dev.<M>` form or the
-   legacy `-rc.<N>` shape satisfies the glob. The dev tag does *not*
-   have to live at the same
-   commit as the prod tag — the prod commit is the version-bump
-   commit, which by design has no dev tag of its own. What this gate
-   catches: shipping `v0.0.2` when no PR for `0.0.2` ever went through
-   the dev-release cycle, or when the PR that did was never merged.
+   `v<X.Y.Z>rc<N>.dev<M>` tag must exist in the repo whose
+   `release-rc.yml` run concluded with `success` AND whose commit is
+   reachable from `origin/main`. The dev tag does *not* have to live
+   at the same commit as the prod tag — the prod commit is the
+   version-bump commit, which by design has no dev tag of its own.
+   What this gate catches: shipping `v0.0.2` when no PR for `0.0.2`
+   ever went through the dev-release cycle, or when the PR that did
+   was never merged.
 
 After the four pass, the `approve` job pauses the run for required-
 reviewer approval on the `prod-release` environment. That click is
 the "validated by a human" signal — without it, no PyPI upload,
 Electron build, or Docker push happens.
 
-`release-rc.yml` enforces only one constraint of its own — and only
-for the legacy `v<X.Y.Z>-rc.<N>` shape (no `.dev.M` suffix): the tag's
-base version must equal `app/__version__.py`. Dev tags
-(`v<X.Y.Z>-rc.<N>.dev.<M>`) intentionally ship from PR branches whose
-`app/__version__.py` still reads the prior prod version, so the
-source-match check is skipped for them.
+`release-rc.yml` enforces exactly one constraint of its own: the tag
+must match the canonical shape
+`^v(\d+\.\d+\.\d+(?:\.\d+)?)rc(\d+)\.dev(\d+)$`. Anything else — the
+legacy hyphenated `v<X.Y.Z>-rc.<N>[.dev.<M>]` form, a bare
+`v<X.Y.Z>rc<N>` without a dev counter, a tag missing the leading `v`
+— is rejected at the `Compute rc version` step and the workflow
+fails before any wheel/Docker/Electron job runs. Dev tags intentionally
+ship from PR branches whose `app/__version__.py` still reads the prior
+prod version, so no source-version-match check is performed at RC
+time — verify-gate-4 on `release-prod.yml` is what ensures every
+shipped prod version is preceded by a validated dev release on main.
 
 ---
 
@@ -324,9 +330,9 @@ Rare, but possible — e.g. a critical correction to operator-facing
 docs that they need before the next feature release ships. Treat it
 as a single-PR release:
 
-1. Core Maintainer assigns the PR `rc.1` for the next patch version
+1. Core Maintainer assigns the PR `rc1` for the next patch version
    (`v0.0.3`).
-2. Component Maintainer tags `v0.0.3-rc.1.dev.1` from the PR branch
+2. Component Maintainer tags `v0.0.3rc1.dev1` from the PR branch
    tip. Validation is trivial: open the auto-published prerelease on
    GitHub and confirm the auto-generated notes mention the doc PR.
 3. Merge the PR with merge-commit.
@@ -344,8 +350,8 @@ idempotent and the cost is one CI cycle.
 ### Single-PR releases
 
 When only one PR is slated for the next version, the flow degenerates
-naturally: Core Maintainer assigns `rc.1`, Component Maintainer ships
-`v<X.Y.Z>-rc.1.dev.<M>` until validated, merges, Core Maintainer bumps
+naturally: Core Maintainer assigns `rc1`, Component Maintainer ships
+`v<X.Y.Z>rc1.dev<M>` until validated, merges, Core Maintainer bumps
 + tags prod. Same six numbered steps; the only difference is there's
 no PR #42 to wait on.
 
@@ -356,10 +362,10 @@ Four-segment version. To hotfix `0.0.2`:
 ```powershell
 git checkout -b hotfix/v0.0.2.1 v0.0.2
 # fix, commit, push, open PR
-# Core Maintainer assigns rc.1 for v0.0.2.1
-git tag v0.0.2.1-rc.1.dev.1 origin/hotfix/v0.0.2.1
-git push origin v0.0.2.1-rc.1.dev.1
-# validate the dev release; iterate dev.M+1 per fix
+# Core Maintainer assigns rc1 for v0.0.2.1
+git tag v0.0.2.1rc1.dev1 origin/hotfix/v0.0.2.1
+git push origin v0.0.2.1rc1.dev1
+# validate the dev release; iterate dev<M+1> per fix
 # merge (merge-commit), then on main:
 # Edit app/__version__.py: __version__ = "0.0.2.1"
 python scripts/sync_ui_version.py
@@ -373,7 +379,7 @@ git push origin v0.0.2.1
 
 PEP 440 accepts the four-segment form; hatchling and the upgrader both
 handle it. The RC workflow's tag regex matches
-`v0.0.2.1-rc.<N>.dev.<M>` exactly.
+`v0.0.2.1rc<N>.dev<M>` exactly.
 
 ### Schema change
 
@@ -418,29 +424,34 @@ release.
 
 ### Tag conventions
 
-The first row is the canonical form for new work; the second is
-documented only for compatibility with pre-existing tags.
+RC tags carry the **PEP 440 canonical form** verbatim with a leading
+`v` — the same string lands on GitHub, Test PyPI, and Docker Hub
+(modulo the `v`). The `.dev<M>` counter is mandatory.
 
-| Tag pattern                | PEP 440           | npm / installer       | Docker tag                            | PyPI     | Channel      |
-|----------------------------|-------------------|-----------------------|---------------------------------------|----------|--------------|
-| `v0.0.2-rc.1.dev.1`        | `0.0.2rc1.dev1`   | `0.0.2-rc.1.dev.1`    | `openpa-desktop:0.0.2rc1.dev1`        | TestPyPI | `test`       |
-| `v0.0.2-rc.<N>` (legacy)   | `0.0.2rc<N>`      | `0.0.2-rc.<N>`        | `openpa-desktop:0.0.2rc<N>`           | TestPyPI | `test`       |
-| `v0.0.2`                   | `0.0.2`           | `0.0.2`               | `openpa-desktop:0.0.2` + `:latest`    | PyPI     | `production` |
+| Tag pattern        | PEP 440          | npm / installer       | Docker tag                            | PyPI     | Channel      |
+|--------------------|------------------|-----------------------|---------------------------------------|----------|--------------|
+| `v0.0.2rc1.dev1`   | `0.0.2rc1.dev1`  | `0.0.2-rc.1.dev.1`    | `openpa-desktop:0.0.2rc1.dev1`        | TestPyPI | `test`       |
+| `v0.0.2`           | `0.0.2`          | `0.0.2`               | `openpa-desktop:0.0.2` + `:latest`    | PyPI     | `production` |
 
 Within a version's slate:
-- `rc.<N>` indexes the PR (`rc.1` for the first PR, `rc.2` for the
+- `rc<N>` indexes the PR (`rc1` for the first PR, `rc2` for the
   second, etc.) and is assigned by the Core Maintainer.
-- `dev.<M>` increments per bug-fix iteration on that PR (`dev.1`,
-  `dev.2`, …).
+- `dev<M>` increments per bug-fix iteration on that PR (`dev1`,
+  `dev2`, …).
 
 Hotfixes use the four-segment form: `v0.0.2.1` (production) is built
-from `v0.0.2.1-rc.<N>.dev.<M>` (dev release).
+from `v0.0.2.1rc<N>.dev<M>` (dev release).
 
-The legacy `v<X.Y.Z>-rc.<N>` shape (no `.dev.M`) is still accepted by
-`release-rc.yml` so older in-flight runbooks continue to work. It
-requires `app/__version__.py` to already be at `<X.Y.Z>` on the tagged
-commit. New work — including hotfixes — should use the
-`.dev.<M>`-suffixed shape.
+**Strict, single canonical shape.** RC tags must match
+`^v(\d+\.\d+\.\d+(?:\.\d+)?)rc(\d+)\.dev(\d+)$` exactly. The legacy
+hyphenated `v<X.Y.Z>-rc.<N>[.dev.<M>]` form and the bare
+`v<X.Y.Z>rc<N>` (no `.dev<M>`) are both rejected — `release-rc.yml`
+refuses to publish them and the in-app updater ignores GitHub
+prereleases whose tag fails this regex. The npm/installer column is
+the SemVer form `scripts/sync_ui_version.py` derives from the PEP 440
+version internally (npm and electron-builder reject the PEP 440
+no-separator form as a prerelease identifier); the SemVer string
+never appears on GitHub, PyPI, or Docker Hub.
 
 ### Version source
 
@@ -453,10 +464,10 @@ the single source of truth.
   [`scripts/sync_ui_version.py`](scripts/sync_ui_version.py), wired
   into the `predev` / `prebuild` / `preweb:dev` / `preweb:build` npm
   hooks. Never edit it by hand.
-- `release-rc.yml` rewrites `app/__version__.py` in-CI to the
-  `rcN.devM` form (or bare `rcN` for legacy `-rc.<N>` tags) before
-  building. The rewrite is never committed; the prod workflow uses
-  the value as-committed.
+- `release-rc.yml` rewrites `app/__version__.py` in-CI to the PEP 440
+  form (the RC tag with the leading `v` stripped, e.g.
+  `v0.0.2rc1.dev1` → `0.0.2rc1.dev1`) before building. The rewrite is
+  never committed; the prod workflow uses the value as-committed.
 
 `MIN_SUPPORTED_UPGRADE_FROM` in the same file is the oldest version
 this build knows how to migrate from. The upgrader refuses to proceed
@@ -500,15 +511,15 @@ git checkout -b feat/<name>
 git push -u origin feat/<name>
 gh pr create --title "..." --body "..."
 
-# Once Core Maintainer assigns rc.<N> for the upcoming v<X.Y.Z>,
+# Once Core Maintainer assigns rc<N> for the upcoming v<X.Y.Z>,
 # and pr.yml is green:
-git tag v<X.Y.Z>-rc.<N>.dev.1 origin/feat/<name>
-git push origin v<X.Y.Z>-rc.<N>.dev.1
+git tag v<X.Y.Z>rc<N>.dev1 origin/feat/<name>
+git push origin v<X.Y.Z>rc<N>.dev1
 # install via test channel, validate
 
 # Per bug found, push fix and iterate:
-git tag v<X.Y.Z>-rc.<N>.dev.2 origin/feat/<name>
-git push origin v<X.Y.Z>-rc.<N>.dev.2
+git tag v<X.Y.Z>rc<N>.dev2 origin/feat/<name>
+git push origin v<X.Y.Z>rc<N>.dev2
 
 # When validated, merge — MERGE-COMMIT only. NOT --rebase, NOT --squash.
 gh pr merge <PR#> --merge

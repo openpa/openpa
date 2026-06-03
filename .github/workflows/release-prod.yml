@@ -1,7 +1,7 @@
 # Production release workflow.
 #
 # Trigger: push a tag matching ``v*`` (e.g., ``v0.2.1``), excluding
-# ``v*-rc.*`` (those are handled by release-rc.yml). The workflow
+# ``v*rc*`` (those are handled by release-rc.yml). The workflow
 # produces a single GitHub Release with:
 #   - openpa-X.Y.Z-py3-none-any.whl + openpa-X.Y.Z.tar.gz (PyPI + GH)
 #   - Windows NSIS installer + latest.yml
@@ -45,7 +45,7 @@ on:
   push:
     tags:
       - "v*"
-      - "!v*-rc.*"
+      - "!v*rc*"
   workflow_dispatch:
     inputs:
       tag:
@@ -64,13 +64,14 @@ jobs:
   #      commit on main.
   #   3. The tag points at a commit that is on ``main`` — no shipping
   #      from feature branches, no shipping commits that were never merged.
-  #   4. **At least one** ``v<X.Y.Z>-rc.*`` tag exists in the repo whose
-  #      release-rc.yml workflow concluded with ``success`` AND whose
-  #      commit is reachable from origin/main. This proves the version
-  #      had at least one validated dev release that actually got merged.
-  #      It does NOT require the dev tag to live at the same commit as
-  #      the prod tag (the prod commit is the version-bump commit on
-  #      main, which by design has no dev tag of its own).
+  #   4. **At least one** ``v<X.Y.Z>rc*.dev*`` tag exists in the repo
+  #      whose release-rc.yml workflow concluded with ``success`` AND
+  #      whose commit is reachable from origin/main. This proves the
+  #      version had at least one validated dev release that actually
+  #      got merged. It does NOT require the dev tag to live at the
+  #      same commit as the prod tag (the prod commit is the
+  #      version-bump commit on main, which by design has no dev tag
+  #      of its own).
   #
   # Human validation ("I installed this dev release and it works") is
   # enforced by the ``approve`` job below, which uses a GitHub Actions
@@ -138,7 +139,7 @@ jobs:
           fi
           echo "OK: $commit is on main"
 
-      # Some ``v<VERSION>-rc.*`` tag in the repo must satisfy BOTH:
+      # Some ``v<VERSION>rc*.dev*`` tag in the repo must satisfy BOTH:
       #   - its release-rc.yml run concluded with ``success``
       #   - its commit is reachable from origin/main (i.e. the PR
       #     that shipped that dev release got merged)
@@ -153,21 +154,21 @@ jobs:
       # Enumerates tags newest-first (sort -V then reversed) so the most
       # recent dev release is preferred when reporting which tag
       # vouched for the prod release.
-      - name: Verify at least one validated v<version>-rc.* tag is on main
+      - name: Verify at least one validated v<version>rc*.dev* tag is on main
         id: rc
         env:
           TAG: ${{ steps.tag.outputs.name }}
           VERSION: ${{ steps.tag.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          candidate_tags=$(git tag --list "v${VERSION}-rc.*" | sort -V -r)
+          candidate_tags=$(git tag --list "v${VERSION}rc*.dev*" | sort -V -r)
           if [ -z "$candidate_tags" ]; then
-            echo "::error::No v${VERSION}-rc.* tag exists in the repo."
+            echo "::error::No v${VERSION}rc*.dev* tag exists in the repo."
             echo "::error::Production releases must promote at least one validated dev release."
             echo "::error::Ship a per-PR dev release first:"
-            echo "::error::  git tag v${VERSION}-rc.1.dev.1 origin/<feature-branch>"
-            echo "::error::  git push origin v${VERSION}-rc.1.dev.1"
-            echo "::error::Iterate dev.M until release-rc.yml succeeds, validate the build, merge the PR, then tag v${VERSION}."
+            echo "::error::  git tag v${VERSION}rc1.dev1 origin/<feature-branch>"
+            echo "::error::  git push origin v${VERSION}rc1.dev1"
+            echo "::error::Iterate dev<M> until release-rc.yml succeeds, validate the build, merge the PR, then tag v${VERSION}."
             exit 1
           fi
 
@@ -200,12 +201,12 @@ jobs:
           done
 
           if [ -z "$chosen" ]; then
-            echo "::error::No v${VERSION}-rc.* tag has both a successful release-rc.yml run AND a commit reachable from origin/main."
+            echo "::error::No v${VERSION}rc*.dev* tag has both a successful release-rc.yml run AND a commit reachable from origin/main."
             echo "::error::Candidates inspected:"
             printf '%s' "$chosen_reasons" | while IFS= read -r line; do
               [ -n "$line" ] && echo "::error::$line"
             done
-            echo "::error::Cut and validate a v${VERSION}-rc.*.dev.* tag (or merge the PR whose dev release already succeeded) before retrying."
+            echo "::error::Cut and validate a v${VERSION}rc<N>.dev<M> tag (or merge the PR whose dev release already succeeded) before retrying."
             exit 1
           fi
           echo "Found validated dev release: $chosen at $chosen_commit"

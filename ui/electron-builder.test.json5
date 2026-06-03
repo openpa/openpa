@@ -2,8 +2,9 @@
 //
 // Same as electron-builder.json5 except for the publish block:
 //   - ``releaseType: "prerelease"`` so electron-builder uploads to the
-//     prerelease the wheel job created at v0.2.1-rc.N. (Production
-//     uses ``draft`` and a separate ``publish`` job promotes it.)
+//     prerelease the wheel job created at v<X.Y.Z>rc<N>.dev<M>.
+//     (Production uses ``draft`` and a separate ``publish`` job
+//     promotes it.)
 //   - ``channel: "test"`` so the update manifest is named
 //     ``latest-test.yml`` etc., kept out of the production
 //     ``latest.yml`` electron-updater feed. Apps installed from a test

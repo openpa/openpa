@@ -32,7 +32,7 @@ def test_list_releases_production_filters_and_sorts(monkeypatch: pytest.MonkeyPa
     payload = [
         _release_payload("v0.2.0", published_at="2026-01-01T00:00:00Z"),
         _release_payload("v0.2.2", published_at="2026-03-01T00:00:00Z"),
-        _release_payload("v0.2.1-rc.3", prerelease=True),  # excluded
+        _release_payload("v0.2.1rc3.dev1", prerelease=True),  # excluded
         _release_payload("v0.2.1", published_at="2026-02-01T00:00:00Z"),
     ]
     monkeypatch.setattr(manifest, "_http_get_json", lambda url, *, timeout: payload)
@@ -50,20 +50,20 @@ def test_resolve_release_finds_specific_dev_version(
 ) -> None:
     # The picker must be able to pin an OLDER RC even when a newer one exists.
     payload = [
-        _release_payload("v0.2.9-rc.2.dev.1", prerelease=True),  # newer
-        _release_payload("v0.2.9-rc.1.dev.1", prerelease=True),
-        _release_payload("v0.2.9-rc.1.dev.2", prerelease=True),  # target
+        _release_payload("v0.2.9rc2.dev1", prerelease=True),  # newer
+        _release_payload("v0.2.9rc1.dev1", prerelease=True),
+        _release_payload("v0.2.9rc1.dev2", prerelease=True),  # target
     ]
     monkeypatch.setattr(manifest, "_http_get_json", lambda url, *, timeout: payload)
 
     info = manifest.resolve_release("0.2.9rc1.dev2", channel="test", repo="x/y")
     assert info.version == "0.2.9rc1.dev2"
-    assert info.tag_name == "v0.2.9-rc.1.dev.2"
+    assert info.tag_name == "v0.2.9rc1.dev2"
     assert info.channel == "test"
 
 
 def test_resolve_release_raises_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = [_release_payload("v0.2.9-rc.1.dev.1", prerelease=True)]
+    payload = [_release_payload("v0.2.9rc1.dev1", prerelease=True)]
     monkeypatch.setattr(manifest, "_http_get_json", lambda url, *, timeout: payload)
     with pytest.raises(LookupError):
         manifest.resolve_release("0.2.9rc9.dev9", channel="test", repo="x/y")
@@ -79,21 +79,26 @@ def test_list_releases_test_keeps_only_rc_prereleases(
 ) -> None:
     payload = [
         _release_payload("v0.2.2", prerelease=False),                # excluded: final
-        _release_payload("v0.2.1-rc.1", prerelease=True),
-        _release_payload("v0.2.1-rc.3", prerelease=True),
-        _release_payload("v0.2.1-rc.2", prerelease=True),
+        _release_payload("v0.2.1rc1.dev1", prerelease=True),
+        _release_payload("v0.2.1rc3.dev1", prerelease=True),
+        _release_payload("v0.2.1rc2.dev1", prerelease=True),
         _release_payload("v0.2.0-test1", prerelease=True),           # excluded: non-RC tag shape
+        _release_payload("v0.2.0-rc.1.dev.1", prerelease=True),      # excluded: legacy hyphenated form
     ]
     monkeypatch.setattr(manifest, "_http_get_json", lambda url, *, timeout: payload)
 
     summaries = list_releases(repo="x/y", channel="test", limit=10)
 
     assert [s.tag_name for s in summaries] == [
-        "v0.2.1-rc.3",
-        "v0.2.1-rc.2",
-        "v0.2.1-rc.1",
+        "v0.2.1rc3.dev1",
+        "v0.2.1rc2.dev1",
+        "v0.2.1rc1.dev1",
     ]
-    assert [s.version for s in summaries] == ["0.2.1rc3", "0.2.1rc2", "0.2.1rc1"]
+    assert [s.version for s in summaries] == [
+        "0.2.1rc3.dev1",
+        "0.2.1rc2.dev1",
+        "0.2.1rc1.dev1",
+    ]
     assert all(s.prerelease for s in summaries)
 
 

@@ -40,17 +40,19 @@ def test_get_channel_unknown_value_defaults_to_production(
 @pytest.mark.parametrize(
     "tag,expected",
     [
-        ("v0.1.5-rc.1", True),
-        ("v10.20.30-rc.99", True),
-        # Per-PR dev releases (the two-tier release process tag shape).
-        ("v0.2.9-rc.1.dev.1", True),
-        ("v10.20.30-rc.5.dev.99", True),
-        ("v0.1.5", False),
-        ("v0.1.5-rc1", False),  # missing dot between rc and N
-        ("v0.1.5-rc.1.dev1", False),  # missing dot between dev and M
-        ("v0.1.5-rc.1.dev", False),  # missing dev counter
+        # Canonical shape: v<X.Y.Z>[.W]rc<N>.dev<M>. .dev<M> is mandatory.
+        ("v0.2.9rc1.dev1", True),
+        ("v10.20.30rc5.dev99", True),
+        # Four-segment hotfix form.
+        ("v0.0.2.1rc1.dev1", True),
+        ("v0.1.5", False),  # final, not RC
+        ("v0.1.5rc1", False),  # bare rc — .devM is mandatory now
+        ("v0.1.5-rc.1", False),  # legacy hyphenated bare form, rejected
+        ("v0.1.5-rc.1.dev.1", False),  # legacy hyphenated dev form, rejected
+        ("v0.1.5rc1.dev", False),  # missing dev counter
+        ("v0.1.5rc.1.dev.1", False),  # stray dots
         ("v0.1.5-test1", False),  # legacy format
-        ("0.1.5-rc.1", False),  # missing leading v
+        ("0.2.9rc1.dev1", False),  # missing leading v
         ("", False),
     ],
 )
@@ -59,16 +61,25 @@ def test_is_rc_tag(tag: str, expected: bool) -> None:
 
 
 def test_tag_to_pep440_round_trip() -> None:
-    assert channel.tag_to_pep440("v0.1.5-rc.3") == "0.1.5rc3"
-    assert channel.tag_to_pep440("v2.7.18-rc.1") == "2.7.18rc1"
-    # Per-PR dev releases keep the .devM suffix in PEP 440 form.
-    assert channel.tag_to_pep440("v0.2.9-rc.1.dev.1") == "0.2.9rc1.dev1"
-    assert channel.tag_to_pep440("v0.2.9-rc.2.dev.10") == "0.2.9rc2.dev10"
+    # Tag is already PEP 440 canonical; the conversion just strips ``v``.
+    assert channel.tag_to_pep440("v0.2.9rc1.dev1") == "0.2.9rc1.dev1"
+    assert channel.tag_to_pep440("v0.2.9rc2.dev10") == "0.2.9rc2.dev10"
+    assert channel.tag_to_pep440("v10.20.30rc5.dev99") == "10.20.30rc5.dev99"
+    # Four-segment hotfix form round-trips too.
+    assert channel.tag_to_pep440("v0.0.2.1rc1.dev1") == "0.0.2.1rc1.dev1"
 
 
 def test_tag_to_pep440_rejects_non_rc_tag() -> None:
     with pytest.raises(ValueError):
         channel.tag_to_pep440("v0.1.5")
+    # Legacy hyphenated form is rejected — no back-compat.
+    with pytest.raises(ValueError):
+        channel.tag_to_pep440("v0.1.5-rc.3")
+    with pytest.raises(ValueError):
+        channel.tag_to_pep440("v0.2.9-rc.1.dev.1")
+    # Bare new-form (no .dev<M>) is rejected — .dev<M> is mandatory.
+    with pytest.raises(ValueError):
+        channel.tag_to_pep440("v0.2.9rc1")
 
 
 def test_parse_pep440_orders_rc_before_final() -> None:
@@ -270,11 +281,11 @@ def test_parse_release_prod_strips_v() -> None:
 
 def test_parse_release_test_translates_to_pep440() -> None:
     info = manifest._parse_release(
-        _release_payload("v0.1.5-rc.3", prerelease=True),
+        _release_payload("v0.2.9rc1.dev2", prerelease=True),
         channel="test",
     )
-    assert info.version == "0.1.5rc3"
-    assert info.tag_name == "v0.1.5-rc.3"
+    assert info.version == "0.2.9rc1.dev2"
+    assert info.tag_name == "v0.2.9rc1.dev2"
     assert info.channel == "test"
 
 
@@ -291,32 +302,34 @@ def test_fetch_latest_test_picks_highest_prerelease(
 ) -> None:
     payload = [
         _release_payload("v0.1.5", prerelease=False),
-        _release_payload("v0.1.5-rc.1", prerelease=True),
-        _release_payload("v0.1.5-rc.3", prerelease=True),
-        _release_payload("v0.1.5-rc.2", prerelease=True),
-        # Legacy ``-testN`` prerelease: filtered out even though prerelease=True.
+        _release_payload("v0.1.5rc1.dev1", prerelease=True),
+        _release_payload("v0.1.5rc3.dev1", prerelease=True),
+        _release_payload("v0.1.5rc2.dev1", prerelease=True),
+        # Legacy hyphenated prerelease: filtered out — no longer matches is_rc_tag.
+        _release_payload("v0.1.4-rc.1.dev.1", prerelease=True),
+        # Legacy ``-testN`` prerelease: also filtered out.
         _release_payload("v0.1.4-test1", prerelease=True),
     ]
     monkeypatch.setattr(manifest, "_http_get_json", lambda url, *, timeout: payload)
     info = manifest._fetch_latest_test(repo="x/y", timeout=1.0)
-    assert info.tag_name == "v0.1.5-rc.3"
-    assert info.version == "0.1.5rc3"
+    assert info.tag_name == "v0.1.5rc3.dev1"
+    assert info.version == "0.1.5rc3.dev1"
 
 
 def test_fetch_latest_test_includes_dev_prereleases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Regression for the two-tier release process: per-PR dev tags
-    # (``v…-rc.N.dev.M``) must be detected, not dropped. Highest dev
-    # iteration of the rc wins; the bare rc (if also present) outranks it.
+    # (``v<X.Y.Z>rc<N>.dev<M>``) must be detected, not dropped. Highest
+    # dev iteration of the rc wins.
     payload = [
-        _release_payload("v0.2.9-rc.1.dev.1", prerelease=True),
-        _release_payload("v0.2.9-rc.1.dev.3", prerelease=True),
-        _release_payload("v0.2.9-rc.1.dev.2", prerelease=True),
+        _release_payload("v0.2.9rc1.dev1", prerelease=True),
+        _release_payload("v0.2.9rc1.dev3", prerelease=True),
+        _release_payload("v0.2.9rc1.dev2", prerelease=True),
     ]
     monkeypatch.setattr(manifest, "_http_get_json", lambda url, *, timeout: payload)
     info = manifest._fetch_latest_test(repo="x/y", timeout=1.0)
-    assert info.tag_name == "v0.2.9-rc.1.dev.3"
+    assert info.tag_name == "v0.2.9rc1.dev3"
     assert info.version == "0.2.9rc1.dev3"
 
 

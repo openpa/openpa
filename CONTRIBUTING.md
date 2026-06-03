@@ -233,9 +233,9 @@ Maintainer** (owns the version line) and one or more **Component
 Maintainers** (one per PR).
 
 Short version: a Core Maintainer assigns each PR slated for the next
-version an RC index (`rc.1`, `rc.2`, …). The Component Maintainer
-cuts `v<X.Y.Z>-rc.<N>.dev.<M>` tags from the PR branch tip — no
-`app/__version__.py` bump on the PR branch. Iterate `dev.M+1` per fix
+version an RC index (`rc1`, `rc2`, …). The Component Maintainer
+cuts `v<X.Y.Z>rc<N>.dev<M>` tags from the PR branch tip — no
+`app/__version__.py` bump on the PR branch. Iterate `dev<M+1>` per fix
 until validated on a test-channel install. Merge with **merge-commit**
 (not rebase, not squash — the dev tag's commit must remain reachable
 from main). After every slated PR has shipped a validated dev release

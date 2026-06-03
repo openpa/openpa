@@ -1,8 +1,11 @@
 # Periodic cleanup of release-candidate artifacts. Once a production
 # release ``vX.Y.Z`` has been live for at least 30 days, all RC artifacts
 # for that ``X.Y.Z`` are removed:
-#   - Docker Hub tags matching ``openpa/openpa-desktop:<X.Y.Z>rcN[.devM]``
-#   - GitHub prereleases tagged ``v<X.Y.Z>-rc.N[.dev.M]``
+#   - Docker Hub tags matching ``openpa/openpa-desktop:<X.Y.Z>rcN.devM``
+#   - GitHub prereleases tagged ``v<X.Y.Z>rcN.devM``
+# (The regexes below are permissive enough to also clean up any
+# pre-migration artifacts in the older hyphenated ``v<...>-rc.N[.dev.M]``
+# shape that may still be on Docker Hub / GitHub.)
 #
 # The corresponding git tags are intentionally NOT deleted. They're tiny,
 # and release-prod.yml's verify gate inspects them retrospectively when
@@ -136,12 +139,17 @@ jobs:
               url = page.get("next")
 
           # Step 5 — delete matching RC artifacts.
-          # GH tag form:     v<X.Y.Z>-rc.<N>[.dev.<M>]
-          # Docker tag form: <X.Y.Z>rc<N>[.dev<M>]   (PEP 440 — see release-rc.yml)
+          # GH tag (canonical):  v<X.Y.Z>rc<N>.dev<M>
+          # Docker tag (canonical): <X.Y.Z>rc<N>.dev<M>   (PEP 440 — see release-rc.yml)
+          # Both regexes are permissive enough to also match
+          # pre-migration artifacts in the older hyphenated/bare shapes
+          # so they get cleaned up too.
           gh_deleted = dh_deleted = failed = 0
           for version in sorted(superseded):
               print(f"\n── v{version} ──")
-              gh_re = re.compile(rf"^v{re.escape(version)}-rc\.\d+(?:\.dev\.\d+)?$")
+              gh_re = re.compile(
+                  rf"^v{re.escape(version)}(?:-rc\.\d+(?:\.dev\.\d+)?|rc\d+\.dev\d+)$"
+              )
               dh_re = re.compile(rf"^{re.escape(version)}rc\d+(?:\.dev\d+)?$")
 
               for r in releases:

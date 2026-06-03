@@ -119,10 +119,11 @@ def fetch_latest(
     test tags — the regression-safety guarantee for existing installs.
 
     ``channel="test"`` lists ``/releases``, filters to entries marked
-    ``prerelease=true`` whose tag matches ``v*-rc.N``, and returns the
-    highest by PEP 440 ordering. Page 1 (default 30 items) is enough in
-    practice; if a test channel ever accumulates more than 30 unreleased
-    entries, the cap is the right thing to hit anyway.
+    ``prerelease=true`` whose tag matches the canonical RC shape
+    ``v<X.Y.Z>[.W]rc<N>.dev<M>``, and returns the highest by PEP 440
+    ordering. Page 1 (default 30 items) is enough in practice; if a
+    test channel ever accumulates more than 30 unreleased entries,
+    the cap is the right thing to hit anyway.
 
     ``channel="dev"`` short-circuits the GitHub lookup entirely and
     returns a synthesised "always available" release derived from the
@@ -257,9 +258,10 @@ def list_releases(
     Per channel:
       - ``production`` returns final releases (``prerelease=False``) sorted
         by PEP 440 desc.
-      - ``test`` returns release candidates whose tag matches
-        ``v*-rc.N`` (``prerelease=True`` AND :func:`is_rc_tag`), sorted by
-        PEP 440 desc with the tag rewritten to ``rcN`` form.
+      - ``test`` returns release candidates whose tag matches the
+        canonical ``v<X.Y.Z>[.W]rc<N>.dev<M>`` shape (``prerelease=True``
+        AND :func:`is_rc_tag`), sorted by PEP 440 desc with the leading
+        ``v`` stripped to give the PEP 440 form.
       - ``dev`` returns ``[]`` — there is no upstream release list when
         running the working copy, callers should skip the picker.
 
@@ -346,10 +348,10 @@ def _http_get_json(url: str, *, timeout: float) -> Any:
 def _parse_release(payload: dict[str, Any], *, channel: Channel) -> ReleaseInfo:
     tag = payload.get("tag_name") or ""
     if channel == "test":
-        # Test tags carry a ``-rc.N`` suffix that pip can't install
-        # against; the wheel on Test PyPI is named with the PEP 440
-        # ``rcN`` form. ``release-rc.yml`` performs the same
-        # rewrite in CI so the round-trip is exact.
+        # Test tags carry the canonical ``vX.Y.ZrcN.devM`` shape (PEP
+        # 440 form with a leading ``v``); ``tag_to_pep440`` just strips
+        # the ``v``. The wheel on Test PyPI is named with that exact
+        # PEP 440 form, so the round-trip is trivial.
         if not is_rc_tag(tag):
             raise ValueError(f"Test channel got non-RC tag: {tag!r}")
         version = tag_to_pep440(tag)

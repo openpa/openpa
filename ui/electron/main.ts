@@ -725,10 +725,12 @@ async function detectInstallEnvironment(): Promise<InstallerEnvironment> {
 const INSTALL_VERSIONS_REPO = process.env.OPENPA_UPGRADE_REPO ?? 'openpa/openpa'
 const INSTALL_VERSIONS_API = `https://api.github.com/repos/${INSTALL_VERSIONS_REPO}/releases?per_page=100`
 
-// ``vMAJOR.MINOR.PATCH-rc.N[.dev.M]`` — the test-channel tag format used
-// by release-rc.yml, including the per-PR dev form ``v0.2.9-rc.1.dev.2``.
-// Mirrors ``_RC_TAG`` in app/upgrade/channel.py.
-const RC_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)(?:\.dev\.(\d+))?$/
+// ``vMAJOR.MINOR.PATCH[.HOTFIX]rcN.devM`` — the canonical test-channel
+// tag format used by release-rc.yml (e.g. ``v0.2.9rc1.dev2``). The
+// ``.devM`` counter is mandatory; bare ``vX.Y.ZrcN`` and the older
+// hyphenated form ``v0.2.9-rc.1.dev.2`` are both rejected. Mirrors
+// ``_RC_TAG`` in app/upgrade/channel.py.
+const RC_TAG_RE = /^v(\d+\.\d+\.\d+(?:\.\d+)?)rc(\d+)\.dev(\d+)$/
 // ``vMAJOR.MINOR.PATCH`` — the production tag format.
 const PROD_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/
 
@@ -830,19 +832,15 @@ async function listInstallVersions(): Promise<InstallVersionListing> {
     if (channel === 'test') {
       // Test channel: any RC prerelease on any line — no line lock. The
       // test channel exists to validate arbitrary per-PR release
-      // candidates, so we offer every published ``vX.Y.Z-rc.N[.dev.M]``
+      // candidates, so we offer every published ``vX.Y.ZrcN.devM``
       // (a 0.2.8 shell may install a 0.2.9 RC; the shell auto-updates
       // independently). Mirrors matches_electron_line() in
       // app/upgrade/channel.py, which drops the line constraint on test.
       if (!entry.prerelease) continue
       const m = RC_TAG_RE.exec(tag)
       if (!m) continue
-      const base = `${m[1]}.${m[2]}.${m[3]}`
-      // m[5] is the optional ``.dev.M`` counter; keep it in the PEP 440 form.
-      const version =
-        m[5] === undefined
-          ? `${base}rc${parseInt(m[4], 10)}`
-          : `${base}rc${parseInt(m[4], 10)}.dev${parseInt(m[5], 10)}`
+      // Tag is already in PEP 440 canonical shape; strip the ``v``.
+      const version = tag.slice(1)
       allowed.push(version)
       if (entry.html_url) htmlUrls[version] = entry.html_url
     } else {
@@ -968,9 +966,9 @@ async function runInstaller(
   // against ``--electron-version`` and exits with ``Invalid version``
   // if it falls outside the allowed set.
   // Pass the release line (``0.2.1``), not the SemVer build version
-  // (``0.2.1-rc.12``) — install.sh / install.ps1 enforce the channel
-  // rule via ``${ELECTRON_VERSION}rcN``, which only works on the
-  // bare ``X.Y.Z`` form.
+  // (``0.2.1-rc.12.dev.3``) — install.sh / install.ps1 enforce the
+  // channel rule via ``${ELECTRON_VERSION}rcN``, which only works on
+  // the bare ``X.Y.Z`` form.
   args.push('--electron-version', app.getVersion().split(/[-+]/)[0])
   if (payload.version) {
     args.push('--version', payload.version)

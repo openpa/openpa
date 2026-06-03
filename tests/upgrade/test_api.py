@@ -172,16 +172,16 @@ def test_versions_lists_rc_releases_on_test(monkeypatch: pytest.MonkeyPatch) -> 
 
     fake = [
         manifest.ReleaseSummary(
-            tag_name="v0.2.9-rc.2.dev.1",
-            name="v0.2.9-rc.2.dev.1",
+            tag_name="v0.2.9rc2.dev1",
+            name="v0.2.9rc2.dev1",
             version="0.2.9rc2.dev1",
             published_at="2026-05-27T00:00:00Z",
             prerelease=True,
             html_url="https://example.invalid/r/1",
         ),
         manifest.ReleaseSummary(
-            tag_name="v0.2.9-rc.1.dev.2",
-            name="v0.2.9-rc.1.dev.2",
+            tag_name="v0.2.9rc1.dev2",
+            name="v0.2.9rc1.dev2",
             version="0.2.9rc1.dev2",
             published_at="2026-05-26T00:00:00Z",
             prerelease=True,
@@ -196,7 +196,7 @@ def test_versions_lists_rc_releases_on_test(monkeypatch: pytest.MonkeyPatch) -> 
     body = r.json()
     assert body["channel"] == "test"
     assert [v["version"] for v in body["versions"]] == ["0.2.9rc2.dev1", "0.2.9rc1.dev2"]
-    assert body["versions"][0]["tag_name"] == "v0.2.9-rc.2.dev.1"
+    assert body["versions"][0]["tag_name"] == "v0.2.9rc2.dev1"
 
 
 # ── GET /api/upgrade/status ──────────────────────────────────────────────

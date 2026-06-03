@@ -54,7 +54,8 @@ def test_install_sh_is_dev_aware() -> None:
 
 def test_electron_main_ts_is_dev_aware() -> None:
     text = (_REPO / "ui" / "electron" / "main.ts").read_text(encoding="utf-8")
-    # RC_TAG_RE captures the optional .dev.M group.
-    assert r"-rc\.(\d+)(?:\.dev\.(\d+))?" in text
-    # parseVersion parses rcN.devM.
+    # RC_TAG_RE matches the canonical v<X.Y.Z>[.W]rc<N>.dev<M> shape
+    # (mandatory .dev<M>; mirrors _RC_TAG in app/upgrade/channel.py).
+    assert r"v(\d+\.\d+\.\d+(?:\.\d+)?)rc(\d+)\.dev(\d+)" in text
+    # parseVersion accepts rcN and rcN.devM as PEP 440 version strings.
     assert r"rc(\d+)(?:\.dev(\d+))?" in text
