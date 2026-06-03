@@ -35,6 +35,7 @@ import os
 import signal
 import sys
 import time
+from typing import Callable
 
 from app.__version__ import __version__ as CURRENT_VERSION
 from app.upgrade import runner, status
@@ -42,13 +43,19 @@ from app.upgrade.runner import UpgradeEvent
 from app.utils import logger
 
 
-def _make_callback():
+def _make_callback() -> tuple[Callable[[UpgradeEvent], None], dict[str, str | None]]:
     """Build the ``UpgradeEvent`` → status-file callback.
 
     Each event becomes a header line ``[<phase>] <message>`` plus a
     phase update so the renderer can render summary text without
     parsing log lines.
+
+    Returns ``(callback, last_failure)``. ``last_failure["message"]``
+    holds the most recent ``event.message`` where ``event.ok`` was False
+    — so when ``runner.apply()`` returns False without raising, the
+    caller can surface the actual reason instead of a hardcoded string.
     """
+    last_failure: dict[str, str | None] = {"message": None}
 
     def _cb(event: UpgradeEvent) -> None:
         # Map runner kinds onto the broader status phase vocabulary.
@@ -59,9 +66,11 @@ def _make_callback():
             # finish() is called after apply() returns; don't double-mark.
             status.append_log(f"[{event.kind}] {event.message}")
             return
+        if not event.ok:
+            last_failure["message"] = event.message
         status.update_phase(event.kind, event.message, ok=event.ok)
 
-    return _cb
+    return _cb, last_failure
 
 
 def _kill_parent(pid: int) -> None:
@@ -120,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    callback = _make_callback()
+    callback, last_failure = _make_callback()
 
     # Targeted test-channel install: skip the latest-based ``check`` gate
     # (the target may be older than the latest, which check() would report
@@ -136,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if not success:
             logger.error("[upgrade:detached] targeted runner.apply returned False")
-            status.finish(ok=False, exit_code=1, error="upgrade rolled back")
+            status.finish(
+                ok=False,
+                exit_code=1,
+                error=last_failure["message"] or "upgrade rolled back",
+            )
             return 1
         return _finish_and_restart(args.parent_pid)
 
@@ -169,7 +182,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if not success:
         logger.error("[upgrade:detached] runner.apply returned False; upgrade rolled back")
-        status.finish(ok=False, exit_code=1, error="upgrade rolled back")
+        status.finish(
+            ok=False,
+            exit_code=1,
+            error=last_failure["message"] or "upgrade rolled back",
+        )
         return 1
 
     return _finish_and_restart(args.parent_pid)

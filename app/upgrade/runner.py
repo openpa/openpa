@@ -215,12 +215,19 @@ def _apply_target(
 
     Unlike the latest-based flow this does NOT gate on ``is_newer`` — the
     whole point is letting a tester jump to a chosen PR's RC even when a
-    newer PR's RC exists. It still:
+    newer PR's RC exists. It also does NOT hard-reject when the target's
+    ``min_supported_upgrade_from`` is above the current install: a
+    maintainer who explicitly picked an older RC from the Updates page is
+    opting in to testing that combination, and the backup-first /
+    rollback-on-failure path inside :func:`_apply_locked` is the actual
+    safety guarantee. The floor mismatch is surfaced as a ``WARNING:``
+    event before the install proceeds, so it's still visible.
+    Operations performed:
       - resolves the exact release (404 → fail),
       - no-ops if we're already on it,
-      - enforces the target's ``min_supported_upgrade_from`` so we never
-        install a build that can't migrate the live DB forward,
-      - and runs under the same backup / rollback lock as a normal upgrade.
+      - warns (but does not refuse) when the target's floor is above
+        the current install,
+      - runs under the same backup / rollback lock as a normal upgrade.
     """
     _emit(callback, UpgradeEvent("check", f"Resolving test release {target_version}…"))
     try:
@@ -239,14 +246,14 @@ def _apply_target(
             UpgradeEvent(
                 "check",
                 (
-                    f"{release.version} requires at least "
-                    f"{release.min_supported_upgrade_from} to install in place; this "
-                    f"install is {CURRENT_VERSION}."
+                    f"WARNING: {release.version} declares "
+                    f"min_supported_upgrade_from={release.min_supported_upgrade_from} "
+                    f"but this install is {CURRENT_VERSION}. Migration may fail; "
+                    "a backup will be taken and the install will be rolled back "
+                    "automatically if the new build can't read the live database."
                 ),
-                ok=False,
             ),
         )
-        return False
 
     _emit(
         callback,

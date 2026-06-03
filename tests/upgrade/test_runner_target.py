@@ -59,7 +59,14 @@ def test_apply_target_noop_when_already_installed(monkeypatch: pytest.MonkeyPatc
     assert called["locked"] is False  # nothing to install
 
 
-def test_apply_target_blocks_when_min_supported_too_high(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_target_warns_but_proceeds_when_min_supported_too_high(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Test-channel targeted installs no longer hard-reject when the
+    # target's floor is above current — the maintainer's explicit pick
+    # is the contract, and backup/rollback in _apply_locked is the
+    # actual safety net. We DO emit a WARNING event so the log makes
+    # the mismatch visible.
     monkeypatch.setattr(runner, "get_channel", lambda: "test")
     monkeypatch.setattr(runner, "CURRENT_VERSION", "0.1.0")
     monkeypatch.setattr(
@@ -69,8 +76,19 @@ def test_apply_target_blocks_when_min_supported_too_high(monkeypatch: pytest.Mon
     called = {"locked": False}
     monkeypatch.setattr(runner, "_apply_locked", lambda r, cb: called.__setitem__("locked", True) or True)
 
-    assert runner.apply(target_version="0.2.9rc1.dev2") is False
-    assert called["locked"] is False
+    events: list[runner.UpgradeEvent] = []
+    assert runner.apply(target_version="0.2.9rc1.dev2", callback=events.append) is True
+    assert called["locked"] is True  # falls through to the locked install path
+
+    # A single WARNING event is emitted naming the floor and current
+    # version so the modal log explains the risk.
+    warn_events = [e for e in events if "WARNING" in e.message]
+    assert len(warn_events) == 1
+    assert "min_supported_upgrade_from=0.2.0" in warn_events[0].message
+    assert "0.1.0" in warn_events[0].message  # the current version
+    # The WARNING is informational, not a failure — ok stays True so
+    # detached.py's last-failure capture doesn't latch onto it.
+    assert warn_events[0].ok is True
 
 
 def test_apply_target_on_production_keeps_latest_guard(monkeypatch: pytest.MonkeyPatch) -> None:
