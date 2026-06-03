@@ -60,13 +60,22 @@ def test_catalog_row_includes_requires_feature() -> None:
 
     rows = {row["tool_id"]: row for row in list_builtin_tool_catalog()}
 
+    # `requires_feature` is surfaced on every catalog row: a string for
+    # tools that depend on an optional pip-extras group (so the wizard
+    # can render "Installs: openpa[<feature>]") and None for the rest.
     assert rows["browser"]["requires_feature"] == "browser"
-    assert rows["markdown_converter"]["requires_feature"] == "documents"
-    assert rows["google_calendar"]["requires_feature"] == "google"
-    assert rows["google_places"]["requires_feature"] == "google"
-    # Tools without optional deps surface None so the UI can hide the hint.
     assert rows["weather_agent"]["requires_feature"] is None
-    assert rows["sleep"]["requires_feature"] is None
+
+    # Runtime-only system tools and tools deliberately gated out of the
+    # Settings UI (``hidden: True`` or ``visible: False`` in TOOL_CONFIG)
+    # are NOT surfaced by the catalog API. Their requires_feature
+    # plumbing is still exercised through feature_keys_for_tool_ids /
+    # required_feature_for_tool_id (tests above), which don't filter
+    # by catalog visibility.
+    assert "markdown_converter" not in rows  # hidden: True
+    assert "google_calendar" not in rows     # visible: False
+    assert "google_places" not in rows       # visible: False
+    assert "sleep" not in rows               # hidden: True
 
 
 def test_tool_feature_keys_from_payload_only_counts_enabled() -> None:
