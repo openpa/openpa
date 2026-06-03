@@ -154,22 +154,21 @@ def _synthesize_dev_release() -> ReleaseInfo:
     The runner's matching dev-channel branch in
     :func:`app.upgrade.runner._apply_locked` skips the actual pip
     install — so clicking Update on dev exercises backup → migrate →
-    health → restart without touching the editable install. See
-    UPGRADING.md for the operator-facing note.
+    health → restart without touching the editable install.
     """
     synth_version = f"{_CURRENT_VERSION}+devforced"
     return ReleaseInfo(
         version=synth_version,
         tag_name=f"v{synth_version}",
         name="Dev channel — forced available for in-app updater testing",
-        html_url="https://github.com/openpa/openpa/blob/main/UPGRADING.md",
+        html_url="",
         body=(
             "**Dev channel synthetic release.**\n\n"
             "This entry is generated locally so the in-app Update button is "
             "always testable on a working-copy install. Clicking Update Now "
             "will run the full upgrade flow (backup → migrate → restart) but "
             "skip the actual `pip install` step — your editable install is "
-            "not modified. See UPGRADING.md for details."
+            "not modified."
         ),
         asset_url=None,
         # Never blocks: the synth must work from any install older than

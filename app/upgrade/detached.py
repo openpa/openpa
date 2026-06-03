@@ -25,8 +25,7 @@ happens next depends on how the install is supervised:
   module's parent-kill is a no-op (parent pid never gets passed).
 - Under a bare ``openpa serve`` with no supervisor: the backend exits
   and the user must relaunch it. The status file remains so the new
-  process surfaces the terminal result when it boots. Documented as a
-  known limitation in UPGRADING.md.
+  process surfaces the terminal result when it boots.
 """
 
 from __future__ import annotations
