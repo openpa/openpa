@@ -23,12 +23,14 @@ import {
   type ServiceCapabilitiesResponse,
 } from '../services/configApi';
 import { fetchInstallCatalog, type InstallCatalog } from '../services/installCatalogApi';
+import { useServerRestart } from '../composables/useServerRestart';
 import DeploymentModeRadio from '../components/setup/DeploymentModeRadio.vue';
 
 const props = defineProps<{ profile: string }>();
 const router = useRouter();
 const settingsStore = useSettingsStore();
 const embeddingStatusStore = useEmbeddingStatusStore();
+const serverRestart = useServerRestart();
 
 // Subscribe reactively to the SSE-driven store. App.vue opens the
 // stream globally; this page just reads.
@@ -367,7 +369,22 @@ onMounted(() => {
     return;
   }
   loadConfig();
+  // Resolve install_mode early so the install dialog's Restart button
+  // knows whether to route through the Electron IPC bridge or
+  // POST /api/system/restart.
+  serverRestart.loadInstallMode();
 });
+
+async function restartFromInstallDialog() {
+  await serverRestart.restart();
+  // The page is about to be reloaded (Docker/Electron supervisor
+  // respawns) or the connection will drop (no supervisor) — either
+  // way, closing the dialog avoids leaving a stale "Install complete"
+  // banner up if the page survives.
+  if (serverRestart.phase.value === 'reconnected') {
+    closeFeatureInstallDialog();
+  }
+}
 </script>
 
 <template>
@@ -569,6 +586,12 @@ onMounted(() => {
           OpenPA server — the embedding model will load automatically on
           startup and this page will report "Success" when it's ready.
         </p>
+        <p
+          v-if="featureInstallRestartRequired && serverRestart.error.value"
+          class="feature-install-error"
+        >
+          Restart failed: {{ serverRestart.error.value }}
+        </p>
       </div>
       <template #footer>
         <ElButton
@@ -586,13 +609,29 @@ onMounted(() => {
         >
           {{ featureInstallError ? 'Retry install' : 'Install' }}
         </ElButton>
-        <ElButton
-          v-if="featureInstallRestartRequired"
-          type="primary"
-          @click="closeFeatureInstallDialog"
-        >
-          Close
-        </ElButton>
+        <template v-if="featureInstallRestartRequired">
+          <ElButton
+            @click="closeFeatureInstallDialog"
+            :disabled="serverRestart.isBusy.value"
+          >
+            Close
+          </ElButton>
+          <!-- ``autofocus`` lands focus on Restart so a Tab-less user
+               can hit Enter to proceed; the Close button is still one
+               Tab away for anyone who wants to dismiss without
+               restarting. The Element Plus button forwards the
+               attribute to the underlying <button>. -->
+          <ElButton
+            type="primary"
+            autofocus
+            :loading="serverRestart.isBusy.value"
+            :disabled="serverRestart.isBusy.value"
+            @click="restartFromInstallDialog"
+          >
+            <Icon icon="mdi:restart" style="margin-right: 4px" />
+            Restart
+          </ElButton>
+        </template>
       </template>
     </ElDialog>
   </div>
