@@ -15,12 +15,11 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from app.api._auth import require_admin
-from app.config.bootstrap import bootstrap_exists, write_bootstrap
+from app.config.bootstrap import write_bootstrap
 from app.config.settings import (
     BaseConfig,
     DEFAULT_USER_WORKING_DIR,
     relocate_system_directory,
-    set_dynamic_config_storage,
 )
 from app.config.install_catalog import (
     get_active_install_mode,
@@ -28,14 +27,10 @@ from app.config.install_catalog import (
 )
 from app.config.setup_profiles import get_active_setup_profile_id, list_setup_profiles
 from app.events.setup_progress_bus import publish_setup_event
-from app.runtime import BootedState, get_state
+from app.runtime import BootedState
 from app.storage import (
-    get_conversation_storage,
-    get_dynamic_config_storage,
     invalidate_storage_singletons,
 )
-from app.storage.dynamic_config_storage import DynamicConfigStorage
-from app.storage.conversation_storage import ConversationStorage
 from app.utils.logger import logger
 from app.utils.persona import ensure_persona_file
 
@@ -50,7 +45,7 @@ _BOOTSTRAP_ONLY_KEYS = {"db_provider", "postgres", "system_dir"}
 
 
 # Profile name validation: lowercase, numbers, underscore, hyphen only
-PROFILE_NAME_PATTERN = re.compile(r'^[a-z0-9_-]+$')
+PROFILE_NAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 
 
 def _emit_setup(step: str, message: str, level: str = "info") -> None:
@@ -61,15 +56,16 @@ def _emit_setup(step: str, message: str, level: str = "info") -> None:
     colour the log line.
     """
     try:
-        publish_setup_event({
-            "step": step,
-            "message": message,
-            "level": level,
-            "ts": time.time(),
-        })
+        publish_setup_event(
+            {
+                "step": step,
+                "message": message,
+                "level": level,
+                "ts": time.time(),
+            }
+        )
     except Exception:  # noqa: BLE001
         logger.debug("setup-progress emit failed", exc_info=True)
-
 
 
 def _validate_profile_name(name: str) -> str | None:
@@ -105,6 +101,33 @@ def _tool_feature_keys_from_payload(body: dict) -> list[str]:
     return feature_keys_for_tool_ids(enabled_tool_ids)
 
 
+def _embedding_feature_keys(embedding_body: dict) -> list[str]:
+    """Return the feature keys an enabled embedding config implies.
+
+    ``embedding_body`` is the same shape ``PUT /api/config/embedding``
+    receives (no ``embedding_config`` wrapper). Returns an empty list
+    when embedding is disabled. Always derives both the embedding
+    provider's feature and the vector-store provider's feature so the
+    preflight in :func:`handle_put_embedding_config` doesn't need to
+    second-guess which extras the apply step will reach for.
+    """
+    from app.features.manifest import FEATURES
+
+    if not embedding_body.get("enabled"):
+        return []
+    out: list[str] = []
+    provider = str(embedding_body.get("provider") or "me5").lower()
+    feature_key = f"embedding.{provider}"
+    if feature_key in FEATURES:
+        out.append(feature_key)
+    vs = embedding_body.get("vectorstore") or {}
+    vs_provider = str(vs.get("provider") or "qdrant").lower()
+    vs_key = f"vectorstore.{vs_provider}"
+    if vs_key in FEATURES:
+        out.append(vs_key)
+    return out
+
+
 def _features_required_by_setup_payload(body: dict) -> list[str]:
     """Map a wizard payload to the feature keys whose deps it implies.
 
@@ -127,7 +150,7 @@ def _features_required_by_setup_payload(body: dict) -> list[str]:
         feature_key = f"embedding.{provider}"
         if feature_key in FEATURES:
             features.append(feature_key)
-        vs = (emb.get("vectorstore") or {})
+        vs = emb.get("vectorstore") or {}
         vs_provider = str(vs.get("provider") or "qdrant").lower()
         vs_key = f"vectorstore.{vs_provider}"
         if vs_key in FEATURES:
@@ -153,7 +176,7 @@ def _features_required_by_setup_payload(body: dict) -> list[str]:
             features.append(feature)
 
     # Channel adapters declared in the wizard.
-    for entry in (body.get("channel_configs") or []):
+    for entry in body.get("channel_configs") or []:
         if not isinstance(entry, dict):
             continue
         ch_type = str(entry.get("channel_type", "")).lower()
@@ -342,7 +365,8 @@ def get_config_routes(state: BootedState) -> list[Route]:
     def _require_storage() -> JSONResponse | None:
         if not state.storage_ready:
             return JSONResponse(
-                {"error": "Setup is not complete"}, status_code=503,
+                {"error": "Setup is not complete"},
+                status_code=503,
             )
         return None
 
@@ -503,10 +527,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
                 required = ("host", "database", "user")
                 missing = [k for k in required if not pg_in.get(k)]
                 if missing:
-                    return (
-                        f"Postgres (external) connection requires: "
-                        f"{', '.join(missing)}"
-                    )
+                    return f"Postgres (external) connection requires: " f"{', '.join(missing)}"
             else:
                 return (
                     f"Unsupported deployment_mode for PostgreSQL: "
@@ -538,18 +559,20 @@ def get_config_routes(state: BootedState) -> list[Route]:
             await candidate.dispose()
             _emit_setup("database", "PostgreSQL reachable.", level="success")
 
-            write_bootstrap({
-                "db_provider": "postgres",
-                "postgres": {
-                    "deployment_mode": deployment_mode,
-                    "host": pg_in["host"],
-                    "port": int(pg_in.get("port") or 5432),
-                    "database": pg_in["database"],
-                    "user": pg_in["user"],
-                    "password": pg_in.get("password", ""),
-                    "sslmode": pg_in.get("sslmode", "prefer"),
-                },
-            })
+            write_bootstrap(
+                {
+                    "db_provider": "postgres",
+                    "postgres": {
+                        "deployment_mode": deployment_mode,
+                        "host": pg_in["host"],
+                        "port": int(pg_in.get("port") or 5432),
+                        "database": pg_in["database"],
+                        "user": pg_in["user"],
+                        "password": pg_in.get("password", ""),
+                        "sslmode": pg_in.get("sslmode", "prefer"),
+                    },
+                }
+            )
         else:
             # SQLite path: nothing to validate, just lock in the choice.
             write_bootstrap({"db_provider": "sqlite"})
@@ -562,6 +585,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         # database provisioning that just succeeded.
         try:
             from app.config.credentials_file import write_credentials_file
+
             write_credentials_file()
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Failed to update credentials.toml: {exc} — continuing")
@@ -682,6 +706,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
                     "features",
                     f"Installing optional features: {', '.join(missing)}…",
                 )
+
                 # Synchronous install — the UI either streamed progress
                 # via /api/features/install before submitting, or it's
                 # showing a spinner while we wait. Either way the call
@@ -716,10 +741,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
                         )
                         return JSONResponse(
                             {
-                                "error": (
-                                    "Some required features could not be installed: "
-                                    + ", ".join(core_failed)
-                                ),
+                                "error": ("Some required features could not be installed: " + ", ".join(core_failed)),
                                 "install_error": result.error,
                                 "failed_features": core_failed,
                             },
@@ -749,7 +771,9 @@ def get_config_routes(state: BootedState) -> list[Route]:
                     )
                 else:
                     _emit_setup(
-                        "features", "Features installed.", level="success",
+                        "features",
+                        "Features installed.",
+                        level="success",
                     )
 
         # ── System Directory relocation (first-setup only) ───────────────
@@ -824,6 +848,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
                     except OSError:
                         pass
                     from app.databases import set_database_provider as _sdp
+
                     _sdp(None)
                     invalidate_storage_singletons()
                     state.reset_storage()
@@ -837,7 +862,8 @@ def get_config_routes(state: BootedState) -> list[Route]:
             # Defensive: only reachable if ``boot_fn`` is missing entirely
             # (misconfigured server). Avoid an opaque AttributeError below.
             return JSONResponse(
-                {"error": "Setup is not complete"}, status_code=503,
+                {"error": "Setup is not complete"},
+                status_code=503,
             )
         config_storage = state.config_storage
         conversation_storage = state.conversation_storage
@@ -879,7 +905,9 @@ def get_config_routes(state: BootedState) -> list[Route]:
             if not user_working_dir:
                 user_working_dir = DEFAULT_USER_WORKING_DIR
                 config_storage.set("server_config", "user_working_dir", user_working_dir)
-            expanded_uwd = os.path.expanduser(user_working_dir) if user_working_dir.startswith("~") else user_working_dir
+            expanded_uwd = (
+                os.path.expanduser(user_working_dir) if user_working_dir.startswith("~") else user_working_dir
+            )
             try:
                 os.makedirs(expanded_uwd, exist_ok=True)
             except OSError as exc:
@@ -895,10 +923,9 @@ def get_config_routes(state: BootedState) -> list[Route]:
             # the model loads once into the OpenPA process and is shared
             # across all profiles. Only persisted on first setup.
             from app.lib.embedding_lifecycle import persist_embedding_config
+
             try:
-                resolved_embedding = await _resolve_vectorstore(
-                    body.get("embedding_config") or {}
-                )
+                resolved_embedding = await _resolve_vectorstore(body.get("embedding_config") or {})
             except _ProvisionFailed as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
             try:
@@ -947,6 +974,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
             )
         if registry is not None:
             from app.tools.ids import slugify
+
             for tool_key, configs in tool_configs.items():
                 # Tool keys may arrive as either tool_id (slug) or display name
                 tool_id = tool_key if registry.get(tool_key) else slugify(tool_key)
@@ -955,34 +983,35 @@ def get_config_routes(state: BootedState) -> list[Route]:
                     if key == "_enabled":
                         try:
                             registry.set_profile_tool_enabled(
-                                profile_name, tool_id,
+                                profile_name,
+                                tool_id,
                                 str(value).lower() == "true",
                             )
                         except (KeyError, ValueError) as e:
-                            logger.warning(
-                                f"Skipping _enabled for '{tool_id}': {e}"
-                            )
+                            logger.warning(f"Skipping _enabled for '{tool_id}': {e}")
                         continue
                     if key == "_full_reasoning":
                         registry.config.set_llm_param(
-                            tool_id, profile_name, "full_reasoning",
+                            tool_id,
+                            profile_name,
+                            "full_reasoning",
                             str(value).lower() == "true",
                         )
                         continue
                     if key.startswith("_arg."):
-                        arg_name = key[len("_arg."):]
+                        arg_name = key[len("_arg.") :]
                         try:
                             arg_values[arg_name] = json.loads(value)
                         except (TypeError, ValueError):
                             arg_values[arg_name] = value
                         continue
-                    is_secret = (
-                        "secret" in key.lower()
-                        or "key" in key.lower()
-                        or "password" in key.lower()
-                    )
+                    is_secret = "secret" in key.lower() or "key" in key.lower() or "password" in key.lower()
                     registry.config.set_variable(
-                        tool_id, profile_name, key, str(value), is_secret=is_secret,
+                        tool_id,
+                        profile_name,
+                        key,
+                        str(value),
+                        is_secret=is_secret,
                     )
                 if arg_values:
                     registry.config.set_arguments(tool_id, profile_name, arg_values)
@@ -991,20 +1020,30 @@ def get_config_routes(state: BootedState) -> list[Route]:
         agent_configs = body.get("agent_configs", {})
         if registry is not None and agent_configs:
             from app.tools.ids import slugify
+
             for tool_key, config in agent_configs.items():
                 tool_id = tool_key if registry.get(tool_key) else slugify(tool_key)
                 for key in ("llm_provider", "llm_model", "reasoning_effort", "full_reasoning"):
                     if key in config and config[key] is not None:
                         registry.config.set_llm_param(
-                            tool_id, profile_name, key, config[key],
+                            tool_id,
+                            profile_name,
+                            key,
+                            config[key],
                         )
                 if "system_prompt" in config and config["system_prompt"]:
                     registry.config.set_meta(
-                        tool_id, profile_name, "system_prompt", config["system_prompt"],
+                        tool_id,
+                        profile_name,
+                        "system_prompt",
+                        config["system_prompt"],
                     )
                 if "description" in config and config["description"]:
                     registry.config.set_meta(
-                        tool_id, profile_name, "description", config["description"],
+                        tool_id,
+                        profile_name,
+                        "description",
+                        config["description"],
                     )
 
         # Channels declared during the setup wizard. Validation + creation
@@ -1035,13 +1074,17 @@ def get_config_routes(state: BootedState) -> list[Route]:
                 channel_type = entry.get("channel_type") or "channel"
                 _emit_setup("channels", f"Registering channel: {channel_type}…")
                 ch, err = await create_channel_for_profile(
-                    conversation_storage, profile_name, entry,
+                    conversation_storage,
+                    profile_name,
+                    entry,
                 )
                 if err is not None:
-                    channel_errors.append({
-                        "channel_type": entry.get("channel_type"),
-                        "error": err["error"],
-                    })
+                    channel_errors.append(
+                        {
+                            "channel_type": entry.get("channel_type"),
+                            "error": err["error"],
+                        }
+                    )
                     _emit_setup(
                         "channels",
                         f"Channel {channel_type!r} failed: {err['error']}",
@@ -1103,13 +1146,13 @@ def get_config_routes(state: BootedState) -> list[Route]:
                     "Loading vector embedding model in background (this can take a minute)…",
                 )
                 apply_embedding_config_in_background(
-                    profiles=[profile_name], force_rebuild=True,
+                    profiles=[profile_name],
+                    force_rebuild=True,
                 )
-                logger.info(
-                    "Vector embedding initialization started in background after first setup."
-                )
+                logger.info("Vector embedding initialization started in background after first setup.")
 
         from app.events.settings_state_bus import publish_settings_state_changed
+
         publish_settings_state_changed(profile_name)
 
         _emit_setup(
@@ -1123,35 +1166,37 @@ def get_config_routes(state: BootedState) -> list[Route]:
             level="success",
         )
 
-        return JSONResponse({
-            "success": True,
-            "token": token,
-            "expires_at": expires_at,
-            "profile": profile_name,
-            "embedding_enabled": BaseConfig.is_embedding_enabled(),
-            "channels": created_channels,
-            "channel_errors": channel_errors,
-            # When True, the wizard installed deps for a feature that
-            # needs a process restart before its module can be loaded
-            # cleanly. The frontend should surface a "Please restart
-            # OpenPA" notice; the persisted config will apply on the
-            # next boot via the normal deferred-boot path.
-            "restart_required": restart_required_from_install,
-            "installed_features": installed_features,
-            # Tool-derived features that failed to pip-install. Setup was
-            # NOT aborted (core features all succeeded); the wizard UI
-            # uses this list to warn the user that the affected tools
-            # will report MissingDependency until they retry from
-            # Settings.
-            "failed_features": failed_features,
-        })
+        return JSONResponse(
+            {
+                "success": True,
+                "token": token,
+                "expires_at": expires_at,
+                "profile": profile_name,
+                "embedding_enabled": BaseConfig.is_embedding_enabled(),
+                "channels": created_channels,
+                "channel_errors": channel_errors,
+                # When True, the wizard installed deps for a feature that
+                # needs a process restart before its module can be loaded
+                # cleanly. The frontend should surface a "Please restart
+                # OpenPA" notice; the persisted config will apply on the
+                # next boot via the normal deferred-boot path.
+                "restart_required": restart_required_from_install,
+                "installed_features": installed_features,
+                # Tool-derived features that failed to pip-install. Setup was
+                # NOT aborted (core features all succeeded); the wizard UI
+                # uses this list to warn the user that the affected tools
+                # will report MissingDependency until they retry from
+                # Settings.
+                "failed_features": failed_features,
+            }
+        )
 
     async def handle_reconfigure(request: Request) -> JSONResponse:
         """Reset setup status to allow reconfiguration from scratch.
 
         Requires admin auth. Does NOT delete profiles or data.
         """
-        if (gate := _require_storage()):
+        if gate := _require_storage():
             return gate
         state.config_storage.delete("server_config", "setup_complete")
         return JSONResponse({"success": True, "message": "Setup status reset. Reload to reconfigure."})
@@ -1163,7 +1208,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         visible profiles exist. This handles the edge case where the DB was
         partially wiped externally.
         """
-        if (gate := _require_storage()):
+        if gate := _require_storage():
             return gate
         config_storage = state.config_storage
         conversation_storage = state.conversation_storage
@@ -1189,10 +1234,13 @@ def get_config_routes(state: BootedState) -> list[Route]:
         current load ``status`` and any error from the last attempt.
         """
         from app.config.embedding_state import embedding_state
-        return JSONResponse({
-            "enabled": BaseConfig.is_embedding_enabled(),
-            **embedding_state.to_dict(),
-        })
+
+        return JSONResponse(
+            {
+                "enabled": BaseConfig.is_embedding_enabled(),
+                **embedding_state.to_dict(),
+            }
+        )
 
     async def handle_embedding_initialize(request: Request) -> JSONResponse:
         """Trigger an asynchronous load + rebuild of the embedding subsystem.
@@ -1211,29 +1259,35 @@ def get_config_routes(state: BootedState) -> list[Route]:
 
         if not BaseConfig.is_embedding_enabled():
             embedding_state.mark_disabled()
-            return JSONResponse({
-                "enabled": False,
-                **embedding_state.to_dict(),
-            })
+            return JSONResponse(
+                {
+                    "enabled": False,
+                    **embedding_state.to_dict(),
+                }
+            )
 
         if embedding_state.is_busy() or embedding_state.is_ready():
-            return JSONResponse({
-                "enabled": True,
-                **embedding_state.to_dict(),
-            })
+            return JSONResponse(
+                {
+                    "enabled": True,
+                    **embedding_state.to_dict(),
+                }
+            )
 
-        if (gate := _require_storage()):
+        if gate := _require_storage():
             return gate
         profile_names = [
-            row["name"] for row in await state.conversation_storage.list_profiles()
-            if not row["name"].startswith("__")
+            row["name"] for row in await state.conversation_storage.list_profiles() if not row["name"].startswith("__")
         ]
         apply_embedding_config_in_background(profiles=profile_names, force_rebuild=True)
 
-        return JSONResponse({
-            "enabled": True,
-            **embedding_state.to_dict(),
-        }, status_code=202)
+        return JSONResponse(
+            {
+                "enabled": True,
+                **embedding_state.to_dict(),
+            },
+            status_code=202,
+        )
 
     async def handle_get_embedding_config(request: Request) -> JSONResponse:
         """Return the persisted embedding config (admin only).
@@ -1245,14 +1299,17 @@ def get_config_routes(state: BootedState) -> list[Route]:
         denied = require_admin(request)
         if denied is not None:
             return denied
-        if (gate := _require_storage()):
+        if gate := _require_storage():
             return gate
         from app.config.embedding_state import embedding_state
         from app.lib.embedding_lifecycle import read_embedding_config
-        return JSONResponse({
-            "config": read_embedding_config(state.config_storage),
-            **embedding_state.to_dict(),
-        })
+
+        return JSONResponse(
+            {
+                "config": read_embedding_config(state.config_storage),
+                **embedding_state.to_dict(),
+            }
+        )
 
     async def handle_put_embedding_config(request: Request) -> JSONResponse:
         """Persist an updated embedding config and trigger reload + rebuild.
@@ -1265,7 +1322,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         denied = require_admin(request)
         if denied is not None:
             return denied
-        if (gate := _require_storage()):
+        if gate := _require_storage():
             return gate
 
         from app.config.embedding_state import embedding_state
@@ -1277,10 +1334,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         if embedding_state.is_busy():
             return JSONResponse(
                 {
-                    "error": (
-                        "Embedding subsystem is currently "
-                        f"{embedding_state.status.value}; please wait."
-                    ),
+                    "error": ("Embedding subsystem is currently " f"{embedding_state.status.value}; please wait."),
                     **embedding_state.to_dict(),
                 },
                 status_code=409,
@@ -1290,6 +1344,48 @@ def get_config_routes(state: BootedState) -> list[Route]:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        # Feature pre-flight: if the user just enabled embedding (or
+        # switched to a provider whose extras aren't installed), surface
+        # a 409 with the same shape ``PUT /api/tools/{id}/enabled``
+        # already uses for tool-level features. The frontend opens its
+        # install dialog, drives ``POST /api/features/install`` over
+        # SSE, and retries this PUT. Without this gate the apply step
+        # crashes with ``No module named 'sentence_transformers'``
+        # because the setup wizard only installed the extras for the
+        # features that were on at setup time.
+        if bool(body.get("enabled")):
+            from app.features.manifest import FEATURES, missing_features
+
+            try:
+                required = _embedding_feature_keys(body)
+                missing = missing_features(required)
+            except KeyError as exc:
+                return JSONResponse(
+                    {"error": f"Unknown feature in payload: {exc}"},
+                    status_code=400,
+                )
+            if missing:
+                return JSONResponse(
+                    {
+                        "error": "FeatureNotInstalled",
+                        "missing": [
+                            {
+                                "feature_key": key,
+                                "extras": list(FEATURES[key].extras),
+                                "requires_restart_after_install": FEATURES[key].requires_restart,
+                            }
+                            for key in missing
+                        ],
+                        "message": (
+                            "Vector Embedding requires the following optional "
+                            "dependencies, which are not installed: "
+                            + ", ".join(missing)
+                            + ". Install them via POST /api/features/install before enabling."
+                        ),
+                    },
+                    status_code=409,
+                )
 
         try:
             resolved_body = await _resolve_vectorstore(body)
@@ -1301,8 +1397,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
             return JSONResponse({"error": str(e)}, status_code=400)
 
         profile_names = [
-            row["name"] for row in await state.conversation_storage.list_profiles()
-            if not row["name"].startswith("__")
+            row["name"] for row in await state.conversation_storage.list_profiles() if not row["name"].startswith("__")
         ]
         apply_embedding_config_in_background(profiles=profile_names, force_rebuild=True)
 
@@ -1321,18 +1416,19 @@ def get_config_routes(state: BootedState) -> list[Route]:
         is safe and keeps the auth boundary on ``/api/channels/*`` untouched.
         """
         from app.config import load_all_channel_catalogs
+
         return JSONResponse({"channels": load_all_channel_catalogs()})
 
     async def handle_get_server_config(request: Request) -> JSONResponse:
         """Get server configuration (non-secret values). Requires auth."""
-        if (gate := _require_storage()):
+        if gate := _require_storage():
             return gate
         config = state.config_storage.get_all("server_config", include_secrets=False)
         return JSONResponse({"config": config})
 
     async def handle_update_server_config(request: Request) -> JSONResponse:
         """Update server configuration. Requires auth (admin only)."""
-        if (gate := _require_storage()):
+        if gate := _require_storage():
             return gate
         try:
             body = await request.json()
@@ -1427,10 +1523,7 @@ def get_config_routes(state: BootedState) -> list[Route]:
         install_mode = (_runtime("INSTALL_MODE") or "").lower()
         vnc_password = _runtime("VNC_PASSWORD")
         is_docker = (
-            install_mode == "docker"
-            or compose_env_path is not None
-            or docker_env_host.exists()
-            or bool(vnc_password)
+            install_mode == "docker" or compose_env_path is not None or docker_env_host.exists() or bool(vnc_password)
         )
 
         if not is_docker and not bootstrap_path.exists():
@@ -1450,31 +1543,33 @@ def get_config_routes(state: BootedState) -> list[Route]:
 
         deployment = "docker" if is_docker else "native"
 
-        return JSONResponse({
-            "deployment": deployment,
-            "available": True,
-            # Docker runtime block — populated only when we detect a docker
-            # runtime. Values are None on native installs.
-            "vnc_password": vnc_password,
-            "app_url": _runtime("APP_URL") if is_docker else None,
-            "resolution": _runtime("RESOLUTION") if is_docker else None,
-            "install_mode": install_mode or None,
-            "cors_allowed_origins": _runtime("CORS_ALLOWED_ORIGINS") if is_docker else None,
-            "setup_wizard_env": _runtime("SETUP_WIZARD_ENV") if is_docker else None,
-            "api_port": _runtime_int("API_PORT", 1112) if is_docker else None,
-            "spa_port": _runtime_int("SPA_PORT", 1515) if is_docker else None,
-            "novnc_port": _runtime_int("NOVNC_PORT", 6080) if is_docker else None,
-            "vnc_port": _runtime_int("VNC_PORT", 5900) if is_docker else None,
-            # Postgres block — populated from bootstrap.toml when the user
-            # picked Postgres in the wizard.
-            "pg_host": _pg("host", "") if has_postgres else None,
-            "pg_port": int(pg_bootstrap["port"]) if has_postgres and pg_bootstrap.get("port") else None,
-            "pg_user": _pg("user", "PG_USER"),
-            "pg_password": _pg("password", "PG_PASSWORD"),
-            "pg_database": _pg("database", "PG_DATABASE"),
-            "pg_sslmode": _pg("sslmode", "") if has_postgres else None,
-            "pg_deployment_mode": (pg_bootstrap.get("deployment_mode") if has_postgres else None) or None,
-        })
+        return JSONResponse(
+            {
+                "deployment": deployment,
+                "available": True,
+                # Docker runtime block — populated only when we detect a docker
+                # runtime. Values are None on native installs.
+                "vnc_password": vnc_password,
+                "app_url": _runtime("APP_URL") if is_docker else None,
+                "resolution": _runtime("RESOLUTION") if is_docker else None,
+                "install_mode": install_mode or None,
+                "cors_allowed_origins": _runtime("CORS_ALLOWED_ORIGINS") if is_docker else None,
+                "setup_wizard_env": _runtime("SETUP_WIZARD_ENV") if is_docker else None,
+                "api_port": _runtime_int("API_PORT", 1112) if is_docker else None,
+                "spa_port": _runtime_int("SPA_PORT", 1515) if is_docker else None,
+                "novnc_port": _runtime_int("NOVNC_PORT", 6080) if is_docker else None,
+                "vnc_port": _runtime_int("VNC_PORT", 5900) if is_docker else None,
+                # Postgres block — populated from bootstrap.toml when the user
+                # picked Postgres in the wizard.
+                "pg_host": _pg("host", "") if has_postgres else None,
+                "pg_port": int(pg_bootstrap["port"]) if has_postgres and pg_bootstrap.get("port") else None,
+                "pg_user": _pg("user", "PG_USER"),
+                "pg_password": _pg("password", "PG_PASSWORD"),
+                "pg_database": _pg("database", "PG_DATABASE"),
+                "pg_sslmode": _pg("sslmode", "") if has_postgres else None,
+                "pg_deployment_mode": (pg_bootstrap.get("deployment_mode") if has_postgres else None) or None,
+            }
+        )
 
     return [
         # Unauthenticated endpoints for setup and recovery

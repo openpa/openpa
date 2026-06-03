@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
 import {
   ElForm, ElFormItem, ElInput, ElInputNumber, ElSelect, ElOption,
-  ElSwitch, ElButton, ElMessage, ElMessageBox,
+  ElSwitch, ElButton, ElMessage, ElMessageBox, ElDialog,
 } from 'element-plus';
 import { Icon } from '@iconify/vue';
 import { useSettingsStore } from '../stores/settings';
@@ -13,9 +13,16 @@ import {
   getEmbeddingConfig,
   applyEmbeddingConfig,
   fetchServiceCapabilities,
+  streamFeaturesInstall,
+  EmbeddingFeaturesNotInstalledError,
+  type DeploymentMode,
   type EmbeddingConfig,
+  type EmbeddingFeaturesNotInstalledDetail,
+  type FeatureInstallEvent,
+  type ServiceCapability,
   type ServiceCapabilitiesResponse,
 } from '../services/configApi';
+import { fetchInstallCatalog, type InstallCatalog } from '../services/installCatalogApi';
 import DeploymentModeRadio from '../components/setup/DeploymentModeRadio.vue';
 
 const props = defineProps<{ profile: string }>();
@@ -43,9 +50,29 @@ const form = ref<EmbeddingConfig>({
 });
 
 const serviceCapabilities = ref<ServiceCapabilitiesResponse | null>(null);
+const installCatalog = ref<InstallCatalog | null>(null);
 const qdrantCapability = computed(() => serviceCapabilities.value?.services?.qdrant ?? null);
 const chromaCapability = computed(() => serviceCapabilities.value?.services?.chroma ?? null);
 const dockerAvailable = computed(() => serviceCapabilities.value?.docker_available ?? false);
+
+// Lifted from StepEmbeddingConfig.vue's ``pickInitialMode``: when the
+// saved deployment_mode doesn't survive the install-mode rule filter
+// (e.g. previous setup saved ``external`` for Qdrant but the install
+// mode now restricts to Docker-only), snap to the first effectively
+// allowed mode so the form renders the right sub-fields.
+function pickInitialMode(
+  saved: DeploymentMode | undefined,
+  cap: ServiceCapability | null,
+  preferred: DeploymentMode,
+): DeploymentMode {
+  if (!cap) return saved ?? preferred;
+  const effective = cap.supported_modes.filter((mode) =>
+    mode === 'docker' ? dockerAvailable.value : true,
+  );
+  if (saved && effective.includes(saved)) return saved;
+  if (effective.includes(preferred)) return preferred;
+  return effective[0] ?? preferred;
+}
 
 const showGemmaToken = computed(() => form.value.enabled && form.value.provider === 'gemma');
 const showQdrant = computed(() => form.value.enabled && form.value.vectorstore.provider === 'qdrant');
@@ -87,11 +114,25 @@ async function loadConfig() {
     const res = await getEmbeddingConfig(settingsStore.agentUrl, settingsStore.authToken);
     form.value = res.config;
     try {
-      serviceCapabilities.value = await fetchServiceCapabilities(settingsStore.agentUrl);
+      // ``/api/services/capabilities`` is admin-gated post-setup — the
+      // token is required, or the call 401s and the deployment radio
+      // silently disappears.
+      serviceCapabilities.value = await fetchServiceCapabilities(
+        settingsStore.agentUrl,
+        settingsStore.authToken,
+      );
     } catch {
       // Capability fetch is best-effort — the deployment radios just
       // won't render, the form falls back to External-only behaviour.
       serviceCapabilities.value = null;
+    }
+    try {
+      const catalogRes = await fetchInstallCatalog(settingsStore.agentUrl);
+      installCatalog.value = catalogRes.catalog;
+    } catch {
+      // Catalog is cosmetic — DeploymentModeRadio falls back to its
+      // built-in labels when this is null.
+      installCatalog.value = null;
     }
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : 'Failed to load embedding config');
@@ -99,6 +140,34 @@ async function loadConfig() {
     loading.value = false;
   }
 }
+
+// When capabilities arrive after the form has already mounted, clamp
+// any deployment_mode that the live mode list no longer supports. Same
+// shape as StepEmbeddingConfig.vue.
+watch([qdrantCapability, dockerAvailable], () => {
+  const cap = qdrantCapability.value;
+  if (!cap) return;
+  const effective = cap.supported_modes.filter((m) =>
+    m === 'docker' ? dockerAvailable.value : true,
+  );
+  if (effective.length && !effective.includes(form.value.vectorstore.qdrant.deployment_mode)) {
+    form.value.vectorstore.qdrant.deployment_mode = pickInitialMode(
+      form.value.vectorstore.qdrant.deployment_mode, cap, 'external',
+    );
+  }
+});
+watch([chromaCapability, dockerAvailable], () => {
+  const cap = chromaCapability.value;
+  if (!cap) return;
+  const effective = cap.supported_modes.filter((m) =>
+    m === 'docker' ? dockerAvailable.value : true,
+  );
+  if (effective.length && !effective.includes(form.value.vectorstore.chroma.deployment_mode)) {
+    form.value.vectorstore.chroma.deployment_mode = pickInitialMode(
+      form.value.vectorstore.chroma.deployment_mode, cap, 'native',
+    );
+  }
+});
 
 // When the user keeps editing, mirror the active provider's
 // deployment_mode up to the top-level vectorstore key so the persisted
@@ -127,6 +196,127 @@ watch(status, (curr) => {
   wasBusy.value = false;
 });
 
+// ── Feature-install dialog ────────────────────────────────────────────
+// Mirrors the pattern in AgentsToolsSettings.vue: when ``applyChanges``
+// gets a 409 FeatureNotInstalled, open this dialog, pipe pip output
+// from /api/features/install over SSE, and either prompt for a restart
+// (when ``requires_restart=True`` features were installed — the
+// embedding providers always are) or retry the apply automatically
+// (vectorstore-only installs are hot-reloadable).
+const featureInstallOpen = ref(false);
+const featureInstallDetail = ref<EmbeddingFeaturesNotInstalledDetail | null>(null);
+const featureInstallBusy = ref(false);
+const featureInstallLog = ref<string[]>([]);
+const featureInstallError = ref<string | null>(null);
+const featureInstallRestartRequired = ref(false);
+
+const featureInstallExtras = computed(() => {
+  const detail = featureInstallDetail.value;
+  if (!detail) return [] as string[];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of detail.missing) {
+    for (const grp of entry.extras) {
+      if (!seen.has(grp)) {
+        seen.add(grp);
+        out.push(grp);
+      }
+    }
+  }
+  return out;
+});
+
+function openFeatureInstallDialog(detail: EmbeddingFeaturesNotInstalledDetail) {
+  featureInstallDetail.value = detail;
+  featureInstallLog.value = [];
+  featureInstallError.value = null;
+  featureInstallRestartRequired.value = false;
+  featureInstallBusy.value = false;
+  featureInstallOpen.value = true;
+}
+
+function closeFeatureInstallDialog() {
+  featureInstallOpen.value = false;
+  featureInstallDetail.value = null;
+  featureInstallLog.value = [];
+  featureInstallError.value = null;
+  featureInstallRestartRequired.value = false;
+}
+
+async function confirmFeatureInstall() {
+  const detail = featureInstallDetail.value;
+  if (!detail || featureInstallBusy.value) return;
+  featureInstallBusy.value = true;
+  featureInstallError.value = null;
+  featureInstallLog.value = [];
+
+  const handleEvent = (evt: FeatureInstallEvent) => {
+    const prefix = evt.event === 'error' ? '✖' : evt.event === 'done' ? '✓' : '•';
+    if (evt.message) {
+      featureInstallLog.value.push(`${prefix} ${evt.message}`);
+    }
+  };
+
+  try {
+    const result = await streamFeaturesInstall(
+      settingsStore.agentUrl,
+      settingsStore.authToken,
+      detail.missing.map((m) => m.feature_key),
+      handleEvent,
+    );
+    if (!result.ok || result.failed.length) {
+      featureInstallError.value =
+        result.error || `Install failed for: ${result.failed.join(', ')}`;
+      featureInstallBusy.value = false;
+      return;
+    }
+    if (result.restart_required) {
+      // Heavy-init features (sentence-transformers + torch) can't be
+      // hot-loaded in the live process. Tell the user to restart and
+      // let them re-open Settings to apply once it's back up.
+      featureInstallRestartRequired.value = true;
+      featureInstallBusy.value = false;
+      return;
+    }
+    // Hot-loadable install (vectorstore-only). Retry the apply now
+    // that the new module is importable.
+    featureInstallOpen.value = false;
+    featureInstallDetail.value = null;
+    await runApply();
+  } catch (e) {
+    featureInstallError.value = e instanceof Error ? e.message : 'Install stream failed';
+    featureInstallBusy.value = false;
+  }
+}
+
+async function runApply() {
+  saving.value = true;
+  try {
+    const res = await applyEmbeddingConfig(settingsStore.agentUrl, settingsStore.authToken, form.value);
+    // Surface the immediate POST response, but the source of truth is
+    // the SSE stream — the store will reflect subsequent transitions
+    // automatically.
+    if (res.status === 'failed') {
+      ElMessage.error(`Embedding apply failed: ${res.error ?? 'unknown error'}`);
+    } else if (res.status === 'disabled') {
+      ElMessage.success('Vector Embedding disabled.');
+    } else {
+      ElMessage.success('Embedding update started — please wait for it to finish.');
+    }
+  } catch (e) {
+    if (e instanceof EmbeddingFeaturesNotInstalledError) {
+      // First apply hit the preflight gate. Open the install dialog;
+      // the user confirms; we run the SSE install and retry from
+      // ``confirmFeatureInstall``.
+      openFeatureInstallDialog(e.detail);
+      return;
+    }
+    ElMessage.error(e instanceof Error ? e.message : 'Failed to apply embedding config');
+  } finally {
+    saving.value = false;
+  }
+}
+
 async function applyChanges() {
   if (form.value.enabled && form.value.provider === 'gemma' && !form.value.hf_token.trim()) {
     ElMessage.error('HF_TOKEN is required when the embedding provider is Gemma.');
@@ -145,24 +335,7 @@ async function applyChanges() {
     return;
   }
 
-  saving.value = true;
-  try {
-    const res = await applyEmbeddingConfig(settingsStore.agentUrl, settingsStore.authToken, form.value);
-    // Surface the immediate POST response, but the source of truth is
-    // the SSE stream — the store will reflect subsequent transitions
-    // automatically.
-    if (res.status === 'failed') {
-      ElMessage.error(`Embedding apply failed: ${res.error ?? 'unknown error'}`);
-    } else if (res.status === 'disabled') {
-      ElMessage.success('Vector Embedding disabled.');
-    } else {
-      ElMessage.success('Embedding update started — please wait for it to finish.');
-    }
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : 'Failed to apply embedding config');
-  } finally {
-    saving.value = false;
-  }
+  await runApply();
 }
 
 function goBack() {
@@ -257,6 +430,7 @@ onMounted(() => {
                   v-model="form.vectorstore.qdrant.deployment_mode"
                   :service="qdrantCapability"
                   :docker-available="dockerAvailable"
+                  :catalog="installCatalog"
                 />
               </ElFormItem>
               <template v-if="qdrantMode === 'docker'">
@@ -287,6 +461,7 @@ onMounted(() => {
                   v-model="form.vectorstore.chroma.deployment_mode"
                   :service="chromaCapability"
                   :docker-available="dockerAvailable"
+                  :catalog="installCatalog"
                 />
               </ElFormItem>
 
@@ -337,6 +512,72 @@ onMounted(() => {
         </ElForm>
       </template>
     </div>
+
+    <!-- Feature install dialog (opened by ``applyChanges`` when the
+         backend returns 409 FeatureNotInstalled). Streams pip output
+         from /api/features/install over SSE. Mirrors the pattern used
+         on the Agents & Tools page. -->
+    <ElDialog
+      v-model="featureInstallOpen"
+      :title="featureInstallDetail ? 'Install vector embedding dependencies?' : 'Install dependencies'"
+      width="560px"
+      :close-on-click-modal="!featureInstallBusy"
+      :close-on-press-escape="!featureInstallBusy"
+      :show-close="!featureInstallBusy"
+    >
+      <div v-if="featureInstallDetail" class="feature-install-body">
+        <p>
+          Enabling Vector Embedding requires the following optional
+          dependency group<span v-if="featureInstallExtras.length !== 1">s</span>:
+          <code>openpa[{{ featureInstallExtras.join(',') }}]</code>.
+        </p>
+        <ul class="feature-install-list">
+          <li v-for="entry in featureInstallDetail.missing" :key="entry.feature_key">
+            <code>{{ entry.feature_key }}</code>
+            <span v-if="entry.requires_restart_after_install" class="feature-install-restart-tag">
+              · restart required after install
+            </span>
+          </li>
+        </ul>
+
+        <div v-if="featureInstallLog.length" class="feature-install-log">
+          <div v-for="(line, i) in featureInstallLog" :key="i">{{ line }}</div>
+        </div>
+
+        <p v-if="featureInstallError" class="feature-install-error">
+          {{ featureInstallError }}
+        </p>
+
+        <p v-if="featureInstallRestartRequired" class="feature-install-restart">
+          Install complete. Restart the OpenPA server to load the embedding
+          model, then re-open this page and apply your changes again.
+        </p>
+      </div>
+      <template #footer>
+        <ElButton
+          v-if="!featureInstallRestartRequired"
+          @click="closeFeatureInstallDialog"
+          :disabled="featureInstallBusy"
+        >
+          Cancel
+        </ElButton>
+        <ElButton
+          v-if="!featureInstallRestartRequired"
+          type="primary"
+          :loading="featureInstallBusy"
+          @click="confirmFeatureInstall"
+        >
+          {{ featureInstallError ? 'Retry install' : 'Install' }}
+        </ElButton>
+        <ElButton
+          v-if="featureInstallRestartRequired"
+          type="primary"
+          @click="closeFeatureInstallDialog"
+        >
+          Close
+        </ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -387,4 +628,27 @@ onMounted(() => {
 }
 .info-box code { background: var(--surface-color); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
 .actions { margin-top: 24px; }
+
+.feature-install-body p { margin: 0 0 12px 0; font-size: 0.875rem; line-height: 1.5; }
+.feature-install-body code { background: var(--surface-color); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
+.feature-install-list { margin: 0 0 12px 18px; padding: 0; font-size: 0.825rem; color: var(--text-secondary); }
+.feature-install-list li { margin-bottom: 2px; }
+.feature-install-restart-tag { color: #b07300; }
+.feature-install-log {
+  max-height: 240px; overflow-y: auto; margin: 12px 0;
+  padding: 10px 12px; background: var(--surface-color);
+  border-radius: 6px; font-family: var(--font-mono, monospace);
+  font-size: 0.75rem; line-height: 1.4;
+}
+.feature-install-log > div { white-space: pre-wrap; }
+.feature-install-error {
+  margin: 8px 0 0 0; padding: 8px 12px;
+  background: #fff4f4; border: 1px solid #f5a3a3; border-radius: 6px;
+  color: #b03030; font-size: 0.825rem;
+}
+.feature-install-restart {
+  margin: 8px 0 0 0; padding: 10px 12px;
+  background: #fff8e1; border-radius: 6px;
+  color: #b07300; font-size: 0.825rem; line-height: 1.5;
+}
 </style>

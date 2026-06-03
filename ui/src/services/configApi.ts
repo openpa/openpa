@@ -68,9 +68,18 @@ export interface ServiceCapabilitiesResponse {
 
 export async function fetchServiceCapabilities(
   agentUrl: string,
+  // Optional because the Setup Wizard calls this endpoint pre-setup,
+  // before any JWT can exist. Post-setup callers (Settings → Vector
+  // Embedding) MUST pass the admin token — the backend gates this
+  // route behind ``require_admin`` once ``setup_complete`` is true, and
+  // an unauthenticated call there 401s silently and breaks the
+  // deployment-mode radio.
+  token?: string,
 ): Promise<ServiceCapabilitiesResponse> {
   const base = resolveBaseUrl(agentUrl);
-  const res = await fetch(`${base}/api/services/capabilities`);
+  const res = await fetch(`${base}/api/services/capabilities`, {
+    headers: authHeaders(token ?? ''),
+  });
   if (!res.ok) throw new Error(`Failed to fetch service capabilities: ${res.statusText}`);
   return res.json();
 }
@@ -221,6 +230,32 @@ export async function getEmbeddingConfig(
   return res.json();
 }
 
+/** One entry in the 409 ``missing`` array returned by the embedding
+ *  PUT when the user enables a provider whose pip extras aren't on
+ *  disk. Plural (vs. the tool-toggle's singular) because enabling
+ *  embedding can require both the embedding provider extras AND the
+ *  vector-store provider extras in one shot. */
+export interface EmbeddingFeatureMissing {
+  feature_key: string;
+  extras: string[];
+  requires_restart_after_install: boolean;
+}
+
+export interface EmbeddingFeaturesNotInstalledDetail {
+  missing: EmbeddingFeatureMissing[];
+  message: string;
+}
+
+export class EmbeddingFeaturesNotInstalledError extends Error {
+  readonly detail: EmbeddingFeaturesNotInstalledDetail;
+
+  constructor(detail: EmbeddingFeaturesNotInstalledDetail) {
+    super(detail.message);
+    this.name = 'EmbeddingFeaturesNotInstalledError';
+    this.detail = detail;
+  }
+}
+
 export async function applyEmbeddingConfig(
   agentUrl: string,
   token: string,
@@ -232,6 +267,16 @@ export async function applyEmbeddingConfig(
     headers: authHeaders(token),
     body: JSON.stringify(config),
   });
+  if (res.status === 409) {
+    // Backend preflight blocked the apply because one or more required
+    // optional dependencies aren't installed. Surface the structured
+    // payload so the Settings page can open the install dialog, drive
+    // the SSE install, and retry this call on success.
+    const body = await res.json().catch(() => ({}));
+    if (body && body.error === 'FeatureNotInstalled' && Array.isArray(body.missing)) {
+      throw new EmbeddingFeaturesNotInstalledError(body as EmbeddingFeaturesNotInstalledDetail);
+    }
+  }
   if (!res.ok && res.status !== 202) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Failed to update embedding config: ${res.statusText}`);
