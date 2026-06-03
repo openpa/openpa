@@ -17,7 +17,7 @@ from app.utils.logger import logger
 
 ACCUWEATHER_BASE_URL = "http://dataservice.accuweather.com"
 
-SERVER_NAME = "Weather Agent"
+SERVER_NAME = "AccuWeather Weather"
 
 class Var:
     """Variable keys for the Weather tool."""

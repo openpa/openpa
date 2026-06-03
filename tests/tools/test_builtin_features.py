@@ -25,7 +25,7 @@ def test_feature_keys_for_tool_ids_by_slug_drops_unknown_and_disabled() -> None:
     # Browser + Markdown Converter both have requires_feature set; the
     # unknown id and the weather slug (no requires_feature) are dropped.
     keys = feature_keys_for_tool_ids(
-        ["browser", "markdown_converter", "weather_agent", "nope", ""],
+        ["browser", "markdown_converter", "accuweather_weather", "nope", ""],
     )
     assert keys == ["browser", "documents"]
 
@@ -51,7 +51,7 @@ def test_required_feature_for_tool_id_returns_single_key() -> None:
 
     assert required_feature_for_tool_id("browser") == "browser"
     assert required_feature_for_tool_id("markdown_converter") == "documents"
-    assert required_feature_for_tool_id("weather_agent") is None
+    assert required_feature_for_tool_id("accuweather_weather") is None
     assert required_feature_for_tool_id("not_a_tool") is None
 
 
@@ -64,7 +64,7 @@ def test_catalog_row_includes_requires_feature() -> None:
     # tools that depend on an optional pip-extras group (so the wizard
     # can render "Installs: openpa[<feature>]") and None for the rest.
     assert rows["browser"]["requires_feature"] == "browser"
-    assert rows["weather_agent"]["requires_feature"] is None
+    assert rows["accuweather_weather"]["requires_feature"] is None
 
     # Runtime-only system tools and tools deliberately gated out of the
     # Settings UI (``hidden: True`` or ``visible: False`` in TOOL_CONFIG)
@@ -86,7 +86,7 @@ def test_tool_feature_keys_from_payload_only_counts_enabled() -> None:
             "browser": {"_enabled": "true"},
             "markdown_converter": {"_enabled": "false"},  # disabled -> skipped
             "google_calendar": {"_enabled": "TRUE"},      # case-insensitive
-            "weather_agent": {"_enabled": "true"},        # no requires_feature
+            "accuweather_weather": {"_enabled": "true"},        # no requires_feature
             "google_places": {},                           # no _enabled key
         },
     }
